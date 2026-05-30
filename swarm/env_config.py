@@ -12,7 +12,7 @@ Priority tiers (see docs/battlefield-parameters.md §2):
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 
 # ─────────────────────────────────────────────────── sub-config dataclasses ──
@@ -185,6 +185,56 @@ SCENARIO_DEFAULTS: dict[str, BattlefieldConfig] = {
 def get_scenario_defaults(scenario_id: str) -> BattlefieldConfig:
     """Return combat-stress defaults for a scenario, falling back to garrison defaults."""
     return SCENARIO_DEFAULTS.get(scenario_id, BattlefieldConfig(env_id=scenario_id))
+
+
+def make_profile_config(scenario_id: str, profile: str) -> BattlefieldConfig:
+    """Return a BattlefieldConfig for the requested training/inference profile.
+
+    `combat` uses the scenario's stressed defaults.
+    `garrison` preserves scenario sizing/time limits but zeros the P0 stressors so
+    the same scenario can run in an uncontested baseline configuration.
+    """
+    if profile not in {"combat", "garrison"}:
+        raise ValueError(f"unknown profile '{profile}'. expected combat or garrison")
+
+    combat = get_scenario_defaults(scenario_id)
+    if profile == "combat":
+        return combat
+
+    cfg = BattlefieldConfig(
+        env_id=scenario_id,
+        weather=WeatherConfig(
+            wind_speed=0.0,
+            wind_dir_rad=combat.weather.wind_dir_rad,
+            visibility=combat.weather.visibility,
+            temperature_c=combat.weather.temperature_c,
+        ),
+        ew=EWConfig(
+            gps_denial_level=0.0,
+            jam_duty_cycle=0.0,
+            spoofing_enabled=combat.ew.spoofing_enabled,
+        ),
+        terrain=combat.terrain,
+        threat=combat.threat,
+        roe=ROEConfig(
+            engagement_authority=combat.roe.engagement_authority,
+            min_standoff_m=combat.roe.min_standoff_m,
+            civilian_density=combat.roe.civilian_density,
+            time_limit_sec=combat.roe.time_limit_sec,
+        ),
+        logistics=LogisticsConfig(
+            swarm_size=combat.logistics.swarm_size,
+            battery_envelope_sec=combat.logistics.battery_envelope_sec,
+            attrition_inject_rate=0.0,
+        ),
+    )
+    validate_config(cfg)
+    return cfg
+
+
+def config_to_json_dict(cfg: BattlefieldConfig) -> dict:
+    """Stable JSON-serializable dict for checkpoint metadata and docs."""
+    return asdict(cfg)
 
 
 if __name__ == "__main__":

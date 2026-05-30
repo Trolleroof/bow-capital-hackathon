@@ -141,7 +141,7 @@ target with an operator-confirm gate**. Runs on the Jetson.
 
 ---
 
-### ⓷ Surveillance Lead — 3D Gaussian Splat Reconstruction  🟢 *dream feature*
+### ⓷ Surveillance Lead — 3D Gaussian Splat Reconstruction  🔴 *dream feature*
 
 **Scope (yours alone):** Reconstruct the battlefield in 3D from the drone footage and
 let judges fly through it — with ⓵'s trajectory overlaid inside the scene.

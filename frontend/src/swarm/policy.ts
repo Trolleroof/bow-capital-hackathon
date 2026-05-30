@@ -1,8 +1,9 @@
 /**
  * policy.ts — onnxruntime-web wrapper for the trained MAPPO actor.
  *
- * Loads swarm/checkpoints/<envId>/policy.onnx and runs inference client-side
- * (WASM execution provider) — no Python, works offline.
+ * Loads frontend/public/policies/<envId>/policy.onnx (browser-served copy of
+ * swarm/checkpoints/<envId>/policy.onnx from export_onnx.py) and runs inference
+ * client-side (WASM) — no Python, works offline.
  *
  * ONNX contract (from swarm/export_onnx.py):
  *   input  "obs"     float32  (N, 36)   dynamic axis 0 = batch
@@ -21,10 +22,11 @@ export interface Policy {
 /** Lifecycle state of a trained checkpoint for a given environment. */
 export type PolicyStatus = 'not-trained' | 'training' | 'ready'
 
+const DEFAULT_ENV_ID = 'search-and-interdict'
+
 /**
- * Module-level active env ID.  Set this before Mission Sim mounts so that
- * CompositeScenePanel's zero-arg `loadPolicy()` call resolves to the correct
- * per-environment checkpoint without requiring a prop change.
+ * Module-level active env ID. Set before Mission Sim mounts so
+ * CompositeScenePanel's zero-arg `loadPolicy()` resolves correctly (#23).
  */
 let _activeEnvId: string | null = null
 
@@ -33,15 +35,26 @@ export function setActiveEnvId(envId: string | null): void {
   _activeEnvId = envId
 }
 
+function resolvePolicyPath(envIdOrUrl?: string): string {
+  const target = envIdOrUrl ?? _activeEnvId ?? DEFAULT_ENV_ID
+  if (
+    target.startsWith('/') ||
+    target.startsWith('./') ||
+    target.startsWith('../') ||
+    target.endsWith('.onnx')
+  ) {
+    return target
+  }
+  return `/policies/${target}/policy.onnx`
+}
+
 /**
  * Probe whether a trained checkpoint exists for `envId`.
- * Uses HEAD so it doesn't download the (potentially large) ONNX blob.
+ * Uses HEAD so it doesn't download the ONNX blob.
  */
 export async function checkPolicyExists(envId: string): Promise<boolean> {
   try {
-    const res = await fetch(`/swarm/checkpoints/${envId}/policy.onnx`, {
-      method: 'HEAD',
-    })
+    const res = await fetch(resolvePolicyPath(envId), { method: 'HEAD' })
     return res.ok
   } catch {
     return false
@@ -58,9 +71,6 @@ let wasmConfigured = false
 function configureWasm() {
   if (wasmConfigured) return
   wasmConfigured = true
-  // Map the ORT wasm/mjs assets to Vite-resolved URLs (works in dev + build).
-  // The single-threaded SIMD build is the most portable (no COOP/COEP headers
-  // needed), so we pin it explicitly.
   ort.env.wasm.numThreads = 1
   ort.env.wasm.wasmPaths = {
     wasm: new URL(
@@ -77,21 +87,16 @@ function configureWasm() {
 /**
  * Load the policy and return an `act()` runner.
  *
- * URL resolution order:
- *  1. Explicit `url` argument (legacy / test override)
- *  2. `/swarm/checkpoints/<_activeEnvId>/policy.onnx` when an env is active
- *  3. `/policy.onnx` (legacy fallback)
+ * Resolution order:
+ *  1. Explicit env id or full URL/path argument
+ *  2. `_activeEnvId` set via setActiveEnvId()
+ *  3. DEFAULT_ENV_ID (`search-and-interdict`)
  */
-export async function loadPolicy(url?: string): Promise<Policy> {
-  const resolvedUrl =
-    url ??
-    (_activeEnvId
-      ? `/swarm/checkpoints/${_activeEnvId}/policy.onnx`
-      : '/policy.onnx')
-
+export async function loadPolicy(envIdOrUrl?: string): Promise<Policy> {
   configureWasm()
+  const url = resolvePolicyPath(envIdOrUrl)
 
-  const session = await ort.InferenceSession.create(resolvedUrl, {
+  const session = await ort.InferenceSession.create(url, {
     executionProviders: ['wasm'],
     graphOptimizationLevel: 'all',
   })
@@ -111,11 +116,9 @@ export async function loadPolicy(url?: string): Promise<Policy> {
       const out = await session.run({ [inputName]: tensor })
       const action = out[outputName]
       const data = action.data as Float32Array
-      // expect n*ACT_DIM
       if (data.length !== n * ACT_DIM) {
         throw new Error(`action length ${data.length} != n*${ACT_DIM}`)
       }
-      // return a copy so callers can hold it across frames safely
       return new Float32Array(data)
     },
   }

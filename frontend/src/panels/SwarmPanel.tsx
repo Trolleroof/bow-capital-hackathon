@@ -123,7 +123,7 @@ export default function SwarmPanel({
     const sim = new SwarmEnv(/* maxSteps */ 100000, /* seed */ 0)
     simRef.current = sim
 
-    loadPolicy('/policy.onnx')
+    loadPolicy('search-and-interdict')
       .then((p) => {
         if (cancelled) return
         policyRef.current = p

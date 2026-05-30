@@ -8,13 +8,22 @@
  *
  * Observation layout per agent (matches env.py `_obs`):
  *   [ 0: 2]  own position (x,y) normalized by WORLD_HALF -> ~[-1,1]
+ *            BattlefieldParams: GPS denial adds Gaussian noise σ = gpsDenialLevel×0.2
  *   [ 2: 4]  own velocity (last applied action), in [-1,1]
  *   [ 4:10]  K=3 nearest LIVE neighbors' relative (dx,dy) / WORLD_HALF,
- *            zero-filled when fewer than K live neighbors exist
+ *            zero-filled when fewer than K live neighbors exist.
+ *            BattlefieldParams: each slot zeroed with probability jamDutyCycle
  *   [10:35]  5x5 local coverage patch centered on the agent, row-major.
  *            1.0 = covered OR out-of-bounds, 0.0 = unexplored
  *   [35]     role flag normalized to [0,1]  (= role / max(1, nRoles-1))
+ *
+ * BattlefieldParams also wires:
+ *   - windSpeed / windDirRad: drift applied in step() after agent command
+ *   - attritionInjectRate:    per-step probability of a random agent kill
+ *   See battlefieldParams.ts for the full schema.
  */
+
+import type { BattlefieldParams } from '../gym/battlefieldParams'
 
 // ------------------------------------------------------------- constants ---
 // These mirror env.py module-level defaults EXACTLY.
@@ -59,6 +68,16 @@ function mulberry32(seed: number): () => number {
   }
 }
 
+/**
+ * Box-Muller transform: generate a standard normal sample using two uniform
+ * draws from `rand`.  Used for GPS denial noise in observe().
+ */
+function sampleNormal(rand: () => number): number {
+  const u1 = Math.max(rand(), 1e-10)
+  const u2 = rand()
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
+}
+
 export class SwarmEnv {
   readonly n = N_AGENTS
   readonly k = K_NEIGHBORS
@@ -67,6 +86,13 @@ export class SwarmEnv {
   readonly worldHalf = WORLD_HALF
   readonly cell = CELL
   readonly maxSteps: number
+
+  // Battlefield parameters (P0 knobs wired into dynamics and obs)
+  readonly battlefield: BattlefieldParams | null
+
+  // Pre-computed wind drift (world-units/step) from battlefield.weather
+  private windX = 0
+  private windY = 0
 
   // state
   pos: Float32Array // n*2, row-major (x,y)
@@ -79,14 +105,25 @@ export class SwarmEnv {
 
   private rand: () => number
 
-  constructor(maxSteps = 400, seed = 0) {
-    this.maxSteps = maxSteps
+  constructor(maxSteps = 400, seed = 0, battlefield: BattlefieldParams | null = null) {
+    this.battlefield = battlefield
+    // BattlefieldParams.roe.timeLimitSec maps to maxSteps when provided
+    this.maxSteps = battlefield
+      ? Math.min(battlefield.roe.timeLimitSec, battlefield.logistics.batteryEnvelopeSec)
+      : maxSteps
     this.pos = new Float32Array(this.n * 2)
     this.vel = new Float32Array(this.n * 2)
     this.alive = new Array(this.n).fill(true)
     this.covered = new Uint8Array(this.grid * this.grid)
     this.roles = new Int32Array(this.n)
     this.rand = mulberry32(seed)
+    // Pre-compute wind vector (world-units per step = speed * DT)
+    if (battlefield) {
+      const ws = battlefield.weather.windSpeed
+      const wd = battlefield.weather.windDirRad
+      this.windX = ws * Math.cos(wd) * DT
+      this.windY = ws * Math.sin(wd) * DT
+    }
     this.reset(seed)
   }
 
@@ -142,9 +179,25 @@ export class SwarmEnv {
    * actions: Float32Array length n*2, each in [-1,1] (clipped here).
    * Mirrors env.py.step (without the reward computation, which inference
    * does not need).
+   *
+   * BattlefieldParams P0 effects applied here:
+   *   - attritionInjectRate: each live agent killed with this probability
+   *   - windSpeed/windDirRad: drift added to position after agent command
    */
   step(actions: Float32Array): void {
     const bound = this.worldHalf
+    const bf = this.battlefield
+
+    // ── Battlefield: random attrition (P0) ──────────────────────────────
+    if (bf && bf.logistics.attritionInjectRate > 0) {
+      const rate = bf.logistics.attritionInjectRate
+      for (let i = 0; i < this.n; i++) {
+        if (this.alive[i] && this.rand() < rate) {
+          this.kill(i)
+        }
+      }
+    }
+
     for (let i = 0; i < this.n; i++) {
       // clip action to [-1,1] and record as applied velocity command
       let ax = actions[i * 2]
@@ -157,9 +210,9 @@ export class SwarmEnv {
       this.vel[i * 2 + 1] = ay
 
       if (this.alive[i]) {
-        // pos += action * MAX_SPEED * DT, then clip to world bounds
-        let px = this.pos[i * 2] + ax * MAX_SPEED * DT
-        let py = this.pos[i * 2 + 1] + ay * MAX_SPEED * DT
+        // pos += action * MAX_SPEED * DT + wind_drift, then clip to world bounds
+        let px = this.pos[i * 2] + ax * MAX_SPEED * DT + this.windX
+        let py = this.pos[i * 2 + 1] + ay * MAX_SPEED * DT + this.windY
         if (px < -bound) px = -bound
         else if (px > bound) px = bound
         if (py < -bound) py = -bound
@@ -176,19 +229,33 @@ export class SwarmEnv {
   /**
    * observe — build the (n, OBS_DIM) local observation, flattened row-major,
    * EXACTLY as env.py `_obs`.
+   *
+   * BattlefieldParams P0 effects applied here:
+   *   - gpsDenialLevel: Gaussian noise σ = level×0.2 on obs[0:2]
+   *   - jamDutyCycle:   each neighbor slot zeroed with this probability
    */
   observe(): Float32Array {
     const out = new Float32Array(this.n * OBS_DIM)
     const half = this.worldHalf
     const r = Math.floor(this.patch / 2)
 
+    const bf = this.battlefield
+    const gpsSigma = bf ? bf.ew.gpsDenialLevel * 0.2 : 0
+    const jamProb  = bf ? bf.ew.jamDutyCycle : 0
+
     for (let i = 0; i < this.n; i++) {
       const base = i * OBS_DIM
       let o = 0
 
-      // [0:2] own position normalized
-      out[base + o] = this.pos[i * 2] / half
-      out[base + o + 1] = this.pos[i * 2 + 1] / half
+      // [0:2] own position normalized + GPS denial noise (P0)
+      let px = this.pos[i * 2] / half
+      let py = this.pos[i * 2 + 1] / half
+      if (gpsSigma > 0) {
+        px += sampleNormal(this.rand) * gpsSigma
+        py += sampleNormal(this.rand) * gpsSigma
+      }
+      out[base + o] = px
+      out[base + o + 1] = py
       o += 2
 
       // [2:4] own velocity (last applied command)
@@ -197,6 +264,7 @@ export class SwarmEnv {
       o += 2
 
       // [4:4+2K] K nearest LIVE neighbors' relative (dx,dy)/half, zero-filled.
+      // Jamming (P0): each slot independently zeroed with probability jamDutyCycle.
       // env.py: build rel for all live others, sort by distance, take first K.
       const others: number[] = []
       for (let j = 0; j < this.n; j++) {
@@ -214,10 +282,15 @@ export class SwarmEnv {
           .sort((a, b) => dist[a] - dist[b])
           .slice(0, this.k)
         for (const idx of order) {
-          const j = others[idx]
-          out[base + o] = (this.pos[j * 2] - this.pos[i * 2]) / half
-          out[base + o + 1] = (this.pos[j * 2 + 1] - this.pos[i * 2 + 1]) / half
-          o += 2
+          // Jamming: slot left as zero (already 0 from Float32Array init)
+          if (jamProb > 0 && this.rand() < jamProb) {
+            o += 2  // slot zeroed — CTDE-safe, matches env.py logic
+          } else {
+            const j = others[idx]
+            out[base + o] = (this.pos[j * 2] - this.pos[i * 2]) / half
+            out[base + o + 1] = (this.pos[j * 2 + 1] - this.pos[i * 2 + 1]) / half
+            o += 2
+          }
         }
       }
       // advance past any unfilled neighbor slots (env.py: o = 4 + 2*k)

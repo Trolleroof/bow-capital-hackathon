@@ -278,8 +278,8 @@ export default function CompositeScenePanel({
     const onMouseMove = (e: MouseEvent) => {
       if (cameraModeRef.current !== 'fps') return
       
-      let dx = 0
-      let dy = 0
+      let dx: number
+      let dy: number
       
       if (document.pointerLockElement === renderer.domElement) {
         dx = e.movementX

@@ -1,3 +1,5 @@
+.clean-agent/
+.clean-worktrees/
 __pycache__/
 *.py[cod]
 *.pyo

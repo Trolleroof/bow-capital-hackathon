@@ -106,6 +106,34 @@ nearest neighbors, local coverage/occupancy patch, goal/role flag. **No global s
 
 `alive:false` drives the kill-an-agent demo.
 
+```jsonc
+// topic: "train"  (from train.py or mock_train_publisher.py, ~1-2 Hz for UI)
+{ "topic": "train",
+  "env_id": "search-and-interdict",
+  "profile": "combat",
+  "phase": "update",              // init | baseline | update | eval | checkpoint | final
+  "step": 6400,
+  "reward_mean": 37.42,
+  "coverage": 0.781,
+  "losses": {
+    "pg_loss": 0.041,
+    "v_loss": 0.218,
+    "entropy": 0.067,
+    "approx_kl": 0.012
+  },
+  "params_hash": "c19d6d4a9f10" }
+```
+
+Frontend-dev mock:
+
+```bash
+uv run --project swarm python -m swarm.mock_train_publisher --env-id drone-vs-drone --profile combat
+```
+
+This serves a WebSocket broadcaster on `ws://localhost:8766` that emits the same
+`topic: "train"` JSON shape as the real trainer, so frontend work can proceed
+without waiting on a live MAPPO run.
+
 ---
 
 ## 5. Build phases (never get blocked)
@@ -127,7 +155,8 @@ don't start a phase until the previous one's **Done** criterion is green.
 - Hand-rolled CleanRL-style **MAPPO + CTDE**: shared-param actor (local obs), centralized
   critic (global state, train-only). PPO clip, GAE.
 - Log to TensorBoard; **save the reward curve** (it's a slide).
-- Checkpoint best policy to `swarm/checkpoints/policy.pt`.
+- Checkpoint best policy to `swarm/checkpoints/<env_id>/policy.pt`, plus
+  `params.json`, `meta.json`, and `train-events.ndjson`.
 - **Files:** `swarm/train.py`, `swarm/mappo.py`, `swarm/models.py`.
 - **Done:** reward climbs past random baseline; rollout shows agents spreading to cover,
   not clumping. Save a before/after (random vs trained) clip.
@@ -136,17 +165,47 @@ don't start a phase until the previous one's **Done** criterion is green.
 **Goal:** the trained **actor** runs outside PyTorch, identically.
 - `torch.onnx.export` the actor only (plain MLP, standard ops, static input shape).
 - Verify parity: same obs → same action within tolerance, Python torch vs `onnxruntime`.
-- **Files:** `swarm/export_onnx.py`, output `frontend/public/policy.onnx`.
-- **Done:** parity test passes; `policy.onnx` sits in `frontend/public/`.
+- **Files:** `swarm/export_onnx.py`, output `frontend/public/policies/<env_id>/policy.onnx`.
+- **Done:** parity test passes; the env-specific `policy.onnx` sits beside the matching
+  checkpoint under both `swarm/checkpoints/<env_id>/` and `frontend/public/policies/<env_id>/`.
 
 ### Phase 3 (Edge A) — Browser inference (the guaranteed demo)
 **Goal:** the neural net runs **client-side**, no Python in the loop. This is the demo.
-- `onnxruntime-web` (WASM, WebGPU if available) loads `policy.onnx`.
+- `onnxruntime-web` (WASM, WebGPU if available) loads the env-specific export.
 - Port the env **step** to TypeScript (point-mass integration is trivial); each frame:
   build per-agent local obs → ORT actor → velocity → integrate → render.
 - **Files:** `frontend/src/swarm/sim.ts`, `frontend/src/swarm/policy.ts`.
 - **Done:** open the dashboard offline (network tab killed) and the swarm still
   coordinates — proof it's real and edge-local.
+
+Frontend loader contract:
+
+```ts
+await loadPolicy("search-and-interdict")
+// resolves to /policies/search-and-interdict/policy.onnx
+```
+
+Artifact layout:
+
+```text
+swarm/checkpoints/
+  drone-vs-drone/
+    policy.pt
+    policy.onnx
+    params.json
+    meta.json
+    train-events.ndjson
+  search-and-interdict/
+    policy.pt
+    policy.onnx
+    params.json
+    meta.json
+    train-events.ndjson
+
+frontend/public/policies/
+  drone-vs-drone/policy.onnx
+  search-and-interdict/policy.onnx
+```
 
 ### Phase 4 — Three.js polish + the money demo
 **Goal:** match SplatSwarm's production value, then beat it with the kill demo.
@@ -239,9 +298,8 @@ These are **never** in the actor input — pure CTDE.
 
 ```bash
 # Python sim/training env (managed by uv)
-cd swarm
-uv sync                  # installs from pyproject (torch, gymnasium, pettingzoo, onnx, ...)
-uv run python -m swarm.train      # (once train.py exists)
+uv sync --project swarm  # installs from swarm/pyproject.toml
+uv run --project swarm python -m swarm.train --env-id search-and-interdict
 
 # Frontend already has three + onnxruntime-web (see frontend/package.json)
 ```

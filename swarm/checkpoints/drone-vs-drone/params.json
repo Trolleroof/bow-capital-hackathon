@@ -1,0 +1,33 @@
+{
+  "env_id": "drone-vs-drone",
+  "ew": {
+    "gps_denial_level": 0.0,
+    "jam_duty_cycle": 0.2,
+    "spoofing_enabled": false
+  },
+  "logistics": {
+    "attrition_inject_rate": 0.06,
+    "battery_envelope_sec": 320,
+    "swarm_size": 6
+  },
+  "roe": {
+    "civilian_density": 0.0,
+    "engagement_authority": "weapons-tight",
+    "min_standoff_m": 0.0,
+    "time_limit_sec": 320
+  },
+  "terrain": {
+    "elev_roughness": 0.0,
+    "urban_density": 0.0
+  },
+  "threat": {
+    "hostile_uas_count": 3,
+    "moving_target_speed": 0.3
+  },
+  "weather": {
+    "temperature_c": 20.0,
+    "visibility": 1.0,
+    "wind_dir_rad": 0.5235987755982988,
+    "wind_speed": 3.0
+  }
+}

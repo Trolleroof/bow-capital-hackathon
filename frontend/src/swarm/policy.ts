@@ -1,9 +1,9 @@
 /**
  * policy.ts — onnxruntime-web wrapper for the trained MAPPO actor.
  *
- * Loads frontend/public/policy.onnx and runs it client-side (WASM execution
- * provider) so the swarm's neural net inference happens entirely in the
- * browser — no Python, works offline.
+ * Loads frontend/public/policies/<envId>/policy.onnx and runs it client-side
+ * (WASM execution provider) so the swarm's neural net inference happens
+ * entirely in the browser — no Python, works offline.
  *
  * ONNX contract (from swarm/export_onnx.py):
  *   input  "obs"     float32  (N, 36)   dynamic axis 0 = batch
@@ -18,6 +18,8 @@ export interface Policy {
   /** Which ORT execution provider actually loaded (for the HUD). */
   readonly provider: string
 }
+
+const DEFAULT_ENV_ID = 'search-and-interdict'
 
 let wasmConfigured = false
 
@@ -45,9 +47,22 @@ function configureWasm() {
   }
 }
 
+function resolvePolicyPath(envIdOrUrl: string): string {
+  if (
+    envIdOrUrl.startsWith('/') ||
+    envIdOrUrl.startsWith('./') ||
+    envIdOrUrl.startsWith('../') ||
+    envIdOrUrl.endsWith('.onnx')
+  ) {
+    return envIdOrUrl
+  }
+  return `/policies/${envIdOrUrl}/policy.onnx`
+}
+
 /** Load the policy and return an `act()` runner. */
-export async function loadPolicy(url = '/policy.onnx'): Promise<Policy> {
+export async function loadPolicy(envIdOrUrl = DEFAULT_ENV_ID): Promise<Policy> {
   configureWasm()
+  const url = resolvePolicyPath(envIdOrUrl)
 
   const session = await ort.InferenceSession.create(url, {
     executionProviders: ['wasm'],

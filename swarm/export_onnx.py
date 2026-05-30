@@ -1,19 +1,16 @@
 """Phase 2 — export the trained MAPPO actor to ONNX and prove parity.
 
-Loads ``swarm/checkpoints/policy.pt``, rebuilds the decentralized ``Actor``,
-and exports its deterministic inference graph (``Actor.forward(obs) -> action``)
-to ONNX with a dynamic batch axis so any number of agents N can be evaluated in
-one call. Then it runs a parity test: identical random + realistic obs through
-PyTorch and onnxruntime, asserting the max abs diff is within tolerance, at two
-different batch sizes (to confirm the dynamic axis works).
+Loads ``swarm/checkpoints/<env_id>/policy.pt``, rebuilds the decentralized
+``Actor``, and exports its deterministic inference graph
+(``Actor.forward(obs) -> action``) to ONNX with a dynamic batch axis so any
+number of agents N can be evaluated in one call.
 
 Run:
-    PYTHONPATH=/Users/nikhi/bow-capital-hackathon \\
-        uv run python -m swarm.export_onnx
+    uv run --project swarm python -m swarm.export_onnx --env-id search-and-interdict
 
 Outputs:
-    frontend/public/policy.onnx        (loaded by Phase 3 onnxruntime-web)
-    swarm/checkpoints/policy.onnx      (local copy)
+    frontend/public/policies/<env_id>/policy.onnx
+    swarm/checkpoints/<env_id>/policy.onnx
 
 ONNX inference contract (for Phase 3 / onnxruntime-web):
     input  name "obs"     float32  shape (N, 36)   dynamic axis 0 = "batch"
@@ -22,7 +19,10 @@ ONNX inference contract (for Phase 3 / onnxruntime-web):
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
+import shutil
 
 import numpy as np
 import onnxruntime as ort
@@ -30,57 +30,56 @@ import torch
 
 from swarm.models import Actor
 
-# ----------------------------------------------------------------- paths ---
-_HERE = os.path.dirname(__file__)
-_REPO = os.path.dirname(_HERE)
-CKPT_PATH = os.path.join(_HERE, "checkpoints", "policy.pt")
-FRONTEND_ONNX = os.path.join(_REPO, "frontend", "public", "policy.onnx")
-CKPT_ONNX = os.path.join(_HERE, "checkpoints", "policy.onnx")
+HERE = os.path.dirname(__file__)
+REPO = os.path.dirname(HERE)
 
 OPSET = 17
 PARITY_TOL = 1e-5
-PARITY_BATCHES = (5, 37)  # exercise the dynamic batch axis
+PARITY_BATCHES = (5, 37)
 
 
-def load_actor() -> tuple[Actor, dict]:
-    """Rebuild the trained actor from the checkpoint, in eval mode."""
-    ck = torch.load(CKPT_PATH, map_location="cpu", weights_only=False)
+def checkpoint_dir(env_id: str) -> str:
+    return os.path.join(HERE, "checkpoints", env_id)
+
+
+def checkpoint_paths(env_id: str) -> dict[str, str]:
+    ckpt_dir = checkpoint_dir(env_id)
+    return {
+        "checkpoint": os.path.join(ckpt_dir, "policy.pt"),
+        "onnx": os.path.join(ckpt_dir, "policy.onnx"),
+        "meta": os.path.join(ckpt_dir, "meta.json"),
+        "frontend": os.path.join(REPO, "frontend", "public", "policies", env_id, "policy.onnx"),
+    }
+
+
+def load_actor(ckpt_path: str) -> tuple[Actor, dict]:
+    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     actor = Actor(ck["obs_dim"], ck["act_dim"], ck["actor_hidden"], ck["log_std_init"])
     actor.load_state_dict(ck["actor_state_dict"])
     actor.eval()
     return actor, ck
 
 
-def export(actor: Actor, obs_dim: int) -> None:
-    """Export Actor.forward to ONNX with a dynamic batch axis (static feat dim)."""
-    os.makedirs(os.path.dirname(FRONTEND_ONNX), exist_ok=True)
-    os.makedirs(os.path.dirname(CKPT_ONNX), exist_ok=True)
+def export(actor: Actor, obs_dim: int, frontend_path: str, checkpoint_path: str) -> None:
+    os.makedirs(os.path.dirname(frontend_path), exist_ok=True)
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 
-    # Example input: batch of 1 is fine; the batch axis is marked dynamic below.
     dummy = torch.zeros(1, obs_dim, dtype=torch.float32)
-
     torch.onnx.export(
         actor,
         dummy,
-        FRONTEND_ONNX,
-        dynamo=False,                 # legacy exporter (no onnxscript dependency)
+        frontend_path,
+        dynamo=False,
         opset_version=OPSET,
         input_names=["obs"],
         output_names=["action"],
         dynamic_axes={"obs": {0: "batch"}, "action": {0: "batch"}},
         do_constant_folding=True,
     )
-
-    # keep a local copy alongside the checkpoint
-    import shutil
-
-    shutil.copyfile(FRONTEND_ONNX, CKPT_ONNX)
+    shutil.copyfile(frontend_path, checkpoint_path)
 
 
 def make_obs(batch: int, obs_dim: int, rng: np.random.Generator) -> np.ndarray:
-    """A mix of plausible obs values: positions/velocities in [-1, 1] plus some
-    wider noise to stress the net beyond the training distribution."""
-    # half the rows in the [-1, 1] realistic range, half wider Gaussian noise
     realistic = rng.uniform(-1.0, 1.0, size=(batch, obs_dim))
     wide = rng.normal(0.0, 1.5, size=(batch, obs_dim))
     mask = rng.random((batch, 1)) < 0.5
@@ -88,9 +87,8 @@ def make_obs(batch: int, obs_dim: int, rng: np.random.Generator) -> np.ndarray:
     return obs.astype(np.float32)
 
 
-def parity_test(actor: Actor) -> bool:
-    """Run PyTorch vs onnxruntime over multiple batch sizes; assert parity."""
-    sess = ort.InferenceSession(FRONTEND_ONNX, providers=["CPUExecutionProvider"])
+def parity_test(actor: Actor, onnx_path: str) -> bool:
+    sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
     in_name = sess.get_inputs()[0].name
     out_name = sess.get_outputs()[0].name
 
@@ -100,39 +98,63 @@ def parity_test(actor: Actor) -> bool:
 
     for b in PARITY_BATCHES:
         obs = make_obs(b, actor.obs_dim, rng)
-
         with torch.no_grad():
             torch_out = actor(torch.from_numpy(obs)).numpy()
 
         ort_out = sess.run([out_name], {in_name: obs})[0]
-
         max_diff = float(np.abs(torch_out - ort_out).max())
         overall_max = max(overall_max, max_diff)
         ok = max_diff < PARITY_TOL
         all_pass = all_pass and ok
-        print(f"  batch={b:3d}  torch{torch_out.shape} vs onnx{ort_out.shape}  "
-              f"max_abs_diff={max_diff:.3e}  {'PASS' if ok else 'FAIL'}")
+        print(
+            f"  batch={b:3d}  torch{torch_out.shape} vs onnx{ort_out.shape}  "
+            f"max_abs_diff={max_diff:.3e}  {'PASS' if ok else 'FAIL'}"
+        )
 
-    print(f"\nONNX I/O: input='{in_name}' output='{out_name}' "
-          f"(dynamic axis 0 = batch, feat dim = {actor.obs_dim} -> "
-          f"act dim = {actor.act_dim})")
+    print(
+        f"\nONNX I/O: input='{in_name}' output='{out_name}' "
+        f"(dynamic axis 0 = batch, feat dim = {actor.obs_dim} -> "
+        f"act dim = {actor.act_dim})"
+    )
     print(f"overall max_abs_diff = {overall_max:.3e}  (tol {PARITY_TOL:.0e})")
     print("PARITY: PASS" if all_pass else "PARITY: FAIL")
     return all_pass
 
 
+def update_meta(meta_path: str, env_id: str, frontend_path: str, checkpoint_path: str) -> None:
+    payload = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    payload["env_id"] = env_id
+    payload["onnx"] = {
+        "checkpoint": os.path.relpath(checkpoint_path, HERE),
+        "frontend": os.path.relpath(frontend_path, REPO),
+    }
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
 def main() -> None:
-    actor, ck = load_actor()
-    print(f"[load] actor rebuilt from {CKPT_PATH} "
-          f"(obs_dim={ck['obs_dim']}, act_dim={ck['act_dim']}, "
-          f"hidden={ck['actor_hidden']})")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--env-id", default="search-and-interdict")
+    args = parser.parse_args()
 
-    export(actor, ck["obs_dim"])
-    size = os.path.getsize(FRONTEND_ONNX)
-    print(f"[export] wrote {FRONTEND_ONNX} ({size} bytes)")
-    print(f"[export] copied  {CKPT_ONNX}")
+    paths = checkpoint_paths(args.env_id)
+    actor, ck = load_actor(paths["checkpoint"])
+    print(
+        f"[load] actor rebuilt from {paths['checkpoint']} "
+        f"(env_id={ck.get('env_id', args.env_id)}, obs_dim={ck['obs_dim']}, "
+        f"act_dim={ck['act_dim']}, hidden={ck['actor_hidden']})"
+    )
 
-    ok = parity_test(actor)
+    export(actor, ck["obs_dim"], paths["frontend"], paths["onnx"])
+    print(f"[export] wrote {paths['frontend']} ({os.path.getsize(paths['frontend'])} bytes)")
+    print(f"[export] copied  {paths['onnx']}")
+
+    ok = parity_test(actor, paths["frontend"])
+    update_meta(paths["meta"], args.env_id, paths["frontend"], paths["onnx"])
     if not ok:
         raise SystemExit("parity test FAILED — export not trustworthy")
 

@@ -12,8 +12,7 @@
  *   - quadrotor drone meshes + fading motion trails
  *   - the coverage grid tinted on the ground (watch the swarm paint the field)
  *   - a top-down "COORDINATION MAP" minimap
- *   - operator controls: KILL (button + click-to-kill raycast), REVIVE, RESET,
- *     and an optional (default-OFF) auto-kill toggle
+ *   - operator controls: REVIVE and RESET
  *   - an event status line ("agent 3 lost — swarm recovering")
  *
  * Bus message (SWARM.md §4 / TEAM_PLAN §5):
@@ -47,10 +46,6 @@ interface SwarmMessage {
 // World spans [-WORLD_HALF, WORLD_HALF] in x and y (matches env.WORLD_HALF).
 const WORLD_HALF = ENV_WORLD_HALF
 
-// Optional auto-kill (default OFF). When enabled, kills agent 0 at this step so
-// the demo can run hands-free.
-const AUTO_KILL_STEP = 200
-
 interface SwarmPanelProps {
   url?: string
   /** 'local' = browser onnx inference (default), 'bus' = WebSocket fallback. */
@@ -73,11 +68,6 @@ export default function SwarmPanel({
     source === 'local' ? 'BROWSER (onnx … loading)' : 'bus',
   )
   const [status, setStatus] = useState('all units nominal · coverage sweep active')
-  const [autoKill, setAutoKill] = useState(false)
-  const autoKillRef = useRef(false)
-  useEffect(() => {
-    autoKillRef.current = autoKill
-  }, [autoKill])
 
   // --- WebSocket subscription (bus mode only) ---
   useEffect(() => {
@@ -126,7 +116,6 @@ export default function SwarmPanel({
     let cancelled = false
     const sim = new SwarmEnv(/* maxSteps */ 100000, /* seed */ 0)
     simRef.current = sim
-    setComms('denied')
 
     loadPolicy('/policy.onnx')
       .then((p) => {
@@ -147,21 +136,6 @@ export default function SwarmPanel({
   }, [source])
 
   // --- operator actions (local mode) ---
-  // kill the first live agent (or a specific id from click-to-kill)
-  const killAgent = (id?: number) => {
-    const sim = simRef.current
-    if (!sim) return
-    let target = id
-    if (target === undefined) {
-      target = sim.alive.findIndex((a) => a)
-      if (target < 0) return
-    }
-    if (!sim.alive[target]) return
-    sim.kill(target)
-    setNAlive(sim.nAlive())
-    setStatus(`agent ${target} lost — swarm recovering, redistributing coverage`)
-  }
-
   const reviveAll = () => {
     const sim = simRef.current
     if (!sim) return
@@ -294,32 +268,7 @@ export default function SwarmPanel({
     // plane, env z (= ALTITUDE) is three's vertical axis. updateDrone takes
     // already-mapped args, so we pass (x, ALTITUDE, -y).
 
-    // --- click-to-kill: raycast on drone groups (local mode only) ---
-    const raycaster = new THREE.Raycaster()
-    const ndc = new THREE.Vector2()
-    const onClick = (ev: MouseEvent) => {
-      if (source !== 'local') return
-      const sim = simRef.current
-      if (!sim) return
-      const rect = renderer.domElement.getBoundingClientRect()
-      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1
-      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1
-      raycaster.setFromCamera(ndc, camera)
-      // find closest hit among live drone groups
-      let best = -1
-      let bestDist = Infinity
-      for (let i = 0; i < drones.length; i++) {
-        if (!sim.alive[i]) continue
-        const hits = raycaster.intersectObject(drones[i].group, true)
-        if (hits.length && hits[0].distance < bestDist) {
-          bestDist = hits[0].distance
-          best = i
-        }
-      }
-      if (best >= 0) killAgent(best)
-    }
-    renderer.domElement.addEventListener('click', onClick)
-    renderer.domElement.style.cursor = source === 'local' ? 'crosshair' : 'default'
+    renderer.domElement.style.cursor = 'default'
 
     const miniCtx = miniRef.current?.getContext('2d') ?? null
     const miniSize = miniRef.current?.width ?? 0
@@ -345,9 +294,6 @@ export default function SwarmPanel({
             .act(obs, sim.n)
             .then((actions) => {
               sim.step(actions)
-              if (autoKillRef.current && sim.steps === AUTO_KILL_STEP) {
-                killAgent(0)
-              }
               setNAlive(sim.nAlive())
               setCoverage(sim.coverage())
             })
@@ -417,7 +363,6 @@ export default function SwarmPanel({
     return () => {
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', onResize)
-      renderer.domElement.removeEventListener('click', onClick)
       clearTrailsRef.current = null
       for (const t of trails) t.dispose()
       coverGeo.dispose()
@@ -427,10 +372,10 @@ export default function SwarmPanel({
         mount.removeChild(renderer.domElement)
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source])
 
   const local = source === 'local'
+  const displayComms = local ? 'denied' : comms
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', minHeight: 360 }}>
@@ -450,7 +395,7 @@ export default function SwarmPanel({
         }}
       >
         <div style={{ fontWeight: 700, letterSpacing: 1 }}>
-          COMMS: {comms.toUpperCase()}
+          COMMS: {displayComms.toUpperCase()}
         </div>
         <div style={{ opacity: 0.85 }}>AGENTS ALIVE: {nAlive}</div>
         <div style={{ opacity: 0.85 }}>EDGE: {local ? edgeLabel : 'bus'}</div>
@@ -539,35 +484,12 @@ export default function SwarmPanel({
           <span style={{ color: '#4ef0a0', fontSize: 10, letterSpacing: 1, opacity: 0.7 }}>
             OPERATOR
           </span>
-          <button onClick={() => killAgent()} style={killBtnStyle}>
-            ◼ KILL AGENT
-          </button>
           <button onClick={reviveAll} style={btnStyle}>
             ⟲ REVIVE ALL
           </button>
           <button onClick={resetEpisode} style={btnStyle}>
             ⟳ RESET
           </button>
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              color: '#7fd9b0',
-              fontSize: 11,
-              cursor: 'pointer',
-              userSelect: 'none',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={autoKill}
-              onChange={(e) => setAutoKill(e.target.checked)}
-              style={{ accentColor: '#4ef0a0' }}
-            />
-            AUTO-KILL @{AUTO_KILL_STEP}
-          </label>
-          <span style={{ color: '#4a6f5e', fontSize: 10 }}>click a drone to kill it</span>
         </div>
       )}
     </div>
@@ -584,12 +506,4 @@ const btnStyle: React.CSSProperties = {
   borderRadius: 4,
   padding: '6px 12px',
   cursor: 'pointer',
-}
-
-const killBtnStyle: React.CSSProperties = {
-  ...btnStyle,
-  color: '#ff8585',
-  background: '#1f0c0c',
-  border: '1px solid #c0392b',
-  fontWeight: 700,
 }

@@ -5,25 +5,44 @@
  */
 import * as THREE from 'three'
 
-const ARM_LEN = 0.62
-const ROTOR_R = 0.34
+const ARM_LEN = 0.68
+const ROTOR_R = 0.3
 
 // Shared geometries/materials (created once, reused for every drone).
-const bodyGeo = new THREE.BoxGeometry(0.55, 0.16, 0.55)
-const armGeo = new THREE.BoxGeometry(ARM_LEN * 2, 0.06, 0.08)
-const rotorGeo = new THREE.CylinderGeometry(ROTOR_R, ROTOR_R, 0.04, 16)
+const bodyGeo = new THREE.BoxGeometry(0.58, 0.18, 0.48)
+const canopyGeo = new THREE.BoxGeometry(0.36, 0.12, 0.28)
+const armGeo = new THREE.BoxGeometry(ARM_LEN * 2, 0.045, 0.07)
+const motorGeo = new THREE.CylinderGeometry(0.11, 0.12, 0.12, 20)
+const rotorHubGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.06, 16)
+const rotorDiscGeo = new THREE.CylinderGeometry(ROTOR_R, ROTOR_R, 0.012, 40, 1, true)
+const rotorRingGeo = new THREE.TorusGeometry(ROTOR_R, 0.012, 8, 40)
+const cameraGeo = new THREE.CylinderGeometry(0.055, 0.07, 0.1, 16)
 
 const aliveBody = new THREE.MeshStandardMaterial({
-  color: 0x0e3a2a,
-  emissive: 0x123b2a,
-  emissiveIntensity: 0.6,
-  metalness: 0.3,
-  roughness: 0.5,
+  color: 0x25322f,
+  emissive: 0x07110e,
+  emissiveIntensity: 0.45,
+  metalness: 0.55,
+  roughness: 0.34,
 })
-const aliveRotor = new THREE.MeshStandardMaterial({
-  color: 0x4ef0a0,
-  emissive: 0x2fae7a,
-  emissiveIntensity: 0.9,
+const aliveTrim = new THREE.MeshStandardMaterial({
+  color: 0x78d7b2,
+  emissive: 0x13523d,
+  emissiveIntensity: 0.85,
+  metalness: 0.25,
+  roughness: 0.38,
+})
+const aliveRotorDisc = new THREE.MeshBasicMaterial({
+  color: 0xc4fff0,
+  transparent: true,
+  opacity: 0.2,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+})
+const aliveRotorRing = new THREE.MeshBasicMaterial({
+  color: 0x8ff4c7,
+  transparent: true,
+  opacity: 0.72,
 })
 const deadBody = new THREE.MeshStandardMaterial({
   color: 0x2a1414,
@@ -35,12 +54,22 @@ const deadRotor = new THREE.MeshStandardMaterial({
   color: 0x4a2a2a,
   emissive: 0x000000,
 })
+const deadRotorDisc = new THREE.MeshBasicMaterial({
+  color: 0x6f4747,
+  transparent: true,
+  opacity: 0.12,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+})
 
 export interface Drone {
   group: THREE.Group
-  rotors: THREE.Mesh[]
+  rotors: THREE.Group[]
   body: THREE.Mesh
   arms: THREE.Mesh[]
+  trim: THREE.Mesh[]
+  rotorDiscs: THREE.Mesh[]
+  rotorRings: THREE.Mesh[]
   /** spin-down state for dead drones */
   spin: number
 }
@@ -48,16 +77,31 @@ export interface Drone {
 /** Build one reusable quadrotor: a body + two crossed arms + 4 rotor discs. */
 export function makeDrone(): Drone {
   const group = new THREE.Group()
+  group.scale.setScalar(0.78)
 
   const body = new THREE.Mesh(bodyGeo, aliveBody)
+  body.castShadow = true
   group.add(body)
+
+  const canopy = new THREE.Mesh(canopyGeo, aliveTrim)
+  canopy.position.y = 0.13
+  canopy.position.z = -0.05
+  group.add(canopy)
+
+  const camera = new THREE.Mesh(cameraGeo, aliveTrim)
+  camera.rotation.x = Math.PI / 2
+  camera.position.set(0, -0.005, -0.3)
+  group.add(camera)
 
   const arm1 = new THREE.Mesh(armGeo, aliveBody)
   const arm2 = new THREE.Mesh(armGeo, aliveBody)
   arm2.rotation.y = Math.PI / 2
   group.add(arm1, arm2)
 
-  const rotors: THREE.Mesh[] = []
+  const rotors: THREE.Group[] = []
+  const rotorDiscs: THREE.Mesh[] = []
+  const rotorRings: THREE.Mesh[] = []
+  const trim: THREE.Mesh[] = [canopy, camera]
   const offs: [number, number][] = [
     [ARM_LEN, ARM_LEN],
     [-ARM_LEN, ARM_LEN],
@@ -65,13 +109,27 @@ export function makeDrone(): Drone {
     [-ARM_LEN, -ARM_LEN],
   ]
   for (const [dx, dz] of offs) {
-    const r = new THREE.Mesh(rotorGeo, aliveRotor)
-    r.position.set(dx, 0.06, dz)
-    group.add(r)
-    rotors.push(r)
+    const rotor = new THREE.Group()
+    rotor.position.set(dx, 0.08, dz)
+
+    const motor = new THREE.Mesh(motorGeo, aliveBody)
+    const hub = new THREE.Mesh(rotorHubGeo, aliveTrim)
+    const disc = new THREE.Mesh(rotorDiscGeo, aliveRotorDisc)
+    const ring = new THREE.Mesh(rotorRingGeo, aliveRotorRing)
+    motor.rotation.x = Math.PI / 2
+    hub.rotation.x = Math.PI / 2
+    disc.rotation.x = Math.PI / 2
+    ring.rotation.x = Math.PI / 2
+
+    rotor.add(motor, hub, disc, ring)
+    group.add(rotor)
+    rotors.push(rotor)
+    trim.push(hub)
+    rotorDiscs.push(disc)
+    rotorRings.push(ring)
   }
 
-  return { group, rotors, body, arms: [arm1, arm2], spin: 0 }
+  return { group, rotors, body, arms: [arm1, arm2], trim, rotorDiscs, rotorRings, spin: 0 }
 }
 
 /**
@@ -100,9 +158,11 @@ export function updateDrone(
       d.body.material = aliveBody
       d.arms[0].material = aliveBody
       d.arms[1].material = aliveBody
-      for (const r of d.rotors) r.material = aliveRotor
+      for (const mesh of d.trim) mesh.material = aliveTrim
+      for (const disc of d.rotorDiscs) disc.material = aliveRotorDisc
+      for (const ring of d.rotorRings) ring.material = aliveRotorRing
     }
-    for (const r of d.rotors) r.rotation.y += dt * 40
+    for (const r of d.rotors) r.rotation.y += dt * 44
   } else {
     // ease spin toward 0, list to one side
     d.spin = Math.max(0, d.spin - dt * 0.6)
@@ -113,9 +173,11 @@ export function updateDrone(
       d.body.material = deadBody
       d.arms[0].material = deadBody
       d.arms[1].material = deadBody
-      for (const r of d.rotors) r.material = deadRotor
+      for (const mesh of d.trim) mesh.material = deadRotor
+      for (const disc of d.rotorDiscs) disc.material = deadRotorDisc
+      for (const ring of d.rotorRings) ring.material = deadRotor
     }
-    for (const r of d.rotors) r.rotation.y += dt * 40 * d.spin
+    for (const r of d.rotors) r.rotation.y += dt * 44 * d.spin
   }
 }
 

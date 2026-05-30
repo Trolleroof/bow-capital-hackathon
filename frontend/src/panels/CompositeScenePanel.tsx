@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { ALTITUDE, GRID, SwarmEnv, WORLD_HALF } from '../swarm/sim'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { ALTITUDE, GRID, N_AGENTS, SwarmEnv, WORLD_HALF } from '../swarm/sim'
 import { loadPolicy, type Policy } from '../swarm/policy'
 import { makeDrone, updateDrone, Trail, type Drone } from '../swarm/drone'
 import { drawMinimap, type MiniAgent } from '../swarm/minimap'
@@ -146,16 +147,13 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
   const miniRef = useRef<HTMLCanvasElement | null>(null)
   const envRef = useRef(new SwarmEnv(400, 7))
   const policyRef = useRef<Policy | null>(null)
-  const killNextRef = useRef(false)
   const resetNextRef = useRef(false)
   const reviveNextRef = useRef(false)
-  const autoKillRef = useRef(false)
   const [provider, setProvider] = useState('loading')
-  const [alive, setAlive] = useState(envRef.current.nAlive())
+  const [alive, setAlive] = useState(N_AGENTS)
   const [coverage, setCoverage] = useState(0)
   const [status, setStatus] = useState(NOMINAL)
   const [lost, setLost] = useState(false)
-  const [autoKill, setAutoKill] = useState(false)
 
   // setStatus lives in React; the render loop signals via this ref.
   const statusRef = useRef<{ text: string; lost: boolean } | null>(null)
@@ -195,6 +193,25 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.setSize(width, height)
     mount.appendChild(renderer.domElement)
+    const onContextMenu = (ev: MouseEvent) => ev.preventDefault()
+    renderer.domElement.addEventListener('contextmenu', onContextMenu)
+
+    const controls = new OrbitControls(camera, renderer.domElement)
+    controls.enableDamping = true
+    controls.dampingFactor = 0.07
+    controls.target.set(0, 1.1, 0)
+    controls.minDistance = 5
+    controls.maxDistance = 30
+    controls.maxPolarAngle = Math.PI * 0.48
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.PAN,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.ROTATE,
+    }
+    controls.touches = {
+      ONE: THREE.TOUCH.ROTATE,
+      TWO: THREE.TOUCH.DOLLY_PAN,
+    }
 
     scene.add(new THREE.HemisphereLight(0xc9f0ff, 0x111911, 1.45))
     const key = new THREE.DirectionalLight(0xffffff, 1.4)
@@ -203,6 +220,25 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
 
     const grid = new THREE.GridHelper(WORLD_HALF * 2, GRID, 0x365547, 0x16231f)
     scene.add(grid)
+
+    const boundary = new THREE.Group()
+    const edgeMaterial = new THREE.LineBasicMaterial({
+      color: 0x89f4c7,
+      transparent: true,
+      opacity: 0.72,
+    })
+    const lowerFrame = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(WORLD_HALF * 2, 0.03, WORLD_HALF * 2)),
+      edgeMaterial,
+    )
+    lowerFrame.position.y = 0.08
+    const upperFrame = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(WORLD_HALF * 2, 3.2, WORLD_HALF * 2)),
+      new THREE.LineBasicMaterial({ color: 0x396b5b, transparent: true, opacity: 0.48 }),
+    )
+    upperFrame.position.y = 1.6
+    boundary.add(lowerFrame, upperFrame)
+    scene.add(boundary)
 
     // --- coverage paint: one instanced quad per grid cell, shown as covered ---
     const env0 = envRef.current
@@ -246,16 +282,12 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
     }
 
     const trajectoryLine = new THREE.Line(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: 0x55b8ff, transparent: true, opacity: 0.95 }),
+      new THREE.BufferGeometry().setFromPoints(
+        fakeTrajectory().map((p) => scenePoint(p.x, p.y, p.z)),
+      ),
+      new THREE.LineBasicMaterial({ color: 0x55b8ff, transparent: true, opacity: 0.34 }),
     )
     scene.add(trajectoryLine)
-
-    const cameraMarker = new THREE.Mesh(
-      new THREE.ConeGeometry(0.18, 0.42, 18),
-      new THREE.MeshStandardMaterial({ color: 0x55b8ff, emissive: 0x06233d }),
-    )
-    scene.add(cameraMarker)
 
     // --- drones (quadrotor meshes + trails from drone.ts) ---
     const drones: Drone[] = Array.from({ length: env0.n }, () => makeDrone())
@@ -269,44 +301,17 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
       return t
     })
 
-    let poses = fakeTrajectory()
     let frameTimer = 0
     let disposed = false
     let stepping = false
     void loadTrajectory(trajectoryUrl).then((loaded) => {
-      poses = loaded
-      const vertices = poses.map((p) => scenePoint(p.x, p.y, p.z))
+      const vertices = loaded.map((p) => scenePoint(p.x, p.y, p.z))
       trajectoryLine.geometry.dispose()
       trajectoryLine.geometry = new THREE.BufferGeometry().setFromPoints(vertices)
     })
     void loadSplatPoints(splatPointsUrl).then((points) => {
       if (!disposed) scene.add(points)
     })
-
-    // --- click-to-kill: raycast against drone groups -------------------------
-    const raycaster = new THREE.Raycaster()
-    const ndc = new THREE.Vector2()
-    const onPointerDown = (ev: PointerEvent) => {
-      const rect = renderer.domElement.getBoundingClientRect()
-      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1
-      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1
-      raycaster.setFromCamera(ndc, camera)
-      const hits = raycaster.intersectObjects(
-        drones.map((d) => d.group),
-        true,
-      )
-      if (!hits.length) return
-      // walk up to the top-level drone group
-      let obj: THREE.Object3D | null = hits[0].object
-      while (obj && !drones.some((d) => d.group === obj)) obj = obj.parent
-      if (!obj) return
-      const i = drones.findIndex((d) => d.group === obj)
-      if (i >= 0 && envRef.current.alive[i]) {
-        envRef.current.kill(i)
-        statusRef.current = { text: `agent ${i} lost — swarm recovering, redistributing coverage`, lost: true }
-      }
-    }
-    renderer.domElement.addEventListener('pointerdown', onPointerDown)
 
     let raf = 0
     let last = performance.now()
@@ -333,23 +338,9 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
         env.reviveAll()
         statusRef.current = { text: NOMINAL, lost: false }
       }
-      if (killNextRef.current) {
-        killNextRef.current = false
-        const lastAlive = env.alive.findLastIndex(Boolean)
-        if (lastAlive >= 0) {
-          env.kill(lastAlive)
-          statusRef.current = { text: `agent ${lastAlive} lost — swarm recovering, redistributing coverage`, lost: true }
-        }
-      }
-
       if (frameTimer >= FRAME_MS && !stepping) {
         frameTimer = 0
         stepping = true
-        // optional auto-kill at step 200 (off by default)
-        if (autoKillRef.current && env.steps === 200 && env.nAlive() === env.n) {
-          env.kill(0)
-          statusRef.current = { text: 'agent 0 lost — swarm recovering, redistributing coverage', lost: true }
-        }
         const obs = env.observe()
         const actionPromise = policyRef.current
           ? policyRef.current.act(obs, env.n)
@@ -396,21 +387,14 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
         }
       }
 
-      // status line (signaled from render loop / raycast handler)
+      // status line signaled from operator actions in the render loop.
       if (statusRef.current) {
         setStatus(statusRef.current.text)
         setLost(statusRef.current.lost)
         statusRef.current = null
       }
 
-      const pose = poses[Math.floor((now * 0.018) % poses.length)]
-      if (pose) {
-        cameraMarker.position.copy(scenePoint(pose.x, pose.y, pose.z))
-        cameraMarker.rotation.y = now * 0.0018
-      }
-      camera.position.x = Math.cos(now * 0.00012) * 8.4
-      camera.position.z = Math.sin(now * 0.00012) * 8.4
-      camera.lookAt(0, 1.1, 0)
+      controls.update()
       renderer.render(scene, camera)
     }
     raf = requestAnimationFrame(animate)
@@ -428,7 +412,8 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
       disposed = true
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', onResize)
-      renderer.domElement.removeEventListener('pointerdown', onPointerDown)
+      renderer.domElement.removeEventListener('contextmenu', onContextMenu)
+      controls.dispose()
       renderer.dispose()
       scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.Points || obj instanceof THREE.Line) {
@@ -444,7 +429,7 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
 
   return (
     <section className="composite-scene" style={{ position: 'relative' }}>
-      <div ref={mountRef} className="composite-canvas" style={{ cursor: 'crosshair' }} />
+      <div ref={mountRef} className="composite-canvas" />
 
       {/* coordination minimap (top-right) */}
       <div
@@ -501,35 +486,12 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
       </div>
 
       <div className="scene-actions">
-        <button
-          type="button"
-          style={{ borderColor: '#ff6b6b', color: '#ff6b6b' }}
-          onClick={() => {
-            killNextRef.current = true
-          }}
-        >
-          Kill Agent
-        </button>
         <button type="button" onClick={() => { reviveNextRef.current = true }}>
           Revive All
         </button>
         <button type="button" onClick={() => { resetNextRef.current = true }}>
           Reset
         </button>
-        <label style={{ fontFamily: 'monospace', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={autoKill}
-            onChange={(e) => {
-              setAutoKill(e.target.checked)
-              autoKillRef.current = e.target.checked
-            }}
-          />
-          auto-kill @200
-        </label>
-        <span style={{ fontFamily: 'monospace', fontSize: 11, opacity: 0.6 }}>
-          click a drone to kill it
-        </span>
       </div>
     </section>
   )

@@ -15,12 +15,14 @@
   box-sizing: border-box;
 }
 
-html {
-  min-height: 100%;
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
-  min-height: 100svh;
   margin: 0;
   background: #050c13;
 }
@@ -30,8 +32,4 @@ input,
 textarea,
 select {
   font: inherit;
-}
-
-#root {
-  min-height: 100svh;
 }

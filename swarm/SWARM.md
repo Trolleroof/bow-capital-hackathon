@@ -173,7 +173,58 @@ never let them block the spine.
 
 ---
 
-## 6. Risks & fallbacks
+## 6a. Gym scenario registry
+
+Issue `#7` adds a hard-coded scenario registry shared by the frontend gym page and
+the Python training entry point in `swarm/scenarios.py`.
+
+```python
+from swarm import make_scenario_env
+
+env = make_scenario_env("search-and-interdict", seed=7)
+obs = env.reset()
+```
+
+All scenarios currently reuse the same `SwarmEnv` point-mass core, but each one
+pins different environment knobs and documents the intended reward/telemetry
+shape so we can fork into dedicated env subclasses later without changing ids.
+
+| Scenario id | Operator task | Observation sketch | Action space | Reward sketch |
+|---|---|---|---|---|
+| `drone-vs-drone` | Contest hostile airspace, survive contact, hold a denial lane | local neighbors, contested-lane occupancy, friendly/alive counts | continuous 2D velocity per drone | reward lane control + survival; penalize blue-on-blue crowding and losses |
+| `moving-target-track` | Maintain visual custody on evasive ground movers | target-relative bearings, occlusion bins, wingman offsets | continuous 2D velocity | reward uninterrupted custody and multi-angle coverage; penalize lost track |
+| `search-and-interdict` | Sweep cluttered space, find hidden mover, collapse once contact is made | coverage patch, jammer pockets, obstacle slices, last-seen cue | continuous 2D velocity | reward new search coverage pre-contact, then rapid intercept post-contact |
+| `defend-asset` | Keep inbound agents outside a protected ring | asset-relative bearings, defended sectors, inbound velocity cues | continuous 2D velocity | reward perimeter integrity and early intercepts; penalize breaches |
+| `swarm-vs-swarm-race` | Win contested coverage first under jamming | coverage patch, contested cells, rival offsets, jammer corridors | continuous 2D velocity | reward first-touch coverage and zone control; penalize collisions |
+
+Frontend mapping:
+- `frontend/src/gym/scenarios.ts` is the card registry and operator copy.
+- `frontend/src/gym/GymScenarioStage.tsx` renders the hard-coded 2D gym floor,
+  agents, obstacles/assets, and scenario telemetry for demos.
+
+---
+
+## 6b. Battlefield parameter obs/reward delta (issues #13–#15)
+
+P0 parameters from `swarm/env_config.py` change the env as follows.
+See `docs/battlefield-parameters.md` for the full catalog and priority tiers.
+
+| P0 Parameter | Obs delta | Reward delta | Dynamics delta |
+|---|---|---|---|
+| `wind_speed` + `wind_dir_rad` | None (position obs reflects real position after drift) | Coverage rate drops as wind pushes agents off target cells; bounds penalty increases at high speed | Live agents drift `wind_vector × DT` every step after their command is applied |
+| `gps_denial_level` | `obs[0:2]` (own pos) receives Gaussian noise σ = level×0.2 | None directly | None |
+| `jam_duty_cycle` | Each of the K neighbor slots in `obs[4:10]` is independently zeroed with probability `jam_duty_cycle` | None directly; indirectly increases crowding because agents fly without neighbor awareness | None |
+| `attrition_inject_rate` | Dead agents leave neighbor sets (zero-filled slots) | Team loses coverage contributors; dead agents receive 0 reward | `kill()` called probabilistically; agent freezes |
+| `battery_envelope_sec` / `time_limit_sec` | None | Shorter horizon increases urgency | Episode truncates at `min(battery_envelope_sec, time_limit_sec)` |
+
+**CTDE constraint:** all P0 obs deltas affect only per-agent local observations.
+The centralized critic additionally sees 4 normalized P0 scalars appended to
+`global_state()`: `[wind_speed/15, jam_duty_cycle, gps_denial_level, attrition_rate/0.5]`.
+These are **never** in the actor input — pure CTDE.
+
+---
+
+## 7. Risks & fallbacks
 
 | Risk | Fallback |
 |------|----------|
@@ -184,7 +235,7 @@ never let them block the spine.
 
 ---
 
-## 7. Dev setup
+## 8. Dev setup
 
 ```bash
 # Python sim/training env (managed by uv)

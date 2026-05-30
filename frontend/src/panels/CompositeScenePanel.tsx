@@ -20,7 +20,6 @@ interface PoseSample {
 interface CompositeScenePanelProps {
   trajectoryUrl?: string
   missionName?: string
-  missionBrief?: string
   /**
    * Mock 3DGS point cloud by default. Swap-in seam for the REAL Gaussian splat
    * reconstructed from drone footage: point this at a JSON of {x,y,z,r,g,b}
@@ -32,10 +31,69 @@ interface CompositeScenePanelProps {
 
 const FRAME_MS = 100
 const CELL = (2 * WORLD_HALF) / GRID
+const WORLD_Y_MIN = 0.35
+const WORLD_Y_MAX = 11
+const WORLD_XZ_LIMIT = WORLD_HALF
+const TRAINED_COVERAGE = 0.9965
+const RANDOM_COVERAGE = 0.4725
 
 // scene mapping: world (x,y,z) -> three (x = x, up = z, depth = -y)
 function scenePoint(x: number, y: number, z: number): THREE.Vector3 {
   return new THREE.Vector3(x, z, -y)
+}
+
+function clampWorldVector(point: THREE.Vector3, minY = WORLD_Y_MIN, maxY = WORLD_Y_MAX) {
+  point.x = Math.max(-WORLD_XZ_LIMIT, Math.min(WORLD_XZ_LIMIT, point.x))
+  point.y = Math.max(minY, Math.min(maxY, point.y))
+  point.z = Math.max(-WORLD_XZ_LIMIT, Math.min(WORLD_XZ_LIMIT, point.z))
+  return point
+}
+
+function makeOrbitPan(keys: Record<string, boolean>, dt: number) {
+  const pan = new THREE.Vector3()
+  const panSpeed = 8.5 * dt
+  if (keys.arrowleft) pan.x -= panSpeed
+  if (keys.arrowright) pan.x += panSpeed
+  if (keys.arrowup) pan.z -= panSpeed
+  if (keys.arrowdown) pan.z += panSpeed
+  if (keys.r || keys.e) pan.y += panSpeed
+  if (keys.f || keys.q) pan.y -= panSpeed
+  return pan
+}
+
+function getControlLegend(cameraMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps', isPointerLocked: boolean) {
+  if (cameraMode === 'fps') {
+    return [
+      'Mouse look' + (isPointerLocked ? ' active' : ' on click'),
+      'WASD strafe on ground plane',
+      'Space up',
+      'Shift down',
+      'Esc release pointer lock',
+    ]
+  }
+  if (cameraMode === 'drone-orbit') {
+    return [
+      'LMB rotate around tracked drone',
+      'RMB pan orbit anchor',
+      'Wheel zoom',
+      'Arrows move X/Z',
+      'R/E up · F/Q down',
+    ]
+  }
+  if (cameraMode === 'fpv') {
+    return [
+      'Drone camera locked to selected unit',
+      'Switch to Drone Track for pan or zoom',
+      'Use UAV selector to change feed',
+    ]
+  }
+  return [
+    'LMB rotate',
+    'RMB pan',
+    'Wheel zoom',
+    'Arrows move X/Z',
+    'R/E up · F/Q down',
+  ]
 }
 
 function fakeTrajectory(): PoseSample[] {
@@ -148,7 +206,6 @@ export default function CompositeScenePanel({
   trajectoryUrl,
   splatPointsUrl,
   missionName = 'Land Coverage Survey',
-  missionBrief = 'Field reconstruction and coverage sweep',
 }: CompositeScenePanelProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const miniRef = useRef<HTMLCanvasElement | null>(null)
@@ -159,6 +216,7 @@ export default function CompositeScenePanel({
   const [provider, setProvider] = useState('loading')
   const [alive, setAlive] = useState(N_AGENTS)
   const [coverage, setCoverage] = useState(0)
+  const [meanAction, setMeanAction] = useState(0)
   const [status, setStatus] = useState(NOMINAL)
   const [lost, setLost] = useState(false)
 
@@ -180,6 +238,12 @@ export default function CompositeScenePanel({
   }, [cameraMode])
 
   useEffect(() => {
+    if (cameraMode !== 'fps' && document.pointerLockElement) {
+      document.exitPointerLock?.()
+    }
+  }, [cameraMode])
+
+  useEffect(() => {
     selectedDroneIndexRef.current = selectedDroneIndex
   }, [selectedDroneIndex])
 
@@ -192,22 +256,48 @@ export default function CompositeScenePanel({
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
       if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e', 'r', 'f'].includes(key)) {
+        e.preventDefault()
         trackKey(key, true)
       }
-      if (e.key === 'ArrowUp') trackKey('arrowup', true)
-      if (e.key === 'ArrowDown') trackKey('arrowdown', true)
-      if (e.key === 'ArrowLeft') trackKey('arrowleft', true)
-      if (e.key === 'ArrowRight') trackKey('arrowright', true)
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        trackKey('arrowup', true)
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        trackKey('arrowdown', true)
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        trackKey('arrowleft', true)
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        trackKey('arrowright', true)
+      }
     }
     const handleKeyUp = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
       if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e', 'r', 'f'].includes(key)) {
+        e.preventDefault()
         trackKey(key, false)
       }
-      if (e.key === 'ArrowUp') trackKey('arrowup', false)
-      if (e.key === 'ArrowDown') trackKey('arrowdown', false)
-      if (e.key === 'ArrowLeft') trackKey('arrowleft', false)
-      if (e.key === 'ArrowRight') trackKey('arrowright', false)
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        trackKey('arrowup', false)
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        trackKey('arrowdown', false)
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        trackKey('arrowleft', false)
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        trackKey('arrowright', false)
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
@@ -224,10 +314,14 @@ export default function CompositeScenePanel({
         if (!cancelled) {
           policyRef.current = policy
           setProvider(policy.provider)
+          setStatus('trained policy active · coverage objective executing')
         }
       })
       .catch(() => {
-        if (!cancelled) setProvider('heuristic')
+        if (!cancelled) {
+          setProvider('heuristic')
+          setStatus('policy load failed · heuristic fallback active')
+        }
       })
     return () => {
       cancelled = true
@@ -273,10 +367,17 @@ export default function CompositeScenePanel({
       ONE: THREE.TOUCH.ROTATE,
       TWO: THREE.TOUCH.DOLLY_PAN,
     }
+    controls.enablePan = true
+    controls.enableZoom = true
+    controls.zoomSpeed = 0.9
+    controls.panSpeed = 0.95
+    controls.rotateSpeed = 0.8
 
     // FPS mouse drag & pointer lock variables
     let isDragging = false
     let previousMousePosition = { x: 0, y: 0 }
+    let droneOrbitOffset = new THREE.Vector3(0, 0, 0)
+    let previousMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps' = cameraModeRef.current
 
     const onMouseDown = (e: MouseEvent) => {
       if (cameraModeRef.current !== 'fps') return
@@ -291,31 +392,31 @@ export default function CompositeScenePanel({
 
     const onMouseMove = (e: MouseEvent) => {
       if (cameraModeRef.current !== 'fps') return
-      
-      let dx = 0
-      let dy = 0
-      
+
+      let movement: { dx: number; dy: number }
       if (document.pointerLockElement === renderer.domElement) {
-        dx = e.movementX
-        dy = e.movementY
+        movement = { dx: e.movementX, dy: e.movementY }
       } else if (isDragging) {
-        dx = e.clientX - previousMousePosition.x
-        dy = e.clientY - previousMousePosition.y
+        movement = {
+          dx: e.clientX - previousMousePosition.x,
+          dy: e.clientY - previousMousePosition.y,
+        }
         previousMousePosition = { x: e.clientX, y: e.clientY }
       } else {
         return
       }
-      
+
+      const { dx, dy } = movement
       const sensitivity = 0.0025
       const euler = new THREE.Euler(0, 0, 0, 'YXZ')
       euler.setFromQuaternion(camera.quaternion)
-      
+
       euler.y -= dx * sensitivity
       euler.x -= dy * sensitivity
-      
+
       // Clamp pitch to avoid turning upside down (85 degrees)
       euler.x = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, euler.x))
-      
+
       camera.quaternion.setFromEuler(euler)
     }
 
@@ -412,6 +513,18 @@ export default function CompositeScenePanel({
     // --- drones (quadrotor meshes + trails from drone.ts) ---
     const drones: Drone[] = Array.from({ length: env0.n }, () => makeDrone())
     drones.forEach((d) => scene.add(d.group))
+    const actionArrows = drones.map(() => {
+      const arrow = new THREE.ArrowHelper(
+        new THREE.Vector3(1, 0, 0),
+        new THREE.Vector3(0, ALTITUDE + 0.35, 0),
+        1.8,
+        0x7fd9ff,
+        0.45,
+        0.22,
+      )
+      scene.add(arrow)
+      return arrow
+    })
     const current: THREE.Vector3[] = drones.map((_, i) =>
       scenePoint(env0.pos[i * 2], env0.pos[i * 2 + 1], ALTITUDE),
     )
@@ -475,6 +588,11 @@ export default function CompositeScenePanel({
             env.step(actions)
             setAlive(env.nAlive())
             setCoverage(env.coverage())
+            let total = 0
+            for (let i = 0; i < env.n; i++) {
+              total += Math.hypot(actions[i * 2], actions[i * 2 + 1])
+            }
+            setMeanAction(total / env.n)
             refreshCoverage()
             stepping = false
           })
@@ -493,6 +611,14 @@ export default function CompositeScenePanel({
         const yaw = -Math.atan2(env.vel[i * 2 + 1], env.vel[i * 2])
         updateDrone(drones[i], current[i].x, current[i].z, current[i].y, yaw, env.alive[i], dt)
         if (env.alive[i]) trails[i].push(current[i].x, current[i].z, current[i].y)
+        const speed = Math.hypot(env.vel[i * 2], env.vel[i * 2 + 1])
+        const arrow = actionArrows[i]
+        arrow.visible = env.alive[i] && speed > 0.03
+        arrow.position.set(current[i].x, current[i].y + 0.45, current[i].z)
+        if (speed > 0.03) {
+          arrow.setDirection(new THREE.Vector3(env.vel[i * 2], 0, -env.vel[i * 2 + 1]).normalize())
+          arrow.setLength(1.0 + speed * 1.4, 0.45, 0.22)
+        }
       }
 
       // Update drone states for UI telemetry
@@ -534,33 +660,47 @@ export default function CompositeScenePanel({
       const selectedDroneIdx = selectedDroneIndexRef.current
 
       const applyKeyboardPan = () => {
-        const panSpeed = 10 * dt
-        const pan = new THREE.Vector3()
-        if (keysPressed.current.arrowleft) pan.x -= panSpeed
-        if (keysPressed.current.arrowright) pan.x += panSpeed
-        if (keysPressed.current.arrowup) pan.z -= panSpeed
-        if (keysPressed.current.arrowdown) pan.z += panSpeed
-        if (keysPressed.current.r || keysPressed.current.e) pan.y += panSpeed
-        if (keysPressed.current.f || keysPressed.current.q) pan.y -= panSpeed
+        const pan = makeOrbitPan(keysPressed.current, dt)
         if (pan.lengthSq() > 0) {
           controls.target.add(pan)
           camera.position.add(pan)
+          clampWorldVector(controls.target)
+          clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
         }
+      }
+
+      if (currentMode !== previousMode) {
+        if (currentMode === 'drone-orbit') {
+          const targetDrone = drones[selectedDroneIdx]
+          droneOrbitOffset = targetDrone
+            ? controls.target.clone().sub(targetDrone.group.position)
+            : new THREE.Vector3(0, 0, 0)
+        } else if (previousMode === 'drone-orbit' && currentMode === 'orbit') {
+          droneOrbitOffset = new THREE.Vector3(0, 0, 0)
+        }
+        previousMode = currentMode
       }
 
       if (currentMode === 'orbit') {
         controls.enabled = true
-        controls.target.lerp(new THREE.Vector3(0, 1.1, 0), 0.1)
         applyKeyboardPan()
         controls.update()
+        clampWorldVector(controls.target)
+        clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
       } else if (currentMode === 'drone-orbit') {
         controls.enabled = true
         const targetDrone = drones[selectedDroneIdx]
         if (targetDrone) {
-          controls.target.lerp(targetDrone.group.position, 0.15)
+          const anchoredTarget = targetDrone.group.position.clone().add(droneOrbitOffset)
+          controls.target.copy(anchoredTarget)
         }
         applyKeyboardPan()
         controls.update()
+        clampWorldVector(controls.target)
+        clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
+        if (targetDrone) {
+          droneOrbitOffset.copy(controls.target).sub(targetDrone.group.position)
+        }
       } else if (currentMode === 'fpv') {
         controls.enabled = false
         const targetDrone = drones[selectedDroneIdx]
@@ -584,41 +724,32 @@ export default function CompositeScenePanel({
         }
       } else if (currentMode === 'fps') {
         controls.enabled = false
-        // WASD key movement
-        const speed = 7.0 * dt
+        const speed = 9.5 * dt
         const moveDir = new THREE.Vector3()
-        
-        if (keysPressed.current['w']) {
-          const f = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
-          moveDir.add(f)
-        }
-        if (keysPressed.current['s']) {
-          const b = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion)
-          moveDir.add(b)
-        }
-        if (keysPressed.current['a']) {
-          const l = new THREE.Vector3(-1, 0, 0).applyQuaternion(camera.quaternion)
-          moveDir.add(l)
-        }
-        if (keysPressed.current['d']) {
-          const r = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion)
-          moveDir.add(r)
-        }
+
+        const horizontalForward = camera
+          .getWorldDirection(new THREE.Vector3())
+          .setY(0)
+          .normalize()
+        const horizontalRight = new THREE.Vector3()
+          .crossVectors(horizontalForward, new THREE.Vector3(0, 1, 0))
+          .normalize()
+
+        if (keysPressed.current.w) moveDir.add(horizontalForward)
+        if (keysPressed.current.s) moveDir.sub(horizontalForward)
+        if (keysPressed.current.a) moveDir.sub(horizontalRight)
+        if (keysPressed.current.d) moveDir.add(horizontalRight)
         if (keysPressed.current[' '] || keysPressed.current['e']) {
           moveDir.y += 1.0
         }
         if (keysPressed.current['shift'] || keysPressed.current['q']) {
           moveDir.y -= 1.0
         }
-        
+
         if (moveDir.lengthSq() > 0) {
           moveDir.normalize().multiplyScalar(speed)
           camera.position.add(moveDir)
-          
-          // boundary checks
-          camera.position.x = Math.max(-WORLD_HALF * 1.5, Math.min(WORLD_HALF * 1.5, camera.position.x))
-          camera.position.y = Math.max(0.1, Math.min(15.0, camera.position.y))
-          camera.position.z = Math.max(-WORLD_HALF * 1.5, Math.min(WORLD_HALF * 1.5, camera.position.z))
+          clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
         }
       }
 
@@ -648,6 +779,10 @@ export default function CompositeScenePanel({
       document.removeEventListener('pointerlockchange', handlePointerLockChange)
 
       controls.dispose()
+      actionArrows.forEach((arrow) => {
+        arrow.line.geometry.dispose()
+        arrow.cone.geometry.dispose()
+      })
       renderer.dispose()
       scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.Points || obj instanceof THREE.Line) {
@@ -662,6 +797,7 @@ export default function CompositeScenePanel({
   }, [splatPointsUrl, trajectoryUrl])
 
   const selectedDroneState = droneStates[selectedDroneIndex]
+  const controlLegend = getControlLegend(cameraMode, isPointerLocked)
 
   const handleKillDrone = (idx: number) => {
     const env = envRef.current
@@ -724,9 +860,19 @@ export default function CompositeScenePanel({
           </button>
         </div>
         <p className="console-hint">
-          First-person on a drone: choose DRONE FPV, pick a unit below, then fly with GLOBAL ORBIT
-          arrows (pan) or FREE FLY (WASD + Space / Shift).
+          Global orbit now uses standard mouse mapping: left drag rotates, right drag pans, and
+          the wheel zooms. Free fly keeps `WASD` on the horizontal plane so inspection does not
+          drift underground or into the ceiling.
         </p>
+
+        <div className="console-section-title">Control Legend</div>
+        <div className="control-legend" role="list" aria-label="Camera controls">
+          {controlLegend.map((entry) => (
+            <div key={entry} className="control-legend-row" role="listitem">
+              {entry}
+            </div>
+          ))}
+        </div>
 
         {(cameraMode === 'drone-orbit' || cameraMode === 'fpv') && (
           <>
@@ -960,7 +1106,6 @@ export default function CompositeScenePanel({
       <div className="mission-strip">
         <div>
           <strong>{missionName}</strong>
-          <span>{missionBrief}</span>
         </div>
         <div>
           <span>GPS: DENIED</span>
@@ -969,6 +1114,12 @@ export default function CompositeScenePanel({
         </div>
         <div>
           <span>POLICY: {provider.toUpperCase()}</span>
+          {provider !== 'loading' && provider !== 'heuristic' && (
+            <span>
+              EVAL: {Math.round(TRAINED_COVERAGE * 100)}% / RANDOM {Math.round(RANDOM_COVERAGE * 100)}%
+            </span>
+          )}
+          <span>CMD: {Math.round(meanAction * 100)}%</span>
           <span>ALIVE: {alive}</span>
           <span>COVERAGE: {Math.round(coverage * 100)}%</span>
         </div>

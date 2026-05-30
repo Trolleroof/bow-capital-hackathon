@@ -20,6 +20,10 @@
     linear-gradient(180deg, #09141f 0%, #050c13 100%);
 }
 
+.app-shell--sim {
+  padding: 16px;
+}
+
 .app-backdrop {
   position: absolute;
   inset: 0;
@@ -32,6 +36,7 @@
 }
 
 .app-header,
+.sim-layout,
 .dashboard-grid,
 .gym-layout {
   position: relative;
@@ -46,8 +51,9 @@
   margin-bottom: 22px;
 }
 
-.brand-lockup {
-  max-width: 720px;
+.app-header--compact {
+  justify-content: flex-end;
+  margin-bottom: 16px;
 }
 
 .eyebrow,
@@ -59,7 +65,7 @@
   text-transform: uppercase;
 }
 
-.brand-lockup h1,
+.app-title,
 .panel-frame h2,
 .blank-stage-content h3 {
   margin: 0;
@@ -67,19 +73,9 @@
   letter-spacing: -0.04em;
 }
 
-.brand-lockup h1 {
-  max-width: 12ch;
-  font-size: clamp(2.4rem, 5vw, 4.8rem);
-  line-height: 0.95;
-}
-
-.deck {
-  display: block;
-  max-width: 44rem;
-  margin-top: 14px;
-  color: var(--muted);
-  font-size: 1.02rem;
-  line-height: 1.65;
+.app-title {
+  font-size: clamp(1.4rem, 2vw, 1.9rem);
+  line-height: 1.05;
 }
 
 .top-nav {
@@ -130,10 +126,16 @@
 }
 
 .dashboard-grid,
+.sim-layout,
 .gym-layout {
   display: grid;
   gap: 20px;
   min-height: calc(100svh - 176px);
+}
+
+.sim-layout {
+  grid-template-columns: minmax(0, 1fr);
+  min-height: calc(100svh - 96px);
 }
 
 .dashboard-grid {
@@ -160,12 +162,6 @@
 .mission-panel,
 .gym-sidebar {
   padding: 28px;
-}
-
-.mission-panel p,
-.gym-sidebar p {
-  color: var(--muted);
-  line-height: 1.65;
 }
 
 .metric-row,
@@ -252,6 +248,10 @@
   overflow: hidden;
 }
 
+.sim-panel {
+  min-height: 0;
+}
+
 .panel-head {
   display: flex;
   align-items: flex-end;
@@ -269,13 +269,13 @@
 
 .gym-card-stack {
   display: grid;
-  gap: 12px;
-  margin-top: 24px;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 .gym-card {
   width: 100%;
-  padding: 18px;
+  padding: 14px 16px;
   text-align: left;
   border: 1px solid rgba(120, 154, 180, 0.18);
   border-radius: 22px;
@@ -304,7 +304,7 @@
 
 .gym-card-label {
   display: block;
-  margin-bottom: 8px;
+  margin-top: 6px;
   color: var(--accent);
   font: 700 0.78rem/1.2 'Fira Code', monospace;
   text-transform: uppercase;
@@ -338,8 +338,9 @@
 .blank-stage-content {
   position: relative;
   z-index: 1;
-  max-width: 26rem;
-  padding: 28px;
+  min-width: min(320px, 100%);
+  max-width: 22rem;
+  padding: 24px;
   border: 1px solid rgba(120, 154, 180, 0.22);
   border-radius: 24px;
   background: rgba(5, 12, 18, 0.78);
@@ -356,19 +357,16 @@
 }
 
 .blank-stage-content h3 {
-  font-size: clamp(2rem, 4vw, 3rem);
+  font-size: clamp(1.8rem, 4vw, 2.7rem);
 }
 
 .blank-stage-content span {
   display: block;
   margin-top: 12px;
-  color: var(--muted);
-  line-height: 1.6;
-}
-
-.gym-notes {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  padding: 0 24px 24px;
+  color: var(--text);
+  font: 700 0.84rem/1.2 'Fira Code', monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .composite-scene {
@@ -381,6 +379,17 @@
   border: 1px solid rgba(120, 154, 180, 0.18);
   border-radius: 28px;
   background: linear-gradient(180deg, rgba(2, 8, 14, 0.24), rgba(2, 8, 14, 0.72));
+}
+
+.app-shell--sim .sim-panel {
+  border-radius: 32px;
+}
+
+.app-shell--sim .composite-scene {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(180deg, rgba(2, 8, 14, 0.18), rgba(2, 8, 14, 0.76));
 }
 
 .composite-canvas {
@@ -457,6 +466,7 @@
 
 @media (max-width: 1140px) {
   .dashboard-grid,
+  .sim-layout,
   .gym-layout,
   .gym-notes {
     grid-template-columns: 1fr;
@@ -472,6 +482,10 @@
     padding: 14px;
   }
 
+  .app-shell--sim {
+    padding: 10px;
+  }
+
   .app-header,
   .panel-head,
   .environment-row,
@@ -484,6 +498,10 @@
     padding: 20px 20px 0;
   }
 
+  .app-header--compact {
+    margin-bottom: 10px;
+  }
+
   .mission-panel,
   .gym-sidebar {
     padding: 20px;
@@ -493,6 +511,11 @@
   .blank-stage {
     margin: 16px;
     border-radius: 22px;
+  }
+
+  .app-shell--sim .composite-scene {
+    margin: 0;
+    border-radius: 0;
   }
 
   .mission-strip {

@@ -67,10 +67,13 @@ def _draw_hud(
     candidate: TrackedObject | None,
 ) -> None:
     h, w = frame.shape[:2]
+    followed  = next((o for o in objects if o.is_primary), None)
+    confirmed = next((o for o in objects if o.confirmed), None)
     lines = [
         f"TRACKS: {len(objects)}",
-        f"CONFIRMED: {sum(1 for o in objects if o.confirmed)}",
         f"CANDIDATE: {candidate.id if candidate else 'none'}",
+        f"FOLLOW:    {followed.id if followed else 'none'} [press F]",
+        f"CONFIRMED: {confirmed.id if confirmed else 'none'} [press C]",
     ]
     for i, line in enumerate(lines):
         cv2.putText(

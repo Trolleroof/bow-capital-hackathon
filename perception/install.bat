@@ -6,9 +6,12 @@ python -m pip install "filterpy>=1.4.5,<2.0.0" --only-binary :all: 2>nul || pyth
 :: Install norfair without letting pip get blocked by its numpy<2.0 constraint
 python -m pip install norfair --no-deps --only-binary :all:
 
+:: Install PyTorch with CUDA 12.8 wheels (compatible with CUDA 13.x drivers)
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128 --only-binary :all:
+
 :: Install everything else with binary wheels (norfair excluded from requirements.txt
-:: to avoid its numpy<2.0 constraint poisoning the resolver)
-python -m pip install -r requirements.txt --only-binary :all:
+:: to avoid its numpy<2.0 constraint poisoning the resolver; torch/torchvision handled above)
+python -m pip install -r requirements.txt --only-binary :all: --extra-index-url https://download.pytorch.org/whl/cu128
 
 echo.
 echo All dependencies installed.

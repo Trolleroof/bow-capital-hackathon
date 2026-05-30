@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import numpy as np
+print("[import/tracker] numpy ok", flush=True)
+
 import norfair
+print("[import/tracker] norfair ok", flush=True)
+
 from norfair import Detection as NorfairDetection, Tracker
 
 import config
 from detector import Detection
+print("[import/tracker] detector ok", flush=True)
 
 
 class TrackedObject:
@@ -57,28 +62,51 @@ class TargetTracker:
 
     # ------------------------------------------------------------------
     # Operator actions (called from the bus or UI)
+    #
+    # State machine:  Proposed --> Followed --> Confirmed
+    #                              <-- R --     <-- R --
+    # Invariant: Confirmed always implies Followed (_primary_id == confirmed id).
 
     def confirm_target(self, track_id: int) -> None:
-        """Operator confirms a proposed target -- replaces any previous confirmation."""
+        """Followed → Confirmed. Also locks follow so the invariant holds."""
         self._confirmed_ids = {track_id}
+        self._primary_id    = track_id
+
+    def lock_follow(self, track_id: int) -> None:
+        """Proposed → Followed."""
+        self._primary_id = track_id
+
+    def release(self) -> None:
+        """Step back one level:
+        Confirmed → Followed  (clear confirmed, keep follow lock)
+        Followed  → Proposed  (clear follow lock)
+        """
+        if self._confirmed_ids:
+            self._confirmed_ids.clear()
+            # _primary_id intentionally kept -- still following
+        else:
+            self._primary_id = None
+
+    def unconfirm_all(self) -> None:
+        """Full reset -- clears both confirmed target and follow lock."""
+        self._confirmed_ids.clear()
+        self._primary_id = None
 
     def reassign_confirmed(self, new_track_id: int) -> None:
         """ReID re-linked the confirmed target to a new Norfair track ID."""
         self._confirmed_ids = {new_track_id}
-
-    def unconfirm_all(self) -> None:
-        """Operator clears the confirmed target."""
-        self._confirmed_ids.clear()
-
-    def lock_follow(self, track_id: int) -> None:
-        """Enter follow mode on a specific track."""
-        self._primary_id = track_id
-
-    def release_follow(self) -> None:
-        self._primary_id = None
+        self._primary_id    = new_track_id
 
     def clear_confirmed(self, track_id: int) -> None:
         self._confirmed_ids.discard(track_id)
+
+    def refresh_flags(self, objects: list[TrackedObject]) -> None:
+        """Re-apply confirmed/follow flags to an existing object list.
+        Called after remote commands change tracker state mid-frame.
+        """
+        for obj in objects:
+            obj.confirmed  = obj.id in self._confirmed_ids
+            obj.is_primary = obj.id == self._primary_id
 
 
 # ------------------------------------------------------------------

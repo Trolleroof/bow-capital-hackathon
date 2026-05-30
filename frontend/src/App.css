@@ -1,184 +1,1479 @@
-.counter {
-  font-size: 16px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 2px solid transparent;
-  transition: border-color 0.3s;
-  margin-bottom: 24px;
-
-  &:hover {
-    border-color: var(--accent-border);
-  }
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-}
-
-.hero {
+.app-shell {
+  --bg: #07111a;
+  --bg-elevated: rgba(10, 20, 31, 0.8);
+  --bg-panel: rgba(10, 18, 28, 0.86);
+  --line: rgba(120, 154, 180, 0.22);
+  --line-strong: rgba(120, 154, 180, 0.46);
+  --text: #e8eef2;
+  --muted: #9fb0bf;
+  --accent: #71d7ff;
+  --accent-warm: #ff8a3d;
+  --accent-soft: rgba(113, 215, 255, 0.14);
   position: relative;
-
-  .base,
-  .framework,
-  .vite {
-    inset-inline: 0;
-    margin: 0 auto;
-  }
-
-  .base {
-    width: 170px;
-    position: relative;
-    z-index: 0;
-  }
-
-  .framework,
-  .vite {
-    position: absolute;
-  }
-
-  .framework {
-    z-index: 1;
-    top: 34px;
-    height: 28px;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
-      scale(1.4);
-  }
-
-  .vite {
-    z-index: 0;
-    top: 107px;
-    height: 26px;
-    width: auto;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
-      scale(0.8);
-  }
+  min-height: 100svh;
+  overflow: hidden;
+  padding: 24px;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(113, 215, 255, 0.16), transparent 28%),
+    radial-gradient(circle at top right, rgba(255, 138, 61, 0.14), transparent 24%),
+    linear-gradient(180deg, #09141f 0%, #050c13 100%);
 }
 
-#center {
+.app-backdrop {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.85), transparent 85%);
+  pointer-events: none;
+}
+
+.app-header,
+.dashboard-grid,
+.gym-layout {
+  position: relative;
+  z-index: 1;
+}
+
+.app-header {
+  display: flex;
+  justify-content: flex-end;
+  gap: 24px;
+  align-items: flex-start;
+  margin-bottom: 22px;
+}
+
+.app-header--minimal {
+  margin-bottom: 16px;
+}
+
+.panel-frame h2 {
+  margin: 0;
+  font-family: 'Sora', 'Fira Sans', sans-serif;
+  letter-spacing: -0.04em;
+}
+
+.panel-head h2 {
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.panel-head span[data-status] {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-radius: 999px;
+  font: 700 0.8rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.panel-kicker {
+  margin: 0 0 16px;
+  color: var(--accent);
+  font: 700 0.78rem/1.1 'Fira Code', monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.top-nav {
+  display: inline-flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(8, 15, 23, 0.72);
+  backdrop-filter: blur(16px);
+}
+
+.top-nav button,
+.gym-card,
+.scene-actions button {
+  cursor: pointer;
+}
+
+.top-nav button {
+  min-height: 48px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 0.96rem/1 'Fira Sans', sans-serif;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.top-nav button:hover,
+.top-nav button:focus-visible,
+.top-nav .is-active {
+  border-color: rgba(113, 215, 255, 0.4);
+  background: rgba(113, 215, 255, 0.12);
+  color: var(--text);
+}
+
+.top-nav button:focus-visible,
+.gym-card:focus-visible,
+.scene-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.dashboard-grid,
+.gym-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.dashboard-grid {
+  grid-template-columns: minmax(300px, 0.92fr) minmax(0, 1.45fr);
+}
+
+.app-shell--sim {
+  padding: 0;
+}
+
+.app-shell--gym {
   display: flex;
   flex-direction: column;
-  gap: 25px;
-  place-content: center;
-  place-items: center;
-  flex-grow: 1;
+  height: 100svh;
+  max-height: 100svh;
+  padding: 16px;
+  overflow: hidden;
+}
 
-  @media (max-width: 1024px) {
-    padding: 32px 20px 24px;
-    gap: 18px;
+.gym-viewport {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-shell--gym .app-header--minimal {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.app-shell--gym .gym-layout {
+  flex: 1;
+  min-height: 0;
+}
+
+.app-shell--gym .gym-sidebar,
+.app-shell--gym .gym-stage {
+  min-height: 0;
+}
+
+.app-shell--gym .gym-sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.app-shell--gym .gym-card-stack {
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+}
+
+.app-shell--gym .gym-card {
+  padding: 12px 14px;
+  border-radius: 16px;
+}
+
+.app-shell--gym .gym-card-label {
+  margin-bottom: 0;
+  margin-top: 4px;
+}
+
+.app-shell--gym .panel-kicker {
+  margin-bottom: 10px;
+}
+
+.app-shell--gym .gym-stage {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-shell--gym .panel-head {
+  flex-shrink: 0;
+  padding: 16px 16px 0;
+}
+
+.app-shell--gym .gym-scene {
+  flex: 1;
+  min-height: 0;
+  margin: 12px 16px 16px;
+  border-radius: 20px;
+}
+
+.app-shell--gym .top-nav button {
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+@media (max-height: 820px) {
+  .app-shell--gym {
+    padding: 12px;
+  }
+
+  .app-shell--gym .gym-sidebar {
+    padding: 12px;
+  }
+
+  .app-shell--gym .gym-card {
+    padding: 10px 12px;
+  }
+
+  .app-shell--gym .gym-card-topline strong {
+    font-size: 0.92rem;
+  }
+
+  .app-shell--gym .panel-head {
+    padding: 12px 12px 0;
+  }
+
+  .app-shell--gym .panel-head h2 {
+    font-size: 1.15rem;
+  }
+
+  .app-shell--gym .gym-scene {
+    margin: 10px 12px 12px;
+  }
+
+  .gym-scene__hud article {
+    min-height: 40px;
+    padding: 8px 10px;
+  }
+
+  .gym-scene__hud strong {
+    font-size: 0.92rem;
   }
 }
 
-#next-steps {
+.app-shell--sim .app-backdrop {
+  opacity: 0.35;
+}
+
+.sim-viewport-full {
+  position: relative;
+  z-index: 1;
   display: flex;
-  border-top: 1px solid var(--border);
+  flex-direction: column;
+  width: 100%;
+  height: 100svh;
+  min-height: 100svh;
+}
+
+.sim-viewport-nav {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 20;
+}
+
+.sim-viewport-full .composite-scene {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.gym-layout {
+  grid-template-columns: minmax(300px, 0.82fr) minmax(0, 1.18fr);
+}
+
+.panel-frame {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 24%),
+    var(--bg-panel);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(24px);
+}
+
+.mission-panel,
+.gym-sidebar {
+  padding: 28px;
+}
+
+.metric-row {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.metric-row article,
+.environment-row {
+  border: 1px solid rgba(120, 154, 180, 0.18);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.metric-row article {
+  padding: 16px 18px;
+}
+
+.metric-row strong {
+  display: block;
+  margin-bottom: 6px;
+  font: 700 0.96rem/1.25 'Fira Sans', sans-serif;
+}
+
+.metric-row span,
+.environment-row span,
+.gym-card-label {
+  color: var(--muted);
+  font-size: 0.94rem;
+  line-height: 1.55;
+}
+
+.environment-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 26px;
+}
+
+.environment-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+  padding: 16px 18px;
+}
+
+.environment-row p,
+.gym-card-topline strong {
+  margin: 0 0 6px;
+  color: var(--text);
+  font: 700 1rem/1.3 'Fira Sans', sans-serif;
+}
+
+.environment-row strong,
+.gym-card-topline em {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-radius: 999px;
+  font: 700 0.8rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-style: normal;
+}
+
+[data-status='Ready'] {
+  background: rgba(113, 215, 255, 0.12);
+  color: var(--accent);
+}
+
+[data-status='Queued'] {
+  background: rgba(255, 138, 61, 0.12);
+  color: #ffc08c;
+}
+
+.sim-panel,
+.gym-stage {
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 24px 0;
+}
+
+.panel-head span {
+  color: var(--muted);
+  font: 600 0.82rem/1.2 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.gym-card-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.gym-card {
+  width: 100%;
+  padding: 18px;
   text-align: left;
+  border: 1px solid rgba(120, 154, 180, 0.18);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.03);
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
 
-  & > div {
-    flex: 1 1 0;
-    padding: 32px;
-    @media (max-width: 1024px) {
-      padding: 24px 20px;
-    }
+.gym-card:hover,
+.gym-card.is-selected {
+  border-color: var(--line-strong);
+  background: rgba(113, 215, 255, 0.08);
+  transform: translateY(-1px);
+  box-shadow: 0 18px 32px rgba(0, 0, 0, 0.18);
+}
+
+.gym-card-topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.gym-card-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--accent);
+  font: 700 0.78rem/1.2 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.gym-scene {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 24px;
+  border: 1px solid rgba(120, 154, 180, 0.18);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top, rgba(113, 215, 255, 0.14), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+  overflow: hidden;
+}
+
+.gym-scene__hud {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 18px;
+  z-index: 1;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.gym-scene__hud article {
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid rgba(120, 154, 180, 0.2);
+  border-radius: 18px;
+  background: rgba(5, 12, 18, 0.76);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.gym-scene__hud span {
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.gym-scene__hud strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--text);
+  font: 700 1rem/1.1 'Fira Sans', sans-serif;
+}
+
+.gym-scene__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.gym-scene__grid-line {
+  stroke: rgba(113, 215, 255, 0.12);
+  stroke-width: 0.4;
+}
+
+.gym-scene__floor {
+  fill: rgba(3, 12, 20, 0.72);
+}
+
+.gym-scene__boundary {
+  fill: rgba(113, 215, 255, 0.03);
+  stroke: rgba(113, 215, 255, 0.28);
+  stroke-width: 0.7;
+  stroke-dasharray: 3 2;
+}
+
+.gym-scene__ring {
+  fill: rgba(113, 215, 255, 0.04);
+  stroke: rgba(113, 215, 255, 0.24);
+  stroke-width: 0.8;
+  stroke-dasharray: 2.5 2.5;
+}
+
+.gym-scene__asset {
+  fill: rgba(255, 138, 61, 0.34);
+  stroke: rgba(255, 192, 140, 0.82);
+  stroke-width: 0.8;
+}
+
+.gym-scene__asset-halo {
+  fill: none;
+  stroke: rgba(255, 138, 61, 0.24);
+  stroke-width: 0.6;
+}
+
+.gym-scene__path {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-width: 0.8;
+  stroke-dasharray: 2 2;
+}
+
+.gym-scene__obstacle {
+  fill: rgba(18, 34, 46, 0.92);
+  stroke: rgba(120, 154, 180, 0.34);
+  stroke-width: 0.8;
+}
+
+.gym-scene__agent-halo {
+  fill: rgba(255, 255, 255, 0.05);
+}
+
+.gym-scene__agent {
+  stroke-width: 0.9;
+}
+
+.gym-scene__agent--blue {
+  fill: rgba(113, 215, 255, 0.88);
+  stroke: rgba(196, 240, 255, 0.96);
+}
+
+.gym-scene__agent--red {
+  fill: rgba(255, 138, 61, 0.86);
+  stroke: rgba(255, 205, 170, 0.92);
+}
+
+.gym-scene__agent--neutral {
+  fill: rgba(174, 255, 158, 0.82);
+  stroke: rgba(226, 255, 219, 0.92);
+}
+
+.composite-scene {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  margin: 20px 24px 24px;
+  overflow: hidden;
+  border: 1px solid rgba(120, 154, 180, 0.18);
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(2, 8, 14, 0.24), rgba(2, 8, 14, 0.72));
+}
+
+.composite-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.tactical-console {
+  position: absolute;
+  top: 92px;
+  left: 16px;
+  z-index: 12;
+  width: min(320px, calc(100% - 32px));
+  padding: 16px;
+  border: 1px solid rgba(113, 215, 255, 0.2);
+  border-radius: 20px;
+  background: rgba(7, 16, 24, 0.82);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+}
+
+.console-header,
+.console-section-title,
+.console-hint,
+.control-legend-row,
+.uav-btn,
+.telemetry-row,
+.fps-title,
+.fps-key-row {
+  font-family: 'Fira Code', monospace;
+}
+
+.console-header,
+.console-btn-grid,
+.uav-grid,
+.telemetry-actions,
+.fps-keys {
+  display: grid;
+  gap: 10px;
+}
+
+.console-header {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  margin-bottom: 14px;
+  color: var(--text);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+}
+
+.console-section-title {
+  margin-bottom: 10px;
+  color: var(--accent);
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.console-btn-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.console-btn,
+.uav-btn,
+.btn-kill,
+.btn-revive {
+  min-height: 42px;
+  border: 1px solid rgba(120, 154, 180, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: 700 0.78rem/1.15 'Fira Code', monospace;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    transform 180ms ease;
+}
+
+.console-btn:hover,
+.console-btn.active,
+.uav-btn:hover,
+.uav-btn.active,
+.btn-kill:hover,
+.btn-revive:hover {
+  border-color: rgba(113, 215, 255, 0.44);
+  background: rgba(113, 215, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.console-hint {
+  margin: 12px 0 16px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+
+.control-legend {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.control-legend-row {
+  padding: 10px 12px;
+  border: 1px solid rgba(120, 154, 180, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.uav-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.uav-btn {
+  position: relative;
+}
+
+.status-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.alive {
+  background: #6ef0a3;
+  box-shadow: 0 0 8px rgba(110, 240, 163, 0.8);
+}
+
+.status-dot.dead {
+  background: #ff7f78;
+  box-shadow: 0 0 8px rgba(255, 127, 120, 0.68);
+}
+
+.telemetry-box,
+.fps-instructions,
+.fps-pointer-prompt {
+  border: 1px solid rgba(120, 154, 180, 0.2);
+  background: rgba(7, 16, 24, 0.82);
+  backdrop-filter: blur(14px);
+}
+
+.telemetry-box {
+  padding: 12px;
+  border-radius: 16px;
+}
+
+.telemetry-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  border-bottom: 1px solid rgba(120, 154, 180, 0.12);
+}
+
+.telemetry-row.warning {
+  color: #ffb3aa;
+}
+
+.telemetry-row:last-child {
+  border-bottom: 0;
+}
+
+.telemetry-actions {
+  margin-top: 12px;
+}
+
+.btn-kill {
+  border-color: rgba(255, 107, 107, 0.34);
+  color: #ffd5d5;
+}
+
+.btn-kill:hover {
+  background: rgba(255, 107, 107, 0.16);
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.btn-revive {
+  border-color: rgba(110, 240, 163, 0.34);
+  color: #d7ffe5;
+}
+
+.btn-revive:hover {
+  background: rgba(110, 240, 163, 0.14);
+  border-color: rgba(110, 240, 163, 0.48);
+}
+
+.fps-pointer-prompt,
+.fps-instructions {
+  position: absolute;
+  z-index: 13;
+}
+
+.fps-pointer-prompt {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 14px 18px;
+  border-radius: 999px;
+  color: var(--accent);
+  font: 700 0.8rem/1 'Fira Code', monospace;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.fps-instructions {
+  right: 12px;
+  bottom: 76px;
+  width: min(260px, calc(100% - 24px));
+  padding: 14px;
+  border-radius: 18px;
+}
+
+.fps-title {
+  margin-bottom: 12px;
+  color: var(--accent);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+}
+
+.fps-key-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.mission-strip {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 16px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  font-family: 'Fira Code', monospace;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  pointer-events: none;
+}
+
+.mission-strip > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.mission-strip strong,
+.mission-strip span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(113, 215, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(7, 16, 24, 0.78);
+  backdrop-filter: blur(10px);
+  font-weight: 700;
+}
+
+.mission-strip strong {
+  color: var(--accent);
+}
+
+.scene-actions {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  gap: 10px;
+}
+
+.scene-actions button {
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  background: rgba(7, 16, 24, 0.8);
+  color: var(--text);
+  font: 700 0.82rem/1 'Fira Code', monospace;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    transform 180ms ease;
+}
+
+.scene-actions button:hover {
+  border-color: rgba(113, 215, 255, 0.44);
+  background: rgba(113, 215, 255, 0.14);
+  transform: translateY(-1px);
+}
+
+@media (max-width: 1140px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
   }
 
-  .icon {
-    margin-bottom: 16px;
-    width: 22px;
-    height: 22px;
+  .app-shell--gym .gym-layout {
+    grid-template-columns: minmax(220px, 0.38fr) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding: 14px;
   }
 
-  @media (max-width: 1024px) {
+  .app-shell--gym {
+    padding: 12px;
+  }
+
+  .app-shell--gym .gym-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .app-shell--gym .gym-card-stack {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 4px;
+  }
+
+  .app-shell--gym .gym-card {
+    flex: 0 0 min(220px, 72vw);
+  }
+
+  .app-header,
+  .panel-head,
+  .environment-row,
+  .gym-card-topline {
     flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .panel-head {
+    padding: 20px 20px 0;
+  }
+
+  .mission-panel,
+  .gym-sidebar {
+    padding: 20px;
+  }
+
+  .composite-scene,
+  .gym-scene {
+    margin: 16px;
+    border-radius: 22px;
+  }
+
+  .gym-scene__hud {
+    left: 12px;
+    right: 12px;
+  }
+
+  .mission-strip {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    flex-direction: column;
+  }
+
+  .tactical-console,
+  .fps-instructions {
+    position: static;
+    width: auto;
+    margin: 88px 12px 0;
+  }
+
+  .fps-pointer-prompt {
+    width: calc(100% - 24px);
     text-align: center;
   }
-}
 
-#docs {
-  border-right: 1px solid var(--border);
-
-  @media (max-width: 1024px) {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-}
-
-#next-steps ul {
-  list-style: none;
-  padding: 0;
-  display: flex;
-  gap: 8px;
-  margin: 32px 0 0;
-
-  .logo {
-    height: 18px;
-  }
-
-  a {
-    color: var(--text-h);
-    font-size: 16px;
-    border-radius: 6px;
-    background: var(--social-bg);
-    display: flex;
-    padding: 6px 12px;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-    transition: box-shadow 0.3s;
-
-    &:hover {
-      box-shadow: var(--shadow);
-    }
-    .button-icon {
-      height: 18px;
-      width: 18px;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    margin-top: 20px;
+  .scene-actions {
+    right: 12px;
+    left: 12px;
+    bottom: 12px;
     flex-wrap: wrap;
-    justify-content: center;
+  }
 
-    li {
-      flex: 1 1 calc(50% - 8px);
-    }
-
-    a {
-      width: 100%;
-      justify-content: center;
-      box-sizing: border-box;
-    }
+  .scene-actions button {
+    flex: 1 1 140px;
   }
 }
 
-#spacer {
-  height: 88px;
-  border-top: 1px solid var(--border);
-  @media (max-width: 1024px) {
-    height: 48px;
+@media (prefers-reduced-motion: reduce) {
+  .top-nav button,
+  .gym-card,
+  .scene-actions button {
+    transition: none;
   }
 }
 
-.ticks {
+/* ═══════════════════════════════════════════════════════════════════════════
+   Training bar — sits between .panel-head and .gym-scene (#25, #16)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.gym-training-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Garrison / Combat preset toggle */
+.gym-preset-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.gym-preset-toggle button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: 600 0.74rem/1 'Fira Code', monospace;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background-color 140ms, color 140ms;
+}
+
+.gym-preset-toggle button:hover {
+  background: rgba(113, 215, 255, 0.08);
+  color: var(--text);
+}
+
+.gym-preset-toggle button.is-active {
+  background: rgba(113, 215, 255, 0.15);
+  color: var(--accent);
+}
+
+.gym-preset-toggle button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* Params expand toggle */
+.gym-params-toggle {
   position: relative;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 0.74rem/1 'Fira Code', monospace;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: border-color 140ms, background-color 140ms, color 140ms;
+}
+
+.gym-params-toggle:hover,
+.gym-params-toggle.is-active {
+  border-color: rgba(113, 215, 255, 0.4);
+  background: rgba(113, 215, 255, 0.1);
+  color: var(--accent);
+}
+
+.gym-params-toggle:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.gym-params-error-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  width: 17px;
+  height: 17px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: rgba(255, 107, 107, 0.85);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+/* Train Policy / Stop Training CTA */
+.gym-train-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 15px;
+  border: 1px solid rgba(113, 215, 255, 0.44);
+  border-radius: 999px;
+  background: rgba(113, 215, 255, 0.12);
+  color: var(--accent);
+  font: 700 0.78rem/1 'Fira Code', monospace;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background-color 140ms, border-color 140ms, transform 140ms;
+}
+
+.gym-train-btn:hover:not(:disabled) {
+  background: rgba(113, 215, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.gym-train-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.gym-train-btn--stop {
+  border-color: rgba(255, 107, 107, 0.44);
+  background: rgba(255, 107, 107, 0.12);
+  color: #ffd5d5;
+}
+
+.gym-train-btn--stop:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.24);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Params panel — collapsible P0 knobs grid (#25)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.gym-params-panel {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(0, 0, 0, 0.14);
+  border-bottom: 1px solid var(--line);
+}
+
+.gym-knob {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.gym-knob label {
+  color: var(--muted);
+  font: 600 0.68rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.gym-knob-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gym-knob input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  height: 3px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.gym-knob-value {
+  min-width: 42px;
+  text-align: right;
+  color: var(--text);
+  font: 600 0.76rem/1 'Fira Code', monospace;
+}
+
+.gym-params-errors {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.gym-params-error {
+  margin: 0;
+  color: #ffc8c8;
+  font: 600 0.72rem/1.4 'Fira Code', monospace;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Training stats overlay — bottom strip inside .gym-scene (#17)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.gym-stats-overlay {
+  position: absolute;
+  bottom: 13px;
+  left: 13px;
+  right: 13px;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  pointer-events: none;
+}
+
+.gym-stat-chip {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border: 1px solid rgba(120, 154, 180, 0.2);
+  border-radius: 12px;
+  background: rgba(4, 10, 16, 0.86);
+  backdrop-filter: blur(10px);
+}
+
+.gym-stat-chip--pulse {
+  border-color: rgba(110, 240, 163, 0.34);
+}
+
+.gym-stat-chip__label {
+  color: var(--muted);
+  font: 600 0.66rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.gym-stat-chip__value {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  color: var(--text);
+  font: 700 0.88rem/1 'Fira Sans', sans-serif;
+}
+
+.gym-stat-chip__value--accent {
+  color: var(--accent);
+}
+
+.gym-stat-chip__value--stopped {
+  color: var(--muted);
+  opacity: 0.72;
+}
+
+/* Pulsing green dot shown while training */
+.gym-training-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6ef0a3;
+  box-shadow: 0 0 7px rgba(110, 240, 163, 0.85);
+  animation: gym-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes gym-dot-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);    }
+  50%       { opacity: 0.4; transform: scale(0.72); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gym-training-dot {
+    animation: none;
+  }
+}
+
+/* ── responsive tweaks for training bar ──────────────────────────────────── */
+
+@media (max-height: 820px) {
+  .gym-training-bar {
+    padding: 6px 12px;
+  }
+
+  .gym-params-panel {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .gym-stat-chip {
+    padding: 5px 8px;
+  }
+
+  .gym-stat-chip__value {
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 720px) {
+  .gym-training-bar {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+  }
+
+  .gym-train-btn {
+    margin-left: 0;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .gym-params-panel {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    padding: 8px 12px;
+  }
+
+  .gym-stats-overlay {
+    bottom: 10px;
+    left: 10px;
+    right: 10px;
+    gap: 5px;
+  }
+}
+
+/* ── #19 — Disabled Mission Sim tab ──────────────────────────────────────── */
+
+.top-nav button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.top-nav button:disabled:hover,
+.top-nav button:disabled:focus-visible {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  transform: none;
+}
+
+/* ── #18 — Fullscreen gym env layout ─────────────────────────────────────── */
+
+.app-shell--gym-full {
+  padding: 0;
+}
+
+.gym-scene-full {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
   width: 100%;
+  height: 100svh;
+}
 
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: -4.5px;
-    border: 5px solid transparent;
-  }
+/* Slim chrome bar — back button + env label + nav */
+.gym-scene-full-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  flex-shrink: 0;
+  z-index: 20;
+  background: rgba(5, 11, 17, 0.72);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
 
-  &::before {
-    left: 0;
-    border-left-color: var(--border);
+.gym-scene-full-right {
+  margin-left: auto;
+}
+
+.gym-scene-full-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gym-scene-full-name {
+  font: 700 1rem/1 'Sora', 'Fira Sans', sans-serif;
+  letter-spacing: -0.03em;
+}
+
+.gym-scene-full-meta em {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font: 700 0.75rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-style: normal;
+}
+
+/* Scene fills remaining height */
+.gym-scene-full .gym-scene {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  border-radius: 0;
+  border: none;
+}
+
+/* Back-to-registry button */
+.gym-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font: 600 0.84rem/1 'Fira Sans', sans-serif;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+.gym-back-btn:hover,
+.gym-back-btn:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.gym-back-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* ── #23 — Mission Sim policy badge ─────────────────────────────────────── */
+
+.sim-policy-badge {
+  position: absolute;
+  bottom: 70px; /* above scene-actions strip */
+  right: 16px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid rgba(113, 215, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(7, 16, 24, 0.82);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+
+.sim-policy-env {
+  color: var(--text);
+  font: 600 0.8rem/1 'Fira Sans', sans-serif;
+}
+
+.sim-policy-badge em {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font: 700 0.72rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-style: normal;
+}
+
+/* ── Toast notification ──────────────────────────────────────────────────── */
+
+.app-toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  padding: 10px 20px;
+  border-radius: 999px;
+  background: rgba(7, 16, 24, 0.92);
+  border: 1px solid rgba(255, 138, 61, 0.5);
+  color: #ffc08c;
+  font: 600 0.86rem/1.4 'Fira Sans', sans-serif;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.38);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: toast-in 200ms ease;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
   }
-  &::after {
-    right: 0;
-    border-right-color: var(--border);
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gym-back-btn,
+  .app-toast {
+    transition: none;
+    animation: none;
   }
 }

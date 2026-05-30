@@ -1,0 +1,6 @@
+<library path="oak_stereo_imu_driver">
+  <class type="oak_stereo_imu_driver::OakPipeline"
+         base_class_type="depthai_ros_driver::pipeline_gen::BasePipeline">
+    <description>Stereo + 200 Hz IMU pipeline for OAK-D-PRO-W-POE</description>
+  </class>
+</library>

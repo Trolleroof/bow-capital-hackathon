@@ -40,45 +40,42 @@
 
 .app-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 24px;
   align-items: flex-start;
   margin-bottom: 22px;
 }
 
-.brand-lockup {
-  max-width: 720px;
+.app-header--minimal {
+  margin-bottom: 16px;
 }
 
-.eyebrow,
-.panel-kicker {
-  margin: 0 0 10px;
-  color: var(--accent);
-  font: 700 0.78rem/1.1 'Fira Code', monospace;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-.brand-lockup h1,
 .panel-frame h2 {
   margin: 0;
   font-family: 'Sora', 'Fira Sans', sans-serif;
   letter-spacing: -0.04em;
 }
 
-.brand-lockup h1 {
-  max-width: 12ch;
-  font-size: clamp(2.4rem, 5vw, 4.8rem);
-  line-height: 0.95;
+.panel-head h2 {
+  font-size: 1.35rem;
+  line-height: 1.2;
 }
 
-.deck {
-  display: block;
-  max-width: 44rem;
-  margin-top: 14px;
-  color: var(--muted);
-  font-size: 1.02rem;
-  line-height: 1.65;
+.panel-head span[data-status] {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-radius: 999px;
+  font: 700 0.8rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.panel-kicker {
+  margin: 0 0 16px;
+  color: var(--accent);
+  font: 700 0.78rem/1.1 'Fira Code', monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
 }
 
 .top-nav {
@@ -194,43 +191,31 @@
   padding: 28px;
 }
 
-.mission-panel p,
-.gym-sidebar p {
-  color: var(--muted);
-  line-height: 1.65;
-}
-
-.metric-row,
-.gym-notes {
+.metric-row {
   display: grid;
   gap: 12px;
   margin-top: 24px;
 }
 
 .metric-row article,
-.gym-notes article,
 .environment-row {
   border: 1px solid rgba(120, 154, 180, 0.18);
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.03);
 }
 
-.metric-row article,
-.gym-notes article {
+.metric-row article {
   padding: 16px 18px;
 }
 
-.metric-row strong,
-.gym-notes strong {
+.metric-row strong {
   display: block;
   margin-bottom: 6px;
   font: 700 0.96rem/1.25 'Fira Sans', sans-serif;
 }
 
 .metric-row span,
-.gym-notes span,
 .environment-row span,
-.gym-card-summary,
 .gym-card-label {
   color: var(--muted);
   font-size: 0.94rem;
@@ -302,7 +287,6 @@
 .gym-card-stack {
   display: grid;
   gap: 12px;
-  margin-top: 24px;
 }
 
 .gym-card {
@@ -482,11 +466,6 @@
 
 .gym-scene__legend span:last-child {
   color: var(--accent);
-}
-
-.gym-notes {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  padding: 0 24px 24px;
 }
 
 .composite-scene {
@@ -804,8 +783,7 @@
 
 @media (max-width: 1140px) {
   .dashboard-grid,
-  .gym-layout,
-  .gym-notes {
+  .gym-layout {
     grid-template-columns: 1fr;
   }
 

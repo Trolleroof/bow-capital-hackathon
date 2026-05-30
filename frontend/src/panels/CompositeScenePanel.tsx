@@ -20,7 +20,6 @@ interface PoseSample {
 interface CompositeScenePanelProps {
   trajectoryUrl?: string
   missionName?: string
-  missionBrief?: string
   /**
    * Mock 3DGS point cloud by default. Swap-in seam for the REAL Gaussian splat
    * reconstructed from drone footage: point this at a JSON of {x,y,z,r,g,b}
@@ -205,7 +204,6 @@ export default function CompositeScenePanel({
   trajectoryUrl,
   splatPointsUrl,
   missionName = 'Land Coverage Survey',
-  missionBrief = 'Field reconstruction and coverage sweep',
 }: CompositeScenePanelProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const miniRef = useRef<HTMLCanvasElement | null>(null)
@@ -1072,7 +1070,6 @@ export default function CompositeScenePanel({
       <div className="mission-strip">
         <div>
           <strong>{missionName}</strong>
-          <span>{missionBrief}</span>
         </div>
         <div>
           <span>GPS: DENIED</span>

@@ -1,0 +1,123 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# System config
+#--------------------------------------------------------------------------------------------
+
+# When the variables are commented, the system doesn't load a previous session or not store the current one
+#System.LoadAtlasFromFile: "Session_OAK_D_StereoInertial"
+#System.SaveAtlasToFile: "Session_OAK_D_StereoInertial"
+
+#--------------------------------------------------------------------------------------------
+# Camera Parameters. Adjust them!
+#--------------------------------------------------------------------------------------------
+File.version: "1.0"
+
+Camera.type: "KannalaBrandt8"
+
+# LEFT camera calibration (cam1 - /oak/left/image_raw)
+# EquidistantDistortedPinhole model
+# projection: [fx, fy, cx, cy]
+Camera1.fx: 284.08253213982476
+Camera1.fy: 284.3013635921672
+Camera1.cx: 318.76376740544896
+Camera1.cy: 195.29120836702464
+
+# distortion_coeffs: [k1, k2, k3, k4] (KannalaBrandt8/equidistant)
+Camera1.k1: -0.007728928525874295
+Camera1.k2: 0.027285481789502533
+Camera1.k3: -0.023651052729998383
+Camera1.k4: 0.008322061697957019
+
+Camera1.overlappingBegin: 0
+Camera1.overlappingEnd: 640
+
+# RIGHT camera calibration (cam0 - /oak/right/image_raw)
+# EquidistantDistortedPinhole model
+# projection: [fx, fy, cx, cy]
+Camera2.fx: 285.3075877770165
+Camera2.fy: 285.3657998201044
+Camera2.cx: 322.17019529308124
+Camera2.cy: 199.69249083981862
+
+# distortion_coeffs: [k1, k2, k3, k4] (KannalaBrandt8/equidistant)
+Camera2.k1: 0.00733240031150791
+Camera2.k2: 0.0011216063831938816
+Camera2.k3: -0.008079923488655551
+Camera2.k4: 0.004593627370430996
+
+Camera2.overlappingBegin: 0
+Camera2.overlappingEnd: 640
+
+Camera.width: 640
+Camera.height: 400
+
+# Camera frames per second
+Camera.fps: 15
+
+# Color order of the images (0: BGR, 1: RGB. It is ignored if images are grayscale)
+Camera.RGB: 0
+
+# Stereo extrinsic: transformation from right (cam0) to left (cam1) camera
+# From Kalibr T_cn_cnm1 for cam1 (T_cam1_cam0)
+Stereo.ThDepth: 40.0
+Stereo.T_c1_c2: !!opencv-matrix
+  rows: 4
+  cols: 4
+  dt: f
+  data: [0.9999288531092974, -0.0008967443278989981, 0.011894728628148556, 0.07473167414815804,
+         0.0009072409850665891, 0.9999992038075255, -0.0008770964096467076, 0.0004886086731531909,
+         -0.011893932626424754, 0.0008878253922820153, 0.999928870536676, -0.0003249546721565336,
+         0.0, 0.0, 0.0, 1.0]
+
+# Transformation from body (IMU) to left camera (cam1)
+# From cam1 T_cam_imu (Kalibr)
+IMU.T_b_c1: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [0.006042494479771672, -0.9999790357718304, 0.0023272896903087465, 0.08057456197901,
+          -0.9999750585401322, -0.006033927492419937, 0.003670697028586549, 0.019528555277309713,
+          -0.0036565773780113204, -0.0023494118108384828, -0.9999905548084054, -0.00924120370987462,
+          0.0, 0.0, 0.0, 1.0]
+
+# IMU noise parameters
+# IMPORTANT: These are approximate values for OAK-D BNO086 IMU
+# Calibrate using Allan variance or manufacturer datasheet for best results
+# IMU noise values for BNO085 - Updated with calibrated values
+IMU.NoiseGyro: 0.0004016452006548877   # Gyroscope noise density (rad/s/sqrt(Hz))
+IMU.NoiseAcc: 0.0018385116734875265    # Accelerometer noise density (m/s^2/sqrt(Hz))
+IMU.GyroWalk: 0.000007406689200811322  # Gyroscope random walk / bias instability (rad/s^2/sqrt(Hz))
+IMU.AccWalk: 0.0007030801990783892     # Accelerometer random walk / bias instability (m/s^3/sqrt(Hz))
+IMU.Frequency: 400.0 # Could also be 100hz or 400hz, not sure
+
+#--------------------       ------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+
+# ORB Extractor: Number of features per image
+ORBextractor.nFeatures: 1000
+
+# ORB Extractor: Scale factor between levels in the scale pyramid
+ORBextractor.scaleFactor: 1.2
+
+# ORB Extractor: Number of levels in the scale pyramid
+ORBextractor.nLevels: 8
+
+# ORB Extractor: Fast threshold
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500.0

@@ -2,8 +2,8 @@
  * policy.ts — onnxruntime-web wrapper for the trained MAPPO actor.
  *
  * Loads frontend/public/policies/<envId>/policy.onnx and runs it client-side
- * (WASM execution provider) so the swarm's neural net inference happens
- * entirely in the browser — no Python, works offline.
+ * (WASM execution provider) so swarm inference happens entirely in the browser
+ * — no Python, works offline.
  *
  * ONNX contract (from swarm/export_onnx.py):
  *   input  "obs"     float32  (N, 36)   dynamic axis 0 = batch
@@ -22,38 +22,29 @@ export interface Policy {
 /** Lifecycle state of a trained checkpoint for a given environment. */
 export type PolicyStatus = 'not-trained' | 'training' | 'ready'
 
-const DEFAULT_ENV_ID = 'search-and-interdict'
-
 /**
- * Module-level active env ID. Set this before Mission Sim mounts so zero-arg
- * `loadPolicy()` resolves to the chosen scenario artifact.
+ * Module-level active env ID.  Set this before Mission Sim mounts so that
+ * CompositeScenePanel's zero-arg loadPolicy() call resolves to the correct
+ * per-environment checkpoint without requiring a prop change.
  */
 let _activeEnvId: string | null = null
 
-/** Call from App before rendering Mission Sim to bind the active scenario. */
+/** Call from App before rendering Mission Sim to bind the checkpoint path. */
 export function setActiveEnvId(envId: string | null): void {
   _activeEnvId = envId
 }
 
-function resolvePolicyPath(envIdOrUrl: string): string {
-  if (
-    envIdOrUrl.startsWith('/') ||
-    envIdOrUrl.startsWith('./') ||
-    envIdOrUrl.startsWith('../') ||
-    envIdOrUrl.endsWith('.onnx')
-  ) {
-    return envIdOrUrl
-  }
-  return `/policies/${envIdOrUrl}/policy.onnx`
-}
+const DEFAULT_ENV_ID = 'search-and-interdict'
 
 /**
- * Probe whether a trained checkpoint exists for `envId`.
- * Uses HEAD so it doesn't download the ONNX blob.
+ * Probe whether a trained checkpoint exists for envId.
+ * Uses HEAD so it does not download the (potentially large) ONNX blob.
  */
 export async function checkPolicyExists(envId: string): Promise<boolean> {
   try {
-    const res = await fetch(resolvePolicyPath(envId), { method: 'HEAD' })
+    const res = await fetch(`/policies/${envId}/policy.onnx`, {
+      method: 'HEAD',
+    })
     return res.ok
   } catch {
     return false
@@ -70,6 +61,9 @@ let wasmConfigured = false
 function configureWasm() {
   if (wasmConfigured) return
   wasmConfigured = true
+  // Map the ORT wasm/mjs assets to Vite-resolved URLs (works in dev + build).
+  // The single-threaded SIMD build is the most portable (no COOP/COEP headers
+  // needed), so we pin it explicitly.
   ort.env.wasm.numThreads = 1
   ort.env.wasm.wasmPaths = {
     wasm: new URL(
@@ -84,18 +78,35 @@ function configureWasm() {
 }
 
 /**
- * Load the policy and return an `act()` runner.
- *
- * Resolution order:
- *  1. Explicit `envIdOrUrl` argument
- *  2. `_activeEnvId` set via `setActiveEnvId()`
- *  3. `search-and-interdict`
+ * Resolve an env ID or an explicit URL to a fetchable path.
+ * Explicit paths / URLs (starts with / or ends with .onnx) are passed through.
  */
-export async function loadPolicy(envIdOrUrl?: string): Promise<Policy> {
-  configureWasm()
+function resolvePolicyPath(envIdOrUrl: string): string {
+  if (
+    envIdOrUrl.startsWith('/') ||
+    envIdOrUrl.startsWith('./') ||
+    envIdOrUrl.startsWith('../') ||
+    envIdOrUrl.endsWith('.onnx')
+  ) {
+    return envIdOrUrl
+  }
+  return `/policies/${envIdOrUrl}/policy.onnx`
+}
+
+/**
+ * Load the policy and return an act() runner.
+ *
+ * URL resolution order:
+ *  1. Explicit url argument (legacy / test override)
+ *  2. /policies/<_activeEnvId>/policy.onnx when an env is active (#23)
+ *  3. /policies/search-and-interdict/policy.onnx (default env)
+ */
+export async function loadPolicy(url?: string): Promise<Policy> {
   const resolvedUrl = resolvePolicyPath(
-    envIdOrUrl ?? _activeEnvId ?? DEFAULT_ENV_ID,
+    url ?? _activeEnvId ?? DEFAULT_ENV_ID,
   )
+
+  configureWasm()
 
   const session = await ort.InferenceSession.create(resolvedUrl, {
     executionProviders: ['wasm'],
@@ -117,9 +128,11 @@ export async function loadPolicy(envIdOrUrl?: string): Promise<Policy> {
       const out = await session.run({ [inputName]: tensor })
       const action = out[outputName]
       const data = action.data as Float32Array
+      // expect n*ACT_DIM
       if (data.length !== n * ACT_DIM) {
         throw new Error(`action length ${data.length} != n*${ACT_DIM}`)
       }
+      // return a copy so callers can hold it across frames safely
       return new Float32Array(data)
     },
   }

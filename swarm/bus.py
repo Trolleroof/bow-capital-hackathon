@@ -17,9 +17,11 @@ Run:  cd swarm && uv run python -m swarm.bus
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import math
+import os
 
 import numpy as np
 import websockets
@@ -29,6 +31,8 @@ try:
     from .env import SwarmEnv, ROLES, ALTITUDE
 except ImportError:  # pragma: no cover - direct-script execution
     from env import SwarmEnv, ROLES, ALTITUDE  # type: ignore
+
+_CKPT = os.path.join(os.path.dirname(__file__), "checkpoints", "policy.pt")
 
 HOST = "0.0.0.0"
 PORT = 8765
@@ -82,19 +86,54 @@ def swarm_message(env: SwarmEnv) -> dict:
     return {"t": round(float(env.t), 3), "comms": "denied", "agents": agents}
 
 
-async def run_random(host: str = HOST, port: int = PORT, hz: float = HZ) -> None:
-    """Serve the bus and stream a RANDOM-policy rollout on the `swarm` topic."""
+def _random_policy(env: SwarmEnv):
+    """A policy_fn that ignores observations and acts randomly (Phase 0)."""
+    def act(_obs):
+        return env.rng.uniform(-1, 1, size=(env.n, 2)).astype(np.float32)
+    return act
+
+
+def _trained_policy(ckpt_path: str):
+    """Load the trained MAPPO actor and return a policy_fn(obs) -> actions.
+
+    The actor is the exact graph exported in Phase 2: obs (n,36) -> action (n,2),
+    deterministic mean, tanh-squashed to [-1,1]. Local obs only — no comms.
+    """
+    import torch
+
+    try:
+        from .models import Actor
+    except ImportError:  # pragma: no cover - direct-script execution
+        from models import Actor  # type: ignore
+
+    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    actor = Actor(ck["obs_dim"], ck["act_dim"], ck["actor_hidden"], ck["log_std_init"])
+    actor.load_state_dict(ck["actor_state_dict"])
+    actor.eval()
+    print(f"[bus] loaded trained actor from {ckpt_path} "
+          f"(coverage≈{ck.get('coverage', '?')})")
+
+    def act(obs):
+        with torch.no_grad():
+            return actor(torch.as_tensor(obs, dtype=torch.float32)).numpy()
+    return act
+
+
+async def serve(policy_fn_factory, label: str,
+                host: str = HOST, port: int = PORT, hz: float = HZ) -> None:
+    """Serve the bus and stream a rollout driven by `policy_fn_factory(env)`."""
     env = SwarmEnv(seed=0)
-    env.reset()
+    obs = env.reset()
+    policy = policy_fn_factory(env)
     dt = 1.0 / hz
     killed_demo = False
 
     async with websockets.serve(_register, host, port):
-        print(f"[bus] swarm bus on ws://{host}:{port}  (~{hz:.0f} Hz, comms=denied)")
+        print(f"[bus] swarm bus on ws://{host}:{port}  "
+              f"(~{hz:.0f} Hz, comms=denied, policy={label})")
         while True:
-            # RANDOM policy — no learning in Phase 0
-            actions = env.rng.uniform(-1, 1, size=(env.n, 2)).astype(np.float32)
-            _, _, dones, info = env.step(actions)
+            actions = policy(obs)
+            obs, _, dones, _ = env.step(actions)
 
             # demo: kill an agent partway through each episode
             if not killed_demo and env.steps == 200:
@@ -105,13 +144,41 @@ async def run_random(host: str = HOST, port: int = PORT, hz: float = HZ) -> None
             await broadcast("swarm", swarm_message(env))
 
             if dones.all():
-                env.reset()
+                obs = env.reset()
                 killed_demo = False
             await asyncio.sleep(dt)
 
 
-if __name__ == "__main__":
+# Back-compat alias (Phase 0 entrypoint).
+async def run_random(host: str = HOST, port: int = PORT, hz: float = HZ) -> None:
+    await serve(_random_policy, "random", host, port, hz)
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="CombatOS swarm WebSocket bus")
+    p.add_argument(
+        "--policy", choices=["trained", "random"], default="trained",
+        help="trained = MAPPO actor from checkpoint (default); random = Phase 0",
+    )
+    p.add_argument("--ckpt", default=_CKPT, help="path to policy.pt")
+    p.add_argument("--port", type=int, default=PORT)
+    p.add_argument("--hz", type=float, default=HZ)
+    args = p.parse_args()
+
+    if args.policy == "trained" and os.path.exists(args.ckpt):
+        factory = lambda env: _trained_policy(args.ckpt)  # noqa: E731
+        label = "trained"
+    else:
+        if args.policy == "trained":
+            print(f"[bus] no checkpoint at {args.ckpt} — falling back to random policy")
+        factory = _random_policy
+        label = "random"
+
     try:
-        asyncio.run(run_random())
+        asyncio.run(serve(factory, label, port=args.port, hz=args.hz))
     except KeyboardInterrupt:
         print("\n[bus] stopped")
+
+
+if __name__ == "__main__":
+    main()

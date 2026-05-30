@@ -28,12 +28,12 @@ from swarm.models import Actor, Critic
 @dataclass
 class MAPPOConfig:
     # rollout / optimization
-    rollout_steps: int = 400          # env steps per update (one full episode)
+    rollout_steps: int = 800    # env steps per update (one full episode)
     update_epochs: int = 8
     num_minibatches: int = 4
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_coef: float = 0.2
+    clip_coef: float = 0.15
     ent_coef: float = 0.01
     vf_coef: float = 0.5
     vf_clip: float = 0.2

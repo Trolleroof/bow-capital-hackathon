@@ -1,0 +1,28 @@
+/oak:
+  ros__parameters:
+    camera:
+      i_pipeline_type: Stereo
+      i_nn_type: none
+      i_enable_ir: false
+
+    pipeline_gen:
+      i_enable_imu: false
+      i_enable_sync: false
+
+    left:
+      i_publish_topic: true
+      i_publish_compressed: false
+      i_enable_nn: false
+      i_fps: 30.0
+      i_enable_sync: true
+
+    right:
+      i_publish_topic: true
+      i_publish_compressed: false
+      i_enable_nn: false
+      i_fps: 30.0
+      i_enable_sync: true
+
+    rgb:
+      i_disable_node: true
+      i_publish_topic: false

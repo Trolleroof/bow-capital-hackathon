@@ -32,10 +32,67 @@ interface CompositeScenePanelProps {
 
 const FRAME_MS = 100
 const CELL = (2 * WORLD_HALF) / GRID
+const WORLD_Y_MIN = 0.35
+const WORLD_Y_MAX = 11
+const WORLD_XZ_LIMIT = WORLD_HALF
 
 // scene mapping: world (x,y,z) -> three (x = x, up = z, depth = -y)
 function scenePoint(x: number, y: number, z: number): THREE.Vector3 {
   return new THREE.Vector3(x, z, -y)
+}
+
+function clampWorldVector(point: THREE.Vector3, minY = WORLD_Y_MIN, maxY = WORLD_Y_MAX) {
+  point.x = Math.max(-WORLD_XZ_LIMIT, Math.min(WORLD_XZ_LIMIT, point.x))
+  point.y = Math.max(minY, Math.min(maxY, point.y))
+  point.z = Math.max(-WORLD_XZ_LIMIT, Math.min(WORLD_XZ_LIMIT, point.z))
+  return point
+}
+
+function makeOrbitPan(keys: Record<string, boolean>, dt: number) {
+  const pan = new THREE.Vector3()
+  const panSpeed = 8.5 * dt
+  if (keys.arrowleft) pan.x -= panSpeed
+  if (keys.arrowright) pan.x += panSpeed
+  if (keys.arrowup) pan.z -= panSpeed
+  if (keys.arrowdown) pan.z += panSpeed
+  if (keys.r || keys.e) pan.y += panSpeed
+  if (keys.f || keys.q) pan.y -= panSpeed
+  return pan
+}
+
+function getControlLegend(cameraMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps', isPointerLocked: boolean) {
+  if (cameraMode === 'fps') {
+    return [
+      'Mouse look' + (isPointerLocked ? ' active' : ' on click'),
+      'WASD strafe on ground plane',
+      'Space up',
+      'Shift down',
+      'Esc release pointer lock',
+    ]
+  }
+  if (cameraMode === 'drone-orbit') {
+    return [
+      'LMB rotate around tracked drone',
+      'RMB pan orbit anchor',
+      'Wheel zoom',
+      'Arrows move X/Z',
+      'R/E up · F/Q down',
+    ]
+  }
+  if (cameraMode === 'fpv') {
+    return [
+      'Drone camera locked to selected unit',
+      'Switch to Drone Track for pan or zoom',
+      'Use UAV selector to change feed',
+    ]
+  }
+  return [
+    'LMB rotate',
+    'RMB pan',
+    'Wheel zoom',
+    'Arrows move X/Z',
+    'R/E up · F/Q down',
+  ]
 }
 
 function fakeTrajectory(): PoseSample[] {
@@ -180,6 +237,12 @@ export default function CompositeScenePanel({
   }, [cameraMode])
 
   useEffect(() => {
+    if (cameraMode !== 'fps' && document.pointerLockElement) {
+      document.exitPointerLock?.()
+    }
+  }, [cameraMode])
+
+  useEffect(() => {
     selectedDroneIndexRef.current = selectedDroneIndex
   }, [selectedDroneIndex])
 
@@ -192,22 +255,48 @@ export default function CompositeScenePanel({
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
       if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e', 'r', 'f'].includes(key)) {
+        e.preventDefault()
         trackKey(key, true)
       }
-      if (e.key === 'ArrowUp') trackKey('arrowup', true)
-      if (e.key === 'ArrowDown') trackKey('arrowdown', true)
-      if (e.key === 'ArrowLeft') trackKey('arrowleft', true)
-      if (e.key === 'ArrowRight') trackKey('arrowright', true)
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        trackKey('arrowup', true)
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        trackKey('arrowdown', true)
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        trackKey('arrowleft', true)
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        trackKey('arrowright', true)
+      }
     }
     const handleKeyUp = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
       if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e', 'r', 'f'].includes(key)) {
+        e.preventDefault()
         trackKey(key, false)
       }
-      if (e.key === 'ArrowUp') trackKey('arrowup', false)
-      if (e.key === 'ArrowDown') trackKey('arrowdown', false)
-      if (e.key === 'ArrowLeft') trackKey('arrowleft', false)
-      if (e.key === 'ArrowRight') trackKey('arrowright', false)
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        trackKey('arrowup', false)
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        trackKey('arrowdown', false)
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        trackKey('arrowleft', false)
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        trackKey('arrowright', false)
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
@@ -273,10 +362,17 @@ export default function CompositeScenePanel({
       ONE: THREE.TOUCH.ROTATE,
       TWO: THREE.TOUCH.DOLLY_PAN,
     }
+    controls.enablePan = true
+    controls.enableZoom = true
+    controls.zoomSpeed = 0.9
+    controls.panSpeed = 0.95
+    controls.rotateSpeed = 0.8
 
     // FPS mouse drag & pointer lock variables
     let isDragging = false
     let previousMousePosition = { x: 0, y: 0 }
+    let droneOrbitOffset = new THREE.Vector3(0, 0, 0)
+    let previousMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps' = cameraModeRef.current
 
     const onMouseDown = (e: MouseEvent) => {
       if (cameraModeRef.current !== 'fps') return
@@ -291,31 +387,31 @@ export default function CompositeScenePanel({
 
     const onMouseMove = (e: MouseEvent) => {
       if (cameraModeRef.current !== 'fps') return
-      
-      let dx = 0
-      let dy = 0
-      
+
+      let movement: { dx: number; dy: number }
       if (document.pointerLockElement === renderer.domElement) {
-        dx = e.movementX
-        dy = e.movementY
+        movement = { dx: e.movementX, dy: e.movementY }
       } else if (isDragging) {
-        dx = e.clientX - previousMousePosition.x
-        dy = e.clientY - previousMousePosition.y
+        movement = {
+          dx: e.clientX - previousMousePosition.x,
+          dy: e.clientY - previousMousePosition.y,
+        }
         previousMousePosition = { x: e.clientX, y: e.clientY }
       } else {
         return
       }
-      
+
+      const { dx, dy } = movement
       const sensitivity = 0.0025
       const euler = new THREE.Euler(0, 0, 0, 'YXZ')
       euler.setFromQuaternion(camera.quaternion)
-      
+
       euler.y -= dx * sensitivity
       euler.x -= dy * sensitivity
-      
+
       // Clamp pitch to avoid turning upside down (85 degrees)
       euler.x = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, euler.x))
-      
+
       camera.quaternion.setFromEuler(euler)
     }
 
@@ -534,33 +630,47 @@ export default function CompositeScenePanel({
       const selectedDroneIdx = selectedDroneIndexRef.current
 
       const applyKeyboardPan = () => {
-        const panSpeed = 10 * dt
-        const pan = new THREE.Vector3()
-        if (keysPressed.current.arrowleft) pan.x -= panSpeed
-        if (keysPressed.current.arrowright) pan.x += panSpeed
-        if (keysPressed.current.arrowup) pan.z -= panSpeed
-        if (keysPressed.current.arrowdown) pan.z += panSpeed
-        if (keysPressed.current.r || keysPressed.current.e) pan.y += panSpeed
-        if (keysPressed.current.f || keysPressed.current.q) pan.y -= panSpeed
+        const pan = makeOrbitPan(keysPressed.current, dt)
         if (pan.lengthSq() > 0) {
           controls.target.add(pan)
           camera.position.add(pan)
+          clampWorldVector(controls.target)
+          clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
         }
+      }
+
+      if (currentMode !== previousMode) {
+        if (currentMode === 'drone-orbit') {
+          const targetDrone = drones[selectedDroneIdx]
+          droneOrbitOffset = targetDrone
+            ? controls.target.clone().sub(targetDrone.group.position)
+            : new THREE.Vector3(0, 0, 0)
+        } else if (previousMode === 'drone-orbit' && currentMode === 'orbit') {
+          droneOrbitOffset = new THREE.Vector3(0, 0, 0)
+        }
+        previousMode = currentMode
       }
 
       if (currentMode === 'orbit') {
         controls.enabled = true
-        controls.target.lerp(new THREE.Vector3(0, 1.1, 0), 0.1)
         applyKeyboardPan()
         controls.update()
+        clampWorldVector(controls.target)
+        clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
       } else if (currentMode === 'drone-orbit') {
         controls.enabled = true
         const targetDrone = drones[selectedDroneIdx]
         if (targetDrone) {
-          controls.target.lerp(targetDrone.group.position, 0.15)
+          const anchoredTarget = targetDrone.group.position.clone().add(droneOrbitOffset)
+          controls.target.copy(anchoredTarget)
         }
         applyKeyboardPan()
         controls.update()
+        clampWorldVector(controls.target)
+        clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
+        if (targetDrone) {
+          droneOrbitOffset.copy(controls.target).sub(targetDrone.group.position)
+        }
       } else if (currentMode === 'fpv') {
         controls.enabled = false
         const targetDrone = drones[selectedDroneIdx]
@@ -584,41 +694,32 @@ export default function CompositeScenePanel({
         }
       } else if (currentMode === 'fps') {
         controls.enabled = false
-        // WASD key movement
-        const speed = 7.0 * dt
+        const speed = 9.5 * dt
         const moveDir = new THREE.Vector3()
-        
-        if (keysPressed.current['w']) {
-          const f = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
-          moveDir.add(f)
-        }
-        if (keysPressed.current['s']) {
-          const b = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion)
-          moveDir.add(b)
-        }
-        if (keysPressed.current['a']) {
-          const l = new THREE.Vector3(-1, 0, 0).applyQuaternion(camera.quaternion)
-          moveDir.add(l)
-        }
-        if (keysPressed.current['d']) {
-          const r = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion)
-          moveDir.add(r)
-        }
+
+        const horizontalForward = camera
+          .getWorldDirection(new THREE.Vector3())
+          .setY(0)
+          .normalize()
+        const horizontalRight = new THREE.Vector3()
+          .crossVectors(horizontalForward, new THREE.Vector3(0, 1, 0))
+          .normalize()
+
+        if (keysPressed.current.w) moveDir.add(horizontalForward)
+        if (keysPressed.current.s) moveDir.sub(horizontalForward)
+        if (keysPressed.current.a) moveDir.sub(horizontalRight)
+        if (keysPressed.current.d) moveDir.add(horizontalRight)
         if (keysPressed.current[' '] || keysPressed.current['e']) {
           moveDir.y += 1.0
         }
         if (keysPressed.current['shift'] || keysPressed.current['q']) {
           moveDir.y -= 1.0
         }
-        
+
         if (moveDir.lengthSq() > 0) {
           moveDir.normalize().multiplyScalar(speed)
           camera.position.add(moveDir)
-          
-          // boundary checks
-          camera.position.x = Math.max(-WORLD_HALF * 1.5, Math.min(WORLD_HALF * 1.5, camera.position.x))
-          camera.position.y = Math.max(0.1, Math.min(15.0, camera.position.y))
-          camera.position.z = Math.max(-WORLD_HALF * 1.5, Math.min(WORLD_HALF * 1.5, camera.position.z))
+          clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
         }
       }
 
@@ -662,6 +763,7 @@ export default function CompositeScenePanel({
   }, [splatPointsUrl, trajectoryUrl])
 
   const selectedDroneState = droneStates[selectedDroneIndex]
+  const controlLegend = getControlLegend(cameraMode, isPointerLocked)
 
   const handleKillDrone = (idx: number) => {
     const env = envRef.current
@@ -724,9 +826,19 @@ export default function CompositeScenePanel({
           </button>
         </div>
         <p className="console-hint">
-          First-person on a drone: choose DRONE FPV, pick a unit below, then fly with GLOBAL ORBIT
-          arrows (pan) or FREE FLY (WASD + Space / Shift).
+          Global orbit now uses standard mouse mapping: left drag rotates, right drag pans, and
+          the wheel zooms. Free fly keeps `WASD` on the horizontal plane so inspection does not
+          drift underground or into the ceiling.
         </p>
+
+        <div className="console-section-title">Control Legend</div>
+        <div className="control-legend" role="list" aria-label="Camera controls">
+          {controlLegend.map((entry) => (
+            <div key={entry} className="control-legend-row" role="listitem">
+              {entry}
+            </div>
+          ))}
+        </div>
 
         {(cameraMode === 'drone-orbit' || cameraMode === 'fpv') && (
           <>

@@ -1,48 +1,10 @@
 import { useEffect, useState } from 'react'
 import './App.css'
 import CompositeScenePanel from './panels/CompositeScenePanel'
+import GymScenarioStage from './gym/GymScenarioStage'
+import { getScenarioById, scenarios } from './gym/scenarios'
 
 type View = 'sim' | 'gym'
-type EnvironmentStatus = 'Ready' | 'Queued'
-
-interface EnvironmentCard {
-  id: string
-  name: string
-  label: string
-  summary: string
-  status: EnvironmentStatus
-}
-
-const environments: EnvironmentCard[] = [
-  {
-    id: 'land-coverage',
-    name: 'Land Coverage Survey',
-    label: 'Live now',
-    summary: 'Current field-reconstruction mission with swarm coverage and local policy playback.',
-    status: 'Ready',
-  },
-  {
-    id: 'gym-floor',
-    name: 'Gym Floor',
-    label: 'Hard-coded',
-    summary: 'Indoor calibration gym for staged environment bring-up. Blank shell for asset wiring.',
-    status: 'Ready',
-  },
-  {
-    id: 'warehouse',
-    name: 'Warehouse Lanes',
-    label: 'Stub',
-    summary: 'Reserved slot for dense aisle navigation and obstacle choreography.',
-    status: 'Queued',
-  },
-  {
-    id: 'canyon',
-    name: 'Canyon Corridor',
-    label: 'Stub',
-    summary: 'Reserved slot for constrained line-of-sight and terrain-follow behavior.',
-    status: 'Queued',
-  },
-]
 
 function getInitialView(): View {
   return window.location.hash === '#gym' ? 'gym' : 'sim'
@@ -50,7 +12,7 @@ function getInitialView(): View {
 
 function App() {
   const [view, setView] = useState<View>(getInitialView)
-  const [selectedGymEnvironment, setSelectedGymEnvironment] = useState('gym-floor')
+  const [selectedGymEnvironment, setSelectedGymEnvironment] = useState(scenarios[0].id)
 
   useEffect(() => {
     const onHashChange = () => setView(getInitialView())
@@ -63,8 +25,7 @@ function App() {
     setView(nextView)
   }
 
-  const gymEnvironment =
-    environments.find((environment) => environment.id === selectedGymEnvironment) ?? environments[1]
+  const gymEnvironment = getScenarioById(selectedGymEnvironment)
 
   const nav = (
     <nav className="top-nav" aria-label="Primary">
@@ -114,13 +75,12 @@ function App() {
             <div className="panel-kicker">Environment registry</div>
             <h2>Gym page</h2>
             <p>
-              This page is the staging area for hard-coded environments. Gym Floor is wired in now,
-              and the remaining environments are left blank on purpose so assets and rules can be
-              filled in next.
+              Hard-coded battle drills live here now. Each scenario maps to an operator task, has
+              visible telemetry, and points at a matching policy-training hook in `swarm/`.
             </p>
 
             <div className="gym-card-stack" role="list" aria-label="Selectable environments">
-              {environments.map((environment) => {
+              {scenarios.map((environment) => {
                 const isSelected = selectedGymEnvironment === environment.id
                 return (
                   <button
@@ -150,27 +110,22 @@ function App() {
               <span>{gymEnvironment.label}</span>
             </div>
 
-            <div className="blank-stage" aria-label={`${gymEnvironment.name} placeholder`}>
-              <div className="blank-stage-grid" />
-              <div className="blank-stage-content">
-                <p>Blank environment shell</p>
-                <h3>{gymEnvironment.name}</h3>
-                <span>{gymEnvironment.summary}</span>
-              </div>
-            </div>
+            <GymScenarioStage key={gymEnvironment.id} scenario={gymEnvironment} />
 
             <div className="gym-notes" role="list" aria-label="Gym environment notes">
               <article role="listitem">
-                <strong>Gym Floor is hard-coded</strong>
-                <span>Use this slot for the first indoor environment pass and object layout work.</span>
+                <strong>Observation</strong>
+                <span>{gymEnvironment.observation}</span>
               </article>
               <article role="listitem">
-                <strong>Other environments stay blank</strong>
-                <span>They are visible in the registry so the navigation model is in place now.</span>
+                <strong>Action + reward</strong>
+                <span>
+                  {gymEnvironment.action} Reward sketch: {gymEnvironment.reward}
+                </span>
               </article>
               <article role="listitem">
-                <strong>Next step ready</strong>
-                <span>Additional hard-coded environments can drop into this page without changing app structure.</span>
+                <strong>Scenario notes</strong>
+                <span>{gymEnvironment.notes.join(' ')}</span>
               </article>
             </div>
           </section>

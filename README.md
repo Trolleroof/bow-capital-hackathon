@@ -1,6 +1,6 @@
 # CombatOS
 
-GPS-denied autonomy OS for unmanned platforms — stereo VSLAM, edge targeting, 3D battlefield reconstruction, offline swarm coordination.
+GPS-denied autonomy OS for unmanned platforms -- stereo VSLAM, edge targeting, 3D battlefield reconstruction, offline swarm coordination.
 
 ## Modules
 
@@ -22,7 +22,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-**Jetson Nano — first-time setup:**
+**Jetson Nano -- first-time setup:**
 
 ```bash
 python export_trt.py        # exports yolo11n.engine (run once)

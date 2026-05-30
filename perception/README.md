@@ -1,4 +1,4 @@
-# perception/ — CombatOS Targeting Module
+# perception/ -- CombatOS Targeting Module
 
 **Owner:** Matthieu Fuller (Targeting Lead)
 

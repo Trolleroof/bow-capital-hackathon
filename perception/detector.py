@@ -1,10 +1,8 @@
-"""YOLO detection + MediaPipe face overlay."""
+"""YOLO detection + OpenCV Haar face overlay."""
 from __future__ import annotations
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import cv2
-import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
 
@@ -24,9 +22,9 @@ class Detector:
         self.yolo = YOLO(config.YOLO_MODEL)
         self.yolo.to(config.DEVICE)
 
-        self._face = mp.solutions.face_detection.FaceDetection(
-            model_selection=0,                         # short-range, lighter
-            min_detection_confidence=config.FACE_CONF,
+        # Built into OpenCV -- no download needed
+        self._face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
 
     def run(self, frame: np.ndarray) -> list[Detection]:
@@ -35,6 +33,7 @@ class Detector:
             conf=config.YOLO_CONF,
             iou=config.YOLO_IOU,
             verbose=False,
+            show=False,
         )[0]
 
         detections: list[Detection] = []
@@ -55,15 +54,18 @@ class Detector:
     def _annotate_faces(self, frame: np.ndarray, detections: list[Detection]) -> None:
         """Run face detection only inside person/troop bounding boxes."""
         h, w = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         for det in detections:
             if det.cls != "troop":
                 continue
             x, y, bw, bh = det.bbox
-            crop = frame[max(0, y):min(h, y + bh), max(0, x):min(w, x + bw)]
+            crop = gray[max(0, y):min(h, y + bh), max(0, x):min(w, x + bw)]
             if crop.size == 0:
                 continue
-            rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-            face_result = self._face.process(rgb)
-            det.has_face = bool(
-                face_result.detections and len(face_result.detections) > 0
+            faces = self._face_cascade.detectMultiScale(
+                crop,
+                scaleFactor=1.1,
+                minNeighbors=4,
+                minSize=(20, 20),
             )
+            det.has_face = len(faces) > 0

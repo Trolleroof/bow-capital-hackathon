@@ -1,10 +1,9 @@
-"""OpenCV debug overlay — draw boxes, labels, and target lock on a frame."""
+"""OpenCV debug overlay -- draw boxes, labels, and target lock on a frame."""
 from __future__ import annotations
 
 import cv2
 import numpy as np
 
-from priority import top_candidate
 from tracker import TrackedObject
 
 # Colors (BGR)
@@ -20,9 +19,11 @@ _COLOR = {
 }
 
 
-def draw(frame: np.ndarray, objects: list[TrackedObject]) -> np.ndarray:
-    candidate = top_candidate(objects)
-
+def draw(
+    frame: np.ndarray,
+    objects: list[TrackedObject],
+    candidate: TrackedObject | None,
+) -> np.ndarray:
     for obj in objects:
         x, y, w, h = obj.bbox
         color = _pick_color(obj, candidate)

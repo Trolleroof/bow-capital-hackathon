@@ -59,8 +59,16 @@ class TargetTracker:
     # Operator actions (called from the bus or UI)
 
     def confirm_target(self, track_id: int) -> None:
-        """Operator confirms a proposed target."""
-        self._confirmed_ids.add(track_id)
+        """Operator confirms a proposed target -- replaces any previous confirmation."""
+        self._confirmed_ids = {track_id}
+
+    def reassign_confirmed(self, new_track_id: int) -> None:
+        """ReID re-linked the confirmed target to a new Norfair track ID."""
+        self._confirmed_ids = {new_track_id}
+
+    def unconfirm_all(self) -> None:
+        """Operator clears the confirmed target."""
+        self._confirmed_ids.clear()
 
     def lock_follow(self, track_id: int) -> None:
         """Enter follow mode on a specific track."""

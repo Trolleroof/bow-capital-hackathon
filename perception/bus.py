@@ -1,4 +1,4 @@
-"""WebSocket publisher — sends detections JSON to the CombatOS bus."""
+"""WebSocket publisher -- sends detections JSON to the CombatOS bus."""
 from __future__ import annotations
 
 import asyncio

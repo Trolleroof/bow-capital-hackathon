@@ -17,11 +17,15 @@ Command message format (dashboard -> perception):
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import queue
 import threading
 import time
 from typing import Any
+
+import cv2
+import numpy as np
 print("[import/bus] stdlib ok", flush=True)
 
 import websockets
@@ -97,6 +101,17 @@ class BusPublisher:
         msg = _serialize(objects)
         asyncio.run_coroutine_threadsafe(self._ws.send(msg), self._loop)
         # Do NOT await the future -- returns immediately to the main thread
+
+    def publish_frame(self, frame: np.ndarray, quality: int = 60) -> None:
+        """Encode frame as JPEG and broadcast as topic 'fpv'."""
+        if self._ws is None or self._ws.closed:
+            return
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            return
+        b64 = base64.b64encode(buf).decode("ascii")
+        msg = json.dumps({"topic": "fpv", "data": b64})
+        asyncio.run_coroutine_threadsafe(self._ws.send(msg), self._loop)
 
     # ------------------------------------------------------------------
     # Receive loop (runs inside the background asyncio loop)

@@ -76,16 +76,23 @@ class TargetTracker:
         """Proposed → Followed."""
         self._primary_id = track_id
 
-    def release(self) -> None:
-        """Step back one level:
+    def release(self) -> int | None:
+        """Step back one level.
+
         Confirmed → Followed  (clear confirmed, keep follow lock)
         Followed  → Proposed  (clear follow lock)
+
+        Returns the confirmed track_id when a confirm is released so the caller
+        can invoke gallery.release_confirm(); returns None otherwise.
         """
         if self._confirmed_ids:
+            released = next(iter(self._confirmed_ids))
             self._confirmed_ids.clear()
             # _primary_id intentionally kept -- still following
+            return released
         else:
             self._primary_id = None
+            return None
 
     def unconfirm_all(self) -> None:
         """Full reset -- clears both confirmed target and follow lock."""

@@ -48,7 +48,8 @@ class _OSNetExtractor:
     Same-person similarity typically 0.80-0.95; different-person 0.20-0.45.
     """
     def __init__(self, device: str) -> None:
-        import torchreid
+        import warnings, torchreid
+        warnings.filterwarnings("ignore", message="Cython evaluation")
         self._fe  = torchreid.utils.FeatureExtractor(
             model_name="osnet_x0_25",
             device=device,
@@ -258,6 +259,24 @@ class ReIDGallery:
         self._streaks.clear()
         # Pre-buffer for the new ID (if any) is now obsolete -- it was "us"
         self._pre.pop(new_track_id, None)
+
+    def release_confirm(self, track_id: int) -> None:
+        """Drop the confirmed lock but preserve embeddings as a pre-buffer for track_id.
+
+        Called on Confirmed -> Followed transition so the gallery doesn't
+        immediately re-trigger a ReID match the next time the track is visible.
+        """
+        if self._gallery:
+            buf: deque[np.ndarray] = deque(maxlen=config.REID_PREBUFFER_SIZE)
+            for emb in self._gallery:
+                if _is_diverse(emb, buf):
+                    buf.append(emb)
+            self._pre[track_id] = buf
+        self._gallery.clear()
+        self._streaks.clear()
+        self._origin_id  = None
+        self._current_id = None
+        print(f"[reid] Confirm released for track {track_id} -- {len(self._pre.get(track_id, []))} embeddings kept in pre-buffer")
 
     def clear(self) -> None:
         """Full reset on operator unconfirm."""

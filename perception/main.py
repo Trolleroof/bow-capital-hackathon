@@ -91,8 +91,28 @@ def _drain_commands(
             gallery.clear()
             print("[perception] Target unconfirmed (remote)")
         elif action in ("release", "release_follow"):
-            tracker.release()
+            released_id = tracker.release()
+            if released_id is not None:
+                gallery.release_confirm(released_id)
             print("[perception] Released (remote)")
+
+
+def _next_recording_dir() -> str:
+    base = os.path.join("footage", "recordings")
+    os.makedirs(base, exist_ok=True)
+    existing = [
+        int(d) for d in os.listdir(base)
+        if os.path.isdir(os.path.join(base, d)) and d.isdigit()
+    ]
+    idx = max(existing, default=0) + 1
+    path = os.path.join(base, f"{idx:03d}")
+    os.makedirs(path)
+    return path
+
+
+def _make_writer(path: str, name: str, w: int, h: int, fps: float) -> cv2.VideoWriter:
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    return cv2.VideoWriter(os.path.join(path, name), fourcc, fps, (w, h))
 
 
 def _crop(frame: np.ndarray, bbox: list[int]) -> np.ndarray:
@@ -135,15 +155,28 @@ def main() -> None:
         _dbg(f"bus unavailable ({e}), running in local-only mode")
         publisher = None
 
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if config.PROC_WIDTH > 0 and config.PROC_WIDTH < src_w:
+        proc_w = config.PROC_WIDTH
+        proc_h = round(src_h * proc_w / src_w)
+    else:
+        proc_w, proc_h = src_w, src_h
+    _dbg(f"processing at {proc_w}x{proc_h} (source {src_w}x{src_h})")
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW, w, h)
+    cv2.resizeWindow(WINDOW, proc_w, proc_h)
+
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     _dbg("entering main loop")
     frame_n   = 0
     t_loop    = time.time()
     t_slow_threshold = 0.5  # log any step that takes longer than this
+
+    recording    = False
+    rec_dir      = None
+    writer_raw   = None
+    writer_hud   = None
 
     while True:
         t0 = time.time()
@@ -155,6 +188,9 @@ def main() -> None:
             break
         if t_read - t0 > t_slow_threshold:
             _dbg(f"frame {frame_n}: SLOW cap.read() {t_read-t0:.3f}s")
+
+        if src_w != proc_w:
+            frame = cv2.resize(frame, (proc_w, proc_h), interpolation=cv2.INTER_LINEAR)
 
         detections = detector.run(frame)
         t_det = time.time()
@@ -198,7 +234,16 @@ def main() -> None:
         if publisher:
             publisher.publish(objects)
 
+        raw_frame = frame.copy()
         frame = draw(frame, objects, candidate)
+
+        if recording:
+            writer_raw.write(raw_frame)
+            writer_hud.write(frame)
+
+        if publisher and frame_n % config.FPV_INTERVAL == 0:
+            publisher.publish_frame(frame, quality=config.FPV_QUALITY)
+
         cv2.imshow(WINDOW, frame)
         t_draw = time.time()
 
@@ -215,6 +260,18 @@ def main() -> None:
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
+        elif key == ord(" "):
+            if not recording:
+                rec_dir    = _next_recording_dir()
+                writer_raw = _make_writer(rec_dir, "raw.mp4", proc_w, proc_h, src_fps)
+                writer_hud = _make_writer(rec_dir, "hud.mp4", proc_w, proc_h, src_fps)
+                recording  = True
+                _dbg(f"recording started → {rec_dir}")
+            else:
+                writer_raw.release()
+                writer_hud.release()
+                recording = False
+                _dbg(f"recording saved → {rec_dir}")
         elif key == ord("f"):
             # Follow confirmed target if it's visible; otherwise follow proposed candidate
             target = confirmed_obj or candidate
@@ -234,8 +291,15 @@ def main() -> None:
             gallery.clear()
             print("[perception] Target unconfirmed")
         elif key == ord("r"):
-            tracker.release()
+            released_id = tracker.release()
+            if released_id is not None:
+                gallery.release_confirm(released_id)
             print("[perception] Released")
+
+    if recording:
+        writer_raw.release()
+        writer_hud.release()
+        _dbg(f"recording saved → {rec_dir}")
 
     cap.release()
     cv2.destroyAllWindows()

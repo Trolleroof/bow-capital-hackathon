@@ -1,0 +1,33 @@
+{
+  "env_id": "search-and-interdict",
+  "ew": {
+    "gps_denial_level": 0.7,
+    "jam_duty_cycle": 0.4,
+    "spoofing_enabled": false
+  },
+  "logistics": {
+    "attrition_inject_rate": 0.02,
+    "battery_envelope_sec": 360,
+    "swarm_size": 5
+  },
+  "roe": {
+    "civilian_density": 0.0,
+    "engagement_authority": "weapons-tight",
+    "min_standoff_m": 0.0,
+    "time_limit_sec": 360
+  },
+  "terrain": {
+    "elev_roughness": 0.0,
+    "urban_density": 0.0
+  },
+  "threat": {
+    "hostile_uas_count": 1,
+    "moving_target_speed": 0.7
+  },
+  "weather": {
+    "temperature_c": 15,
+    "visibility": 0.6,
+    "wind_dir_rad": 0.7853981633974483,
+    "wind_speed": 4.0
+  }
+}

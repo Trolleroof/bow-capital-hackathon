@@ -1,0 +1,109 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# System config
+#--------------------------------------------------------------------------------------------
+
+# When the variables are commented, the system doesn't load a previous session or not store the current one
+#System.LoadAtlasFromFile: "Session_OAK_D_StereoInertial_Rect"
+#System.SaveAtlasToFile: "Session_OAK_D_StereoInertial_Rect"
+
+#--------------------------------------------------------------------------------------------
+# Camera Parameters - RECTIFIED images from OAK-D
+#--------------------------------------------------------------------------------------------
+File.version: "1.0"
+
+# Rectified images use PinHole model with zero distortion.
+# Intrinsics below are from the left camera (cam1) KB8 calibration.
+# VERIFY these against /oak/left/camera_info and /oak/right/camera_info
+# (use the P matrix: P[0][0]=fx, P[1][1]=fy, P[0][2]=cx, P[1][2]=cy)
+Camera.type: "PinHole"
+
+# LEFT camera rectified intrinsics (cam1 - /oak/left/image_rect)
+Camera1.fx: 563.6621885722552
+Camera1.fy: 563.5066638138833
+Camera1.cx: 639.1519459418613
+Camera1.cy: 350.6553083037192
+
+# Zero distortion - images are rectified
+Camera1.k1: 0.0
+Camera1.k2: 0.0
+Camera1.p1: 0.0
+Camera1.p2: 0.0
+
+# RIGHT camera rectified intrinsics (cam0 - /oak/right/image_rect)
+# After rectification both cameras share the same fx/fy; right cx may differ slightly.
+# Verify from /oak/right/camera_info P matrix.
+Camera2.fx: 563.6621885722552
+Camera2.fy: 563.5066638138833
+Camera2.cx: 639.1519459418613
+Camera2.cy: 350.6553083037192
+
+# Zero distortion - images are rectified
+Camera2.k1: 0.0
+Camera2.k2: 0.0
+Camera2.p1: 0.0
+Camera2.p2: 0.0
+
+Camera.width: 1280
+Camera.height: 720
+
+# Camera frames per second
+Camera.fps: 30
+
+# Color order of the images (0: BGR, 1: RGB. It is ignored if images are grayscale)
+Camera.RGB: 0
+
+# Stereo extrinsic: after rectification, rotation is identity and translation is pure horizontal baseline
+# Baseline derived from Kalibr calibration: tx = 0.07439 m
+Stereo.ThDepth: 40.0
+Stereo.T_c1_c2: !!opencv-matrix
+  rows: 4
+  cols: 4
+  dt: f
+  data: [1.0, 0.0, 0.0, 0.07473167414815804,
+         0.0, 1.0, 0.0, 0.0,
+         0.0, 0.0, 1.0, 0.0,
+         0.0, 0.0, 0.0, 1.0]
+
+# Transformation from body (IMU) to left camera (cam1)
+# Same as non-rectified — rectification does not change the IMU-camera extrinsic
+IMU.T_b_c1: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [0.006042494479771672, -0.9999790357718304, 0.0023272896903087465, 0.08057456197901,
+          -0.9999750585401322, -0.006033927492419937, 0.003670697028586549, 0.019528555277309713,
+          -0.0036565773780113204, -0.0023494118108384828, -0.9999905548084054, -0.00924120370987462,
+          0.0, 0.0, 0.0, 1.0]
+
+# IMU noise parameters (BNO085/BNO086 on OAK-D)
+IMU.NoiseGyro: 0.0004016452006548877   # rad/s/sqrt(Hz)
+IMU.NoiseAcc: 0.0018385116734875265    # m/s^2/sqrt(Hz)
+IMU.GyroWalk: 0.000007406689200811322  # rad/s^2/sqrt(Hz)
+IMU.AccWalk: 0.0007030801990783892     # m/s^3/sqrt(Hz)
+IMU.Frequency: 400.0
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500.0

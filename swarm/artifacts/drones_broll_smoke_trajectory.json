@@ -1,0 +1,106 @@
+{
+  "source": "kinematic-fallback-broll",
+  "fps": 5,
+  "frames": [
+    {
+      "t": 0.0,
+      "agents": [
+        {
+          "id": 0,
+          "x": 2.8,
+          "y": 0.0,
+          "z": 1.25,
+          "yaw": 0.0,
+          "role": "scout",
+          "alive": true
+        },
+        {
+          "id": 1,
+          "x": 0.938,
+          "y": 2.887,
+          "z": 1.554,
+          "yaw": 1.257,
+          "role": "scout",
+          "alive": true
+        },
+        {
+          "id": 2,
+          "x": -2.471,
+          "y": 1.795,
+          "z": 1.438,
+          "yaw": 2.513,
+          "role": "scout",
+          "alive": true
+        },
+        {
+          "id": 3,
+          "x": -2.297,
+          "y": -1.669,
+          "z": 1.062,
+          "yaw": -2.513,
+          "role": "scout",
+          "alive": true
+        },
+        {
+          "id": 4,
+          "x": 0.8,
+          "y": -2.461,
+          "z": 0.946,
+          "yaw": -1.257,
+          "role": "scout",
+          "alive": true
+        }
+      ]
+    },
+    {
+      "t": 0.2,
+      "agents": [
+        {
+          "id": 0,
+          "x": 2.819,
+          "y": 0.181,
+          "z": 1.304,
+          "yaw": 0.064,
+          "role": "scout",
+          "alive": true
+        },
+        {
+          "id": 1,
+          "x": 0.755,
+          "y": 2.953,
+          "z": 1.567,
+          "yaw": 1.321,
+          "role": "scout",
+          "alive": true
+        },
+        {
+          "id": 2,
+          "x": -2.571,
+          "y": 1.628,
+          "z": 1.392,
+          "yaw": 2.577,
+          "role": "scout",
+          "alive": true
+        },
+        {
+          "id": 3,
+          "x": -2.166,
+          "y": -1.797,
+          "z": 1.021,
+          "yaw": -2.449,
+          "role": "scout",
+          "alive": true
+        },
+        {
+          "id": 4,
+          "x": 0.95,
+          "y": -2.391,
+          "z": 0.967,
+          "yaw": -1.193,
+          "role": "scout",
+          "alive": true
+        }
+      ]
+    }
+  ]
+}

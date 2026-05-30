@@ -1,0 +1,26 @@
+[project]
+name = "combatos-swarm"
+version = "0.1.0"
+description = "Decentralized multi-agent RL (MAPPO/CTDE) for the CombatOS swarm vertical"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.4",
+    "numpy>=1.26",
+    "gymnasium>=0.29",
+    "pettingzoo>=1.24",
+    "onnx>=1.16",
+    "onnxruntime>=1.18",
+    "tensorboard>=2.16",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+# stretch: B-roll capture tooling only. If PyBullet/gym-pybullet-drones is
+# installed in a compatible local env, drones_broll.py will use it automatically.
+drones = [
+    "imageio>=2.34",
+    "imageio-ffmpeg>=0.5",
+]
+
+[tool.uv]
+package = false

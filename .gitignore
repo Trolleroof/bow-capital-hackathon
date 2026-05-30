@@ -1,5 +1,7 @@
 .clean-agent/
 .clean-worktrees/
+
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -8,7 +10,69 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.env
 .venv/
 venv/
+.env
+.env.*
+!.env.example
+.python-version
+
+# ── uv.lock is intentionally committed for reproducible installs ──────────────
+
+# ── ML training artifacts ─────────────────────────────────────────────────────
+*.pt
+*.pth
+checkpoints/
+runs/
+wandb/
+lightning_logs/
+
+# ── TensorRT / Jetson edge compilation ────────────────────────────────────────
+*.engine
+*.trt
+*.plan
+*.cache
+
+# ── 3DGS / recon outputs (large generated files, not source) ─────────────────
+recon/assets/
+
+# ── Nav runtime outputs ───────────────────────────────────────────────────────
+nav/poses.jsonl
+nav/poses/
+
+# ── Dataset files (EuRoC, etc.) ───────────────────────────────────────────────
+datasets/
+data/
+*.bag
+
+# ── Generated video / large binary media ─────────────────────────────────────
+*.mp4
+*.avi
+*.mov
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+*.log.*
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Frontend build output ─────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.vite/
 node_modules/
+
+# ── Design handoff zips (large binary, committed src is the canonical form) ───
+*.zip
+
+# ── Editor / OS ───────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+Thumbs.db

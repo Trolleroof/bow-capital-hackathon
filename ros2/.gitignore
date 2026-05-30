@@ -1,0 +1,7 @@
+*build/
+*log/
+*install/
+CMakeFiles/
+src/ros2_orb_slam3/TEST_DATASET/
+/__pycache__/
+ros2/src/launch/__pycache__/

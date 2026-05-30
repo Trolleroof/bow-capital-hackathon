@@ -141,7 +141,7 @@ target with an operator-confirm gate**. Runs on the Jetson.
 
 ---
 
-### ⓷ Surveillance Lead — 3D Gaussian Splat Reconstruction  🟢 *dream feature*
+### ⓷ Surveillance Lead — 3D Gaussian Splat Reconstruction  🔴 *dream feature*
 
 **Scope (yours alone):** Reconstruct the battlefield in 3D from the drone footage and
 let judges fly through it — with ⓵'s trajectory overlaid inside the scene.
@@ -198,12 +198,101 @@ work in parallel.
 // topic: "swarm"  (from ⓸, ~10 Hz)
 { "t": 1234.56, "comms": "denied", "agents": [ { "id":0, "x":1.2,"y":-0.4, "role":"scout" } ] }
 
+// topic: "train"  (from ⓸ trainer or mock publisher, ~1-2 Hz)
+{ "topic": "train", "env_id": "search-and-interdict", "profile": "combat",
+  "phase": "update", "step": 6400, "reward_mean": 37.42, "coverage": 0.781,
+  "losses": { "pg_loss": 0.041, "v_loss": 0.218, "entropy": 0.067, "approx_kl": 0.012 },
+  "params_hash": "c19d6d4a9f10" }
+
 // topic: "status"  (system, hero banner)
 { "gps":"DENIED", "link":"NONE", "localized": true, "modules": { "nav":"up","perception":"up","recon":"ready","swarm":"up" } }
 ```
 
 **Interface decisions to make in the first hour:** coordinate frame & units for pose,
 bbox convention (xywh vs xyxy), how VSLAM poses are exported to 3DGS, dataset/clip everyone tests on.
+
+---
+
+## 5a. Orchestrator — CombatOS integration spine
+
+> **Owner: ⓸** · Built Phase 0 (stubs) → Phase 2 (real modules) · Single entry point: `python orchestrator.py`
+
+The orchestrator is the single process that boots all four verticals, runs the WebSocket pub/sub bus, aggregates system state into the `status` topic, and triggers fallbacks when a module fails. It is what makes four repo folders look like one OS.
+
+### Directory layout
+
+```
+combatos/
+├── orchestrator.py           # entry point — boots everything, runs event loop
+├── bus/
+│   ├── ws_server.py         # FastAPI WebSocket broker (pub/sub by topic)
+│   ├── router.py            # topic → subscriber list; cross-module relay rules
+│   └── schema.py            # Pydantic models enforcing the §5 message contract
+├── modules/
+│   ├── base.py              # AbstractModule: start / stop / health_check / on_message
+│   ├── nav_module.py        # spawns nav/ process; relays pose → recon (COLMAP-skip)
+│   ├── perception_module.py # spawns perception/ process; relays detections
+│   ├── recon_module.py      # offline — polls Colab asset, emits recon status
+│   └── swarm_module.py      # spawns swarm/ process; relays swarm msgs
+├── state/
+│   ├── system_state.py      # GPS / LINK / LOCALIZED flags; module health map
+│   └── fallback.py          # fallback ladder logic per §7
+└── config.py                # ports, topic names, heartbeat interval, thresholds
+```
+
+### Core responsibilities
+
+| Responsibility | Mechanism |
+|---|---|
+| **Module lifecycle** | `asyncio.create_subprocess_exec` per module; restart on crash up to N retries |
+| **WebSocket bus** | FastAPI + uvicorn; React dashboard and modules subscribe by topic name |
+| **Status aggregation** | Polls module heartbeats → writes `status` topic at 1 Hz → drives hero banner |
+| **Pose relay to recon** | `nav_module` echoes every `pose` msg to `recon_module` internally — VSLAM→3DGS handoff wired here, not ad-hoc |
+| **Fallback triggering** | 3 missed heartbeats → mark module degraded, emit updated `status`; never crash the bus |
+
+### System state machine
+
+```
+BOOT → INITIALIZING → LOCALIZING → OPERATIONAL
+                                   ↓ (module heartbeat loss)
+                                DEGRADED → OPERATIONAL (on recovery)
+```
+
+`system_state.py` owns transitions. Every module emits an internal heartbeat every ~2 s. Missing 3 consecutive beats flips that module to `"down"` in the `status` topic — the dashboard banner updates automatically.
+
+### Module base interface (`base.py`)
+
+```python
+class AbstractModule:
+    async def start(self) -> None: ...   # spawn subprocess or connect
+    async def stop(self) -> None: ...    # graceful shutdown
+    async def health_check(self) -> bool: ...   # liveness probe
+    async def on_message(self, topic: str, payload: dict) -> None: ...  # inbound relay
+```
+
+Each concrete module implements this; the orchestrator event loop calls them uniformly regardless of where the module physically runs (Jetson, Mac, Colab).
+
+### Stack
+
+- **Python 3.11+**, `asyncio` throughout — no threads
+- **FastAPI** + `uvicorn` for the WebSocket server
+- **Pydantic v2** for schema validation at the bus boundary (malformed messages → logged warning, not crash)
+- **`websockets`** for the React client connection
+
+### Build order (ties to timeline)
+
+| Phase | Orchestrator milestone |
+|-------|----------------------|
+| **0** | `ws_server` + `schema.py` + stub modules emitting mock data → dashboard develops against real bus immediately |
+| **1** | Swap stubs for real subprocess modules one at a time as verticals come online |
+| **2** | Wire nav→recon pose relay; enable `status` aggregation from live heartbeats |
+| **3** | Fallback logic + graceful degradation; record stable demo run |
+
+### Why this matters for the demo
+
+- The `GPS: DENIED · LINK: NONE` hero banner is driven by `system_state.py` — it reflects actual module liveness, not a hardcoded string.
+- If YOLO moves to laptop (§7 fallback), only `perception_module.py` changes — bus contract and dashboard are untouched.
+- `python orchestrator.py` is the single command judges see start the whole OS.
 
 ---
 

@@ -21,9 +21,12 @@ OBSERVATION (per agent, LOCAL ONLY — fixed-length float32 vector)
 Layout, in order (all positions/velocities normalized to roughly [-1, 1]):
 
   [ 0: 2 ]   own position (x, y)            normalized to [-1, 1] over the world
+             With BattlefieldConfig: GPS denial adds Gaussian noise σ = gps_denial_level×0.2
   [ 2: 4 ]   own velocity (vx, vy)          last applied action, in [-1, 1]
   [ 4: 4+2K] K nearest-neighbor relative positions (dx, dy) each, normalized;
-             zero-filled when fewer than K live neighbors exist
+             zero-filled when fewer than K live neighbors exist.
+             With BattlefieldConfig: each slot independently zeroed with probability
+             jam_duty_cycle (EW jamming — CTDE-safe: actor already handles zero-filled slots)
   [ .. .. ]  local coverage patch: a (PATCH x PATCH) grid centered on the agent,
              flattened row-major. Each cell is 1.0 if that world cell is already
              covered (or out of bounds), else 0.0. Encourages moving toward
@@ -45,6 +48,8 @@ ACTION (per agent)
 ================================================================================
 Continuous 2D velocity command in [-1, 1]^2, integrated as point-mass kinematics:
     pos += action * MAX_SPEED * dt   (then clipped to world bounds)
+With BattlefieldConfig: wind drift added each step before clip:
+    pos += wind_vector * dt          (always applied to live agents)
 z is held constant. ACT_DIM = 2.
 
 ================================================================================
@@ -61,11 +66,33 @@ ALIVE / KILL
 Each agent has an `alive` flag. `kill(agent_id)` freezes the agent (it stops
 moving, stops covering cells, and is excluded from neighbor sets) — this drives
 the "kill an agent, swarm re-covers the gap with zero comms" money demo.
+With BattlefieldConfig: `attrition_inject_rate` triggers random kills each step.
+
+================================================================================
+BATTLEFIELD PARAMETERS (see swarm/env_config.py and docs/battlefield-parameters.md)
+================================================================================
+Pass a BattlefieldConfig to SwarmEnv to activate P0 parameters:
+  - wind_speed / wind_dir_rad : drift added to position integration
+  - gps_denial_level          : Gaussian noise on obs[0:2] (own position)
+  - jam_duty_cycle            : per-slot neighbor dropout in obs[4:4+2K]
+  - attrition_inject_rate     : per-step probability of a random agent kill
+  - battery_envelope_sec /
+    time_limit_sec            : sets max_steps (via BattlefieldConfig.max_steps)
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
+from dataclasses import asdict
+
 import numpy as np
+
+try:
+    from .env_config import BattlefieldConfig
+except ImportError:  # when run as __main__ directly (python env.py)
+    from env_config import BattlefieldConfig  # type: ignore[no-redef]
 
 # ------------------------------------------------------------------ defaults ---
 N_AGENTS = 5
@@ -112,7 +139,19 @@ class SwarmEnv:
         world_half: float = WORLD_HALF,
         max_steps: int = 400,
         seed: int | None = None,
+        battlefield: BattlefieldConfig | None = None,
     ) -> None:
+        # ------------------------------------------------------------------
+        # Battlefield config — P0 parameters (wind, EW, attrition, limits).
+        # When provided, BattlefieldConfig.max_steps and n_agents take precedence
+        # over the positional arguments so callers using make_scenario_env get
+        # consistent behaviour.
+        # ------------------------------------------------------------------
+        self.battlefield: BattlefieldConfig | None = battlefield
+        if battlefield is not None:
+            n_agents = battlefield.n_agents
+            max_steps = battlefield.max_steps
+
         self.n = n_agents
         self.k = k_neighbors
         self.patch = patch
@@ -123,6 +162,15 @@ class SwarmEnv:
         self.act_dim = ACT_DIM
         self.cell = (2.0 * world_half) / grid  # world units per grid cell
         self.rng = np.random.default_rng(seed)
+
+        # Pre-compute wind drift vector (world-units per second) from config.
+        # Applied as:  pos += _wind * DT  each step for live agents.
+        self._wind = np.zeros(2, dtype=np.float32)
+        if battlefield is not None:
+            ws = battlefield.weather.wind_speed
+            wd = battlefield.weather.wind_dir_rad
+            self._wind[0] = ws * math.cos(wd)
+            self._wind[1] = ws * math.sin(wd)
 
         # state (filled by reset)
         self.pos = np.zeros((self.n, 2), dtype=np.float32)
@@ -176,10 +224,27 @@ class SwarmEnv:
         actions = np.asarray(actions, dtype=np.float32).reshape(self.n, 2)
         actions = np.clip(actions, -1.0, 1.0)
 
+        # ── Battlefield: random attrition (P0) ───────────────────────────
+        if (
+            self.battlefield is not None
+            and self.battlefield.logistics.attrition_inject_rate > 0.0
+        ):
+            rate = self.battlefield.logistics.attrition_inject_rate
+            live_ids = np.where(self.alive)[0]
+            for aid in live_ids:
+                if self.rng.random() < rate:
+                    self.kill(aid)
+
         live = self.alive
         self.vel = actions  # record applied command (used in obs)
         # only live agents move
         self.pos[live] += actions[live] * MAX_SPEED * DT
+
+        # ── Battlefield: wind drift (P0) ─────────────────────────────────
+        # Applied after agent command so policy must compensate up-wind.
+        if self.battlefield is not None and np.any(self._wind != 0):
+            self.pos[live] += self._wind * DT
+
         bound = self.world_half
         at_edge = (np.abs(self.pos) >= bound - 1e-6)
         self.pos = np.clip(self.pos, -bound, bound)
@@ -207,11 +272,14 @@ class SwarmEnv:
             np.float32
         )
         dones = np.full(self.n, done, dtype=bool)
-        info = {
+        info: dict = {
             "new_cells": new_cells,
             "coverage": self.coverage_fraction(),
             "n_alive": int(self.alive.sum()),
         }
+        # Log params hash so training checkpoints are traceable (issue #15).
+        if self.battlefield is not None:
+            info["params_hash"] = self.battlefield_hash()
         return self._obs(), rewards, dones, info
 
     # ----------------------------------------------------------- observations ---
@@ -221,20 +289,40 @@ class SwarmEnv:
         half = self.world_half
         norm_pos = self.pos / half  # ~[-1, 1]
 
+        # ── Battlefield: EW parameter shortcuts ─────────────────────────
+        gps_noise_sigma = (
+            self.battlefield.ew.gps_denial_level * 0.2
+            if self.battlefield is not None else 0.0
+        )
+        jam_duty_cycle = (
+            self.battlefield.ew.jam_duty_cycle
+            if self.battlefield is not None else 0.0
+        )
+
         for i in range(self.n):
             o = 0
-            out[i, o:o + 2] = norm_pos[i]; o += 2          # own position
+
+            # [0:2] own position (normalized) + GPS denial noise (P0)
+            pos_obs = norm_pos[i].copy()
+            if gps_noise_sigma > 0.0:
+                pos_obs += self.rng.standard_normal(2).astype(np.float32) * gps_noise_sigma
+            out[i, o:o + 2] = pos_obs; o += 2
+
             out[i, o:o + 2] = self.vel[i]; o += 2          # own velocity (cmd)
 
-            # K nearest LIVE neighbors (relative position), zero-filled
+            # K nearest LIVE neighbors (relative position), zero-filled.
+            # Jamming (P0): each neighbor slot zeroed independently with prob jam_duty_cycle.
             others = [j for j in range(self.n) if j != i and self.alive[j]]
             if others:
                 rel = self.pos[others] - self.pos[i]
                 dist = np.linalg.norm(rel, axis=1)
                 order = np.argsort(dist)[: self.k]
                 for n_idx in order:
-                    out[i, o:o + 2] = rel[n_idx] / half
-                    o += 2
+                    if jam_duty_cycle > 0.0 and self.rng.random() < jam_duty_cycle:
+                        o += 2  # slot zeroed (already 0 from np.zeros init)
+                    else:
+                        out[i, o:o + 2] = rel[n_idx] / half
+                        o += 2
                 o = 4 + 2 * self.k  # advance past any unfilled neighbor slots
             else:
                 o = 4 + 2 * self.k
@@ -264,19 +352,45 @@ class SwarmEnv:
 
         Concatenates all agents' positions, velocities, alive flags, plus the
         flattened global coverage grid. NOT used by the decentralized actor.
+
+        With BattlefieldConfig: appends 4 normalized P0 scalars at the end
+        [wind_speed/15, jam_duty_cycle, gps_denial_level, attrition_inject_rate/0.5]
+        so the centralized critic can condition on environment stress during training.
+        These are NEVER in the actor's local obs (CTDE-safe).
         """
-        return np.concatenate(
-            [
-                (self.pos / self.world_half).reshape(-1),
-                self.vel.reshape(-1),
-                self.alive.astype(np.float32),
-                self.covered.astype(np.float32).reshape(-1),
-            ]
-        ).astype(np.float32)
+        parts = [
+            (self.pos / self.world_half).reshape(-1),
+            self.vel.reshape(-1),
+            self.alive.astype(np.float32),
+            self.covered.astype(np.float32).reshape(-1),
+        ]
+        if self.battlefield is not None:
+            bf = self.battlefield
+            parts.append(np.array([
+                bf.weather.wind_speed / 15.0,
+                bf.ew.jam_duty_cycle,
+                bf.ew.gps_denial_level,
+                bf.logistics.attrition_inject_rate / 0.5,
+            ], dtype=np.float32))
+        return np.concatenate(parts).astype(np.float32)
 
     @property
     def state_dim(self) -> int:
-        return self.n * 2 + self.n * 2 + self.n + self.grid * self.grid
+        base = self.n * 2 + self.n * 2 + self.n + self.grid * self.grid
+        if self.battlefield is not None:
+            base += 4  # 4 normalized P0 scalars appended to global state
+        return base
+
+    def battlefield_hash(self) -> str:
+        """SHA-256 of the battlefield config JSON, first 12 hex chars.
+
+        Logged alongside checkpoints so a training run is always traceable to
+        its parameter set (issue #15 acceptance criterion).
+        """
+        if self.battlefield is None:
+            return "garrison"
+        raw = json.dumps(asdict(self.battlefield), sort_keys=True)
+        return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
     # ----------------------------------------------------------------- extras ---
     def coverage_fraction(self) -> float:

@@ -204,6 +204,26 @@ Frontend mapping:
 
 ---
 
+## 6b. Battlefield parameter obs/reward delta (issues #13–#15)
+
+P0 parameters from `swarm/env_config.py` change the env as follows.
+See `docs/battlefield-parameters.md` for the full catalog and priority tiers.
+
+| P0 Parameter | Obs delta | Reward delta | Dynamics delta |
+|---|---|---|---|
+| `wind_speed` + `wind_dir_rad` | None (position obs reflects real position after drift) | Coverage rate drops as wind pushes agents off target cells; bounds penalty increases at high speed | Live agents drift `wind_vector × DT` every step after their command is applied |
+| `gps_denial_level` | `obs[0:2]` (own pos) receives Gaussian noise σ = level×0.2 | None directly | None |
+| `jam_duty_cycle` | Each of the K neighbor slots in `obs[4:10]` is independently zeroed with probability `jam_duty_cycle` | None directly; indirectly increases crowding because agents fly without neighbor awareness | None |
+| `attrition_inject_rate` | Dead agents leave neighbor sets (zero-filled slots) | Team loses coverage contributors; dead agents receive 0 reward | `kill()` called probabilistically; agent freezes |
+| `battery_envelope_sec` / `time_limit_sec` | None | Shorter horizon increases urgency | Episode truncates at `min(battery_envelope_sec, time_limit_sec)` |
+
+**CTDE constraint:** all P0 obs deltas affect only per-agent local observations.
+The centralized critic additionally sees 4 normalized P0 scalars appended to
+`global_state()`: `[wind_speed/15, jam_duty_cycle, gps_denial_level, attrition_rate/0.5]`.
+These are **never** in the actor input — pure CTDE.
+
+---
+
 ## 7. Risks & fallbacks
 
 | Risk | Fallback |

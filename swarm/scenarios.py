@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .env import SwarmEnv
+from .env_config import BattlefieldConfig, get_scenario_defaults
 
 
 @dataclass(frozen=True)
@@ -86,8 +87,27 @@ def get_scenario(scenario_id: str) -> ScenarioDefinition:
         raise KeyError(f"unknown scenario '{scenario_id}'. known scenarios: {known}") from exc
 
 
-def make_scenario_env(scenario_id: str, **overrides: int | float) -> SwarmEnv:
-    """Instantiate the shared point-mass env using the scenario's preset knobs."""
+def make_scenario_env(
+    scenario_id: str,
+    battlefield: BattlefieldConfig | None = None,
+    **overrides: int | float,
+) -> SwarmEnv:
+    """Instantiate the shared point-mass env using the scenario's preset knobs.
+
+    Args:
+        scenario_id:  Key into the SCENARIOS registry.
+        battlefield:  Optional BattlefieldConfig.  If None, the scenario's
+                      combat-stress defaults from env_config.py are used.
+                      Pass `BattlefieldConfig()` (garrison defaults) to run
+                      without any P0 parameter effects.
+        **overrides:  Any SwarmEnv keyword args that further override the
+                      scenario's env_kwargs (n_agents, grid, max_steps …).
+                      Note: when a BattlefieldConfig is passed, n_agents and
+                      max_steps are derived from the config; **overrides still
+                      take precedence via the SwarmEnv constructor.
+    """
     scenario = get_scenario(scenario_id)
+    if battlefield is None:
+        battlefield = get_scenario_defaults(scenario_id)
     env_kwargs = {**scenario.env_kwargs, **overrides}
-    return SwarmEnv(**env_kwargs)
+    return SwarmEnv(**env_kwargs, battlefield=battlefield)

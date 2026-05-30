@@ -47,7 +47,7 @@ function App() {
   )
 
   return (
-    <main className={`app-shell ${view === 'sim' ? 'app-shell--sim' : ''}`}>
+    <main className={`app-shell ${view === 'sim' ? 'app-shell--sim' : 'app-shell--gym'}`}>
       <div className="app-backdrop" />
 
       {view === 'sim' ? (
@@ -56,7 +56,7 @@ function App() {
           <CompositeScenePanel missionName="Land Coverage Survey" />
         </section>
       ) : (
-        <>
+        <div className="gym-viewport">
           <header className="app-header app-header--minimal">
             {nav}
           </header>
@@ -94,7 +94,7 @@ function App() {
               <GymScenarioStage key={gymEnvironment.id} scenario={gymEnvironment} />
             </section>
           </section>
-        </>
+        </div>
       )}
     </main>
   )

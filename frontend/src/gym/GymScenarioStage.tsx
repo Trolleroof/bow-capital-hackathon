@@ -348,11 +348,6 @@ export default function GymScenarioStage({ scenario }: { scenario: ScenarioCard 
           </g>
         ))}
       </svg>
-
-      <div className="gym-scene__legend">
-        <span>Operator intent: {scenario.intent}</span>
-        <span>Training hook: {scenario.trainingHook}</span>
-      </div>
     </div>
   )
 }

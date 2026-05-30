@@ -1,9 +1,8 @@
 /**
  * policy.ts — onnxruntime-web wrapper for the trained MAPPO actor.
  *
- * Loads frontend/public/policy.onnx and runs it client-side (WASM execution
- * provider) so the swarm's neural net inference happens entirely in the
- * browser — no Python, works offline.
+ * Loads swarm/checkpoints/<envId>/policy.onnx and runs inference client-side
+ * (WASM execution provider) — no Python, works offline.
  *
  * ONNX contract (from swarm/export_onnx.py):
  *   input  "obs"     float32  (N, 36)   dynamic axis 0 = batch
@@ -17,6 +16,36 @@ export interface Policy {
   act(obs: Float32Array, n: number): Promise<Float32Array>
   /** Which ORT execution provider actually loaded (for the HUD). */
   readonly provider: string
+}
+
+/** Lifecycle state of a trained checkpoint for a given environment. */
+export type PolicyStatus = 'not-trained' | 'training' | 'ready'
+
+/**
+ * Module-level active env ID.  Set this before Mission Sim mounts so that
+ * CompositeScenePanel's zero-arg `loadPolicy()` call resolves to the correct
+ * per-environment checkpoint without requiring a prop change.
+ */
+let _activeEnvId: string | null = null
+
+/** Call from App before rendering Mission Sim to bind the checkpoint path. */
+export function setActiveEnvId(envId: string | null): void {
+  _activeEnvId = envId
+}
+
+/**
+ * Probe whether a trained checkpoint exists for `envId`.
+ * Uses HEAD so it doesn't download the (potentially large) ONNX blob.
+ */
+export async function checkPolicyExists(envId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/swarm/checkpoints/${envId}/policy.onnx`, {
+      method: 'HEAD',
+    })
+    return res.ok
+  } catch {
+    return false
+  }
 }
 
 let wasmConfigured = false
@@ -45,11 +74,24 @@ function configureWasm() {
   }
 }
 
-/** Load the policy and return an `act()` runner. */
-export async function loadPolicy(url = '/policy.onnx'): Promise<Policy> {
+/**
+ * Load the policy and return an `act()` runner.
+ *
+ * URL resolution order:
+ *  1. Explicit `url` argument (legacy / test override)
+ *  2. `/swarm/checkpoints/<_activeEnvId>/policy.onnx` when an env is active
+ *  3. `/policy.onnx` (legacy fallback)
+ */
+export async function loadPolicy(url?: string): Promise<Policy> {
+  const resolvedUrl =
+    url ??
+    (_activeEnvId
+      ? `/swarm/checkpoints/${_activeEnvId}/policy.onnx`
+      : '/policy.onnx')
+
   configureWasm()
 
-  const session = await ort.InferenceSession.create(url, {
+  const session = await ort.InferenceSession.create(resolvedUrl, {
     executionProviders: ['wasm'],
     graphOptimizationLevel: 'all',
   })

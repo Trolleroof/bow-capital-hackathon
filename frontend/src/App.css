@@ -984,3 +984,496 @@
     transition: none;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Training bar — sits between .panel-head and .gym-scene (#25, #16)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.gym-training-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Garrison / Combat preset toggle */
+.gym-preset-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.gym-preset-toggle button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: 600 0.74rem/1 'Fira Code', monospace;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background-color 140ms, color 140ms;
+}
+
+.gym-preset-toggle button:hover {
+  background: rgba(113, 215, 255, 0.08);
+  color: var(--text);
+}
+
+.gym-preset-toggle button.is-active {
+  background: rgba(113, 215, 255, 0.15);
+  color: var(--accent);
+}
+
+.gym-preset-toggle button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* Params expand toggle */
+.gym-params-toggle {
+  position: relative;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 0.74rem/1 'Fira Code', monospace;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: border-color 140ms, background-color 140ms, color 140ms;
+}
+
+.gym-params-toggle:hover,
+.gym-params-toggle.is-active {
+  border-color: rgba(113, 215, 255, 0.4);
+  background: rgba(113, 215, 255, 0.1);
+  color: var(--accent);
+}
+
+.gym-params-toggle:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.gym-params-error-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  width: 17px;
+  height: 17px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: rgba(255, 107, 107, 0.85);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+/* Train Policy / Stop Training CTA */
+.gym-train-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 15px;
+  border: 1px solid rgba(113, 215, 255, 0.44);
+  border-radius: 999px;
+  background: rgba(113, 215, 255, 0.12);
+  color: var(--accent);
+  font: 700 0.78rem/1 'Fira Code', monospace;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background-color 140ms, border-color 140ms, transform 140ms;
+}
+
+.gym-train-btn:hover:not(:disabled) {
+  background: rgba(113, 215, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.gym-train-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.gym-train-btn--stop {
+  border-color: rgba(255, 107, 107, 0.44);
+  background: rgba(255, 107, 107, 0.12);
+  color: #ffd5d5;
+}
+
+.gym-train-btn--stop:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.24);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Params panel — collapsible P0 knobs grid (#25)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.gym-params-panel {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(0, 0, 0, 0.14);
+  border-bottom: 1px solid var(--line);
+}
+
+.gym-knob {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.gym-knob label {
+  color: var(--muted);
+  font: 600 0.68rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.gym-knob-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gym-knob input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  height: 3px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.gym-knob-value {
+  min-width: 42px;
+  text-align: right;
+  color: var(--text);
+  font: 600 0.76rem/1 'Fira Code', monospace;
+}
+
+.gym-params-errors {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.gym-params-error {
+  margin: 0;
+  color: #ffc8c8;
+  font: 600 0.72rem/1.4 'Fira Code', monospace;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Training stats overlay — bottom strip inside .gym-scene (#17)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.gym-stats-overlay {
+  position: absolute;
+  bottom: 13px;
+  left: 13px;
+  right: 13px;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  pointer-events: none;
+}
+
+.gym-stat-chip {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border: 1px solid rgba(120, 154, 180, 0.2);
+  border-radius: 12px;
+  background: rgba(4, 10, 16, 0.86);
+  backdrop-filter: blur(10px);
+}
+
+.gym-stat-chip--pulse {
+  border-color: rgba(110, 240, 163, 0.34);
+}
+
+.gym-stat-chip__label {
+  color: var(--muted);
+  font: 600 0.66rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.gym-stat-chip__value {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  color: var(--text);
+  font: 700 0.88rem/1 'Fira Sans', sans-serif;
+}
+
+.gym-stat-chip__value--accent {
+  color: var(--accent);
+}
+
+.gym-stat-chip__value--stopped {
+  color: var(--muted);
+  opacity: 0.72;
+}
+
+/* Pulsing green dot shown while training */
+.gym-training-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6ef0a3;
+  box-shadow: 0 0 7px rgba(110, 240, 163, 0.85);
+  animation: gym-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes gym-dot-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);    }
+  50%       { opacity: 0.4; transform: scale(0.72); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gym-training-dot {
+    animation: none;
+  }
+}
+
+/* ── responsive tweaks for training bar ──────────────────────────────────── */
+
+@media (max-height: 820px) {
+  .gym-training-bar {
+    padding: 6px 12px;
+  }
+
+  .gym-params-panel {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .gym-stat-chip {
+    padding: 5px 8px;
+  }
+
+  .gym-stat-chip__value {
+    font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 720px) {
+  .gym-training-bar {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+  }
+
+  .gym-train-btn {
+    margin-left: 0;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .gym-params-panel {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    padding: 8px 12px;
+  }
+
+  .gym-stats-overlay {
+    bottom: 10px;
+    left: 10px;
+    right: 10px;
+    gap: 5px;
+  }
+}
+
+/* ── #19 — Disabled Mission Sim tab ──────────────────────────────────────── */
+
+.top-nav button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.top-nav button:disabled:hover,
+.top-nav button:disabled:focus-visible {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  transform: none;
+}
+
+/* ── #18 — Fullscreen gym env layout ─────────────────────────────────────── */
+
+.app-shell--gym-full {
+  padding: 0;
+}
+
+.gym-scene-full {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100svh;
+}
+
+/* Slim chrome bar — back button + env label + nav */
+.gym-scene-full-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  flex-shrink: 0;
+  z-index: 20;
+  background: rgba(5, 11, 17, 0.72);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+
+.gym-scene-full-right {
+  margin-left: auto;
+}
+
+.gym-scene-full-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gym-scene-full-name {
+  font: 700 1rem/1 'Sora', 'Fira Sans', sans-serif;
+  letter-spacing: -0.03em;
+}
+
+.gym-scene-full-meta em {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font: 700 0.75rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-style: normal;
+}
+
+/* Scene fills remaining height */
+.gym-scene-full .gym-scene {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  border-radius: 0;
+  border: none;
+}
+
+/* Back-to-registry button */
+.gym-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font: 600 0.84rem/1 'Fira Sans', sans-serif;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+.gym-back-btn:hover,
+.gym-back-btn:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.gym-back-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* ── #23 — Mission Sim policy badge ─────────────────────────────────────── */
+
+.sim-policy-badge {
+  position: absolute;
+  bottom: 70px; /* above scene-actions strip */
+  right: 16px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid rgba(113, 215, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(7, 16, 24, 0.82);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+
+.sim-policy-env {
+  color: var(--text);
+  font: 600 0.8rem/1 'Fira Sans', sans-serif;
+}
+
+.sim-policy-badge em {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font: 700 0.72rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-style: normal;
+}
+
+/* ── Toast notification ──────────────────────────────────────────────────── */
+
+.app-toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  padding: 10px 20px;
+  border-radius: 999px;
+  background: rgba(7, 16, 24, 0.92);
+  border: 1px solid rgba(255, 138, 61, 0.5);
+  color: #ffc08c;
+  font: 600 0.86rem/1.4 'Fira Sans', sans-serif;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.38);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: toast-in 200ms ease;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gym-back-btn,
+  .app-toast {
+    transition: none;
+    animation: none;
+  }
+}

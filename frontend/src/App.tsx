@@ -3,16 +3,7 @@ import './App.css'
 import CompositeScenePanel from './panels/CompositeScenePanel'
 import GymScenarioStage from './gym/GymScenarioStage'
 import { getScenarioById, scenarios } from './gym/scenarios'
-<<<<<<< HEAD
 import { CombatOS } from './combatos/CombatOS'
-
-type View = 'sim' | 'gym' | 'combatos'
-
-function getInitialView(): View {
-  if (window.location.hash === '#gym') return 'gym'
-  if (window.location.hash === '#combatos') return 'combatos'
-  return 'sim'
-=======
 import {
   checkPolicyExists,
   setActiveEnvId,
@@ -28,6 +19,7 @@ type AppRoute =
   | { view: 'gym-registry' }
   | { view: 'gym-env'; envId: string }
   | { view: 'sim' }
+  | { view: 'combatos' }
 
 function parseRoute(): AppRoute {
   const raw = window.location.hash.replace(/^#/, '')
@@ -37,13 +29,14 @@ function parseRoute(): AppRoute {
     return { view: 'gym-env', envId: envId || scenarios[0].id }
   }
   if (raw === 'sim') return { view: 'sim' }
+  if (raw === 'combatos') return { view: 'combatos' }
   return { view: 'gym-registry' }
->>>>>>> 56a396ff1e698cdfb4e4f56d776fc8ac5ea88e0a
 }
 
 function pushHash(route: AppRoute) {
   if (route.view === 'gym-registry') window.location.hash = 'gym'
   else if (route.view === 'gym-env') window.location.hash = `gym/${route.envId}`
+  else if (route.view === 'combatos') window.location.hash = 'combatos'
   else window.location.hash = 'sim'
 }
 
@@ -79,11 +72,6 @@ function App() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-<<<<<<< HEAD
-  const switchView = (nextView: View) => {
-    window.location.hash = nextView === 'gym' ? 'gym' : nextView === 'combatos' ? 'combatos' : 'sim'
-    setView(nextView)
-=======
   // ── Probe checkpoints on mount ───────────────────────────────────────────
   useEffect(() => {
     scenarios.forEach(async (s) => {
@@ -114,17 +102,10 @@ function App() {
     setToast(msg)
     if (toastTimer.current) clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(null), 4000)
->>>>>>> 56a396ff1e698cdfb4e4f56d776fc8ac5ea88e0a
   }
 
   // ── Navigation ───────────────────────────────────────────────────────────
 
-<<<<<<< HEAD
-  if (view === 'combatos') {
-    return <CombatOS />
-  }
-
-=======
   const goToRegistry = () => {
     const next: AppRoute = { view: 'gym-registry' }
     pushHash(next)
@@ -135,6 +116,12 @@ function App() {
   const enterGymEnv = (envId: string) => {
     setSelectedEnvId(envId)
     const next: AppRoute = { view: 'gym-env', envId }
+    pushHash(next)
+    setRoute(next)
+  }
+
+  const goToCombatOS = () => {
+    const next: AppRoute = { view: 'combatos' }
     pushHash(next)
     setRoute(next)
   }
@@ -173,7 +160,6 @@ function App() {
   const registryEnv = getScenarioById(selectedEnvId)
 
   // ── Shared top-nav ───────────────────────────────────────────────────────
->>>>>>> 56a396ff1e698cdfb4e4f56d776fc8ac5ea88e0a
   const nav = (
     <nav className="top-nav" aria-label="Primary">
       {/* #19 — disabled + tooltip until a policy is ready */}
@@ -195,12 +181,22 @@ function App() {
       </button>
       <button
         type="button"
-        onClick={() => switchView('combatos')}
+        className={route.view === 'combatos' ? 'is-active' : undefined}
+        onClick={goToCombatOS}
       >
         CombatOS
       </button>
     </nav>
   )
+
+  if (route.view === 'combatos') {
+    return (
+      <main className="app-shell app-shell--combatos">
+        <CombatOS />
+        <div className="combatos-nav">{nav}</div>
+      </main>
+    )
+  }
 
   // ── Render: fullscreen gym environment (#18) ─────────────────────────────
   if (route.view === 'gym-env') {

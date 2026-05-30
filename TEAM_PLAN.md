@@ -198,6 +198,12 @@ work in parallel.
 // topic: "swarm"  (from ⓸, ~10 Hz)
 { "t": 1234.56, "comms": "denied", "agents": [ { "id":0, "x":1.2,"y":-0.4, "role":"scout" } ] }
 
+// topic: "train"  (from ⓸ trainer or mock publisher, ~1-2 Hz)
+{ "topic": "train", "env_id": "search-and-interdict", "profile": "combat",
+  "phase": "update", "step": 6400, "reward_mean": 37.42, "coverage": 0.781,
+  "losses": { "pg_loss": 0.041, "v_loss": 0.218, "entropy": 0.067, "approx_kl": 0.012 },
+  "params_hash": "c19d6d4a9f10" }
+
 // topic: "status"  (system, hero banner)
 { "gps":"DENIED", "link":"NONE", "localized": true, "modules": { "nav":"up","perception":"up","recon":"ready","swarm":"up" } }
 ```

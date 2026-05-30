@@ -140,6 +140,39 @@
   grid-template-columns: minmax(300px, 0.92fr) minmax(0, 1.45fr);
 }
 
+.app-shell--sim {
+  padding: 0;
+}
+
+.app-shell--sim .app-backdrop {
+  opacity: 0.35;
+}
+
+.sim-viewport-full {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100svh;
+  min-height: 100svh;
+}
+
+.sim-viewport-nav {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 20;
+}
+
+.sim-viewport-full .composite-scene {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
 .gym-layout {
   grid-template-columns: minmax(300px, 0.82fr) minmax(0, 1.18fr);
 }

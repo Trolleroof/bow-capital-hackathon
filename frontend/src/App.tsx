@@ -66,91 +66,49 @@ function App() {
   const gymEnvironment =
     environments.find((environment) => environment.id === selectedGymEnvironment) ?? environments[1]
 
+  const nav = (
+    <nav className="top-nav" aria-label="Primary">
+      <button
+        type="button"
+        className={view === 'sim' ? 'is-active' : undefined}
+        onClick={() => switchView('sim')}
+      >
+        Mission Sim
+      </button>
+      <button
+        type="button"
+        className={view === 'gym' ? 'is-active' : undefined}
+        onClick={() => switchView('gym')}
+      >
+        Gym Environments
+      </button>
+    </nav>
+  )
+
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${view === 'sim' ? 'app-shell--sim' : ''}`}>
       <div className="app-backdrop" />
 
-      <header className="app-header">
-        <div className="brand-lockup">
-          <p className="eyebrow">BOW CAPITAL DRONE OPS</p>
-          <h1>Cleaner mission control for sim and environment bring-up</h1>
-          <span className="deck">
-            Live coverage sim on one side, gym environment staging on the other.
-          </span>
-        </div>
-
-        <nav className="top-nav" aria-label="Primary">
-          <button
-            type="button"
-            className={view === 'sim' ? 'is-active' : undefined}
-            onClick={() => switchView('sim')}
-          >
-            Mission Sim
-          </button>
-          <button
-            type="button"
-            className={view === 'gym' ? 'is-active' : undefined}
-            onClick={() => switchView('gym')}
-          >
-            Gym Environments
-          </button>
-        </nav>
-      </header>
-
       {view === 'sim' ? (
-        <section className="dashboard-grid">
-          <aside className="mission-panel panel-frame">
-            <div className="panel-kicker">Active mission</div>
-            <h2>Land Coverage Survey</h2>
-            <p>
-              The existing environment is reframed as a coverage survey mission so the sim reads
-              clearly: swarm health, coverage progress, denied-link posture, and reconstruction
-              context are all visible without the old clutter.
-            </p>
-
-            <div className="metric-row" role="list" aria-label="Mission highlights">
-              <article role="listitem">
-                <strong>3D field</strong>
-                <span>Reconstruction backdrop and flight path trace stay live in the scene.</span>
-              </article>
-              <article role="listitem">
-                <strong>Coverage-first</strong>
-                <span>The environment communicates survey progress instead of vague land-use text.</span>
-              </article>
-              <article role="listitem">
-                <strong>Operator-ready</strong>
-                <span>Reset and revive controls remain accessible inside the sim card.</span>
-              </article>
-            </div>
-
-            <div className="environment-list" role="list" aria-label="Environment registry">
-              {environments.map((environment) => (
-                <article className="environment-row" key={environment.id} role="listitem">
-                  <div>
-                    <p>{environment.name}</p>
-                    <span>{environment.summary}</span>
-                  </div>
-                  <strong data-status={environment.status}>{environment.label}</strong>
-                </article>
-              ))}
-            </div>
-          </aside>
-
-          <section className="sim-panel panel-frame">
-            <div className="panel-head">
-              <div>
-                <p className="panel-kicker">Live scene</p>
-                <h2>Field reconstruction viewport</h2>
-              </div>
-              <span>Local policy • orbit camera • coverage telemetry</span>
-            </div>
-            <CompositeScenePanel
-              missionName="Land Coverage Survey"
-              missionBrief="Field reconstruction and coverage sweep"
-            />
-          </section>
+        <section className="sim-viewport-full" aria-label="Mission simulation">
+          <div className="sim-viewport-nav">{nav}</div>
+          <CompositeScenePanel
+            missionName="Land Coverage Survey"
+            missionBrief="Field reconstruction and coverage sweep"
+          />
         </section>
       ) : (
+        <>
+          <header className="app-header">
+            <div className="brand-lockup">
+              <p className="eyebrow">BOW CAPITAL DRONE OPS</p>
+              <h1>Cleaner mission control for sim and environment bring-up</h1>
+              <span className="deck">
+                Live coverage sim on one side, gym environment staging on the other.
+              </span>
+            </div>
+            {nav}
+          </header>
         <section className="gym-layout">
           <aside className="gym-sidebar panel-frame">
             <div className="panel-kicker">Environment registry</div>
@@ -217,6 +175,7 @@ function App() {
             </div>
           </section>
         </section>
+        </>
       )}
     </main>
   )

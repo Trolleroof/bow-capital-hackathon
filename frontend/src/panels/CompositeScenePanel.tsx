@@ -184,18 +184,30 @@ export default function CompositeScenePanel({
   }, [selectedDroneIndex])
 
   // Key handlers for FPS movement
+  const trackKey = (key: string, down: boolean) => {
+    keysPressed.current[key] = down
+  }
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
-      if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e'].includes(key)) {
-        keysPressed.current[key] = true
+      if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e', 'r', 'f'].includes(key)) {
+        trackKey(key, true)
       }
+      if (e.key === 'ArrowUp') trackKey('arrowup', true)
+      if (e.key === 'ArrowDown') trackKey('arrowdown', true)
+      if (e.key === 'ArrowLeft') trackKey('arrowleft', true)
+      if (e.key === 'ArrowRight') trackKey('arrowright', true)
     }
     const handleKeyUp = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
-      if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e'].includes(key)) {
-        keysPressed.current[key] = false
+      if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e', 'r', 'f'].includes(key)) {
+        trackKey(key, false)
       }
+      if (e.key === 'ArrowUp') trackKey('arrowup', false)
+      if (e.key === 'ArrowDown') trackKey('arrowdown', false)
+      if (e.key === 'ArrowLeft') trackKey('arrowleft', false)
+      if (e.key === 'ArrowRight') trackKey('arrowright', false)
     }
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
@@ -251,10 +263,12 @@ export default function CompositeScenePanel({
     controls.maxDistance = 30
     controls.maxPolarAngle = Math.PI * 0.48
     controls.mouseButtons = {
-      LEFT: THREE.MOUSE.PAN,
+      LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
-      RIGHT: THREE.MOUSE.ROTATE,
+      RIGHT: THREE.MOUSE.PAN,
     }
+    controls.screenSpacePanning = true
+    controls.keyPanSpeed = 28
     controls.touches = {
       ONE: THREE.TOUCH.ROTATE,
       TWO: THREE.TOUCH.DOLLY_PAN,
@@ -519,9 +533,25 @@ export default function CompositeScenePanel({
       const currentMode = cameraModeRef.current
       const selectedDroneIdx = selectedDroneIndexRef.current
 
+      const applyKeyboardPan = () => {
+        const panSpeed = 10 * dt
+        const pan = new THREE.Vector3()
+        if (keysPressed.current.arrowleft) pan.x -= panSpeed
+        if (keysPressed.current.arrowright) pan.x += panSpeed
+        if (keysPressed.current.arrowup) pan.z -= panSpeed
+        if (keysPressed.current.arrowdown) pan.z += panSpeed
+        if (keysPressed.current.r || keysPressed.current.e) pan.y += panSpeed
+        if (keysPressed.current.f || keysPressed.current.q) pan.y -= panSpeed
+        if (pan.lengthSq() > 0) {
+          controls.target.add(pan)
+          camera.position.add(pan)
+        }
+      }
+
       if (currentMode === 'orbit') {
         controls.enabled = true
         controls.target.lerp(new THREE.Vector3(0, 1.1, 0), 0.1)
+        applyKeyboardPan()
         controls.update()
       } else if (currentMode === 'drone-orbit') {
         controls.enabled = true
@@ -529,6 +559,7 @@ export default function CompositeScenePanel({
         if (targetDrone) {
           controls.target.lerp(targetDrone.group.position, 0.15)
         }
+        applyKeyboardPan()
         controls.update()
       } else if (currentMode === 'fpv') {
         controls.enabled = false
@@ -692,6 +723,10 @@ export default function CompositeScenePanel({
             DRONE FPV
           </button>
         </div>
+        <p className="console-hint">
+          First-person on a drone: choose DRONE FPV, pick a unit below, then fly with GLOBAL ORBIT
+          arrows (pan) or FREE FLY (WASD + Space / Shift).
+        </p>
 
         {(cameraMode === 'drone-orbit' || cameraMode === 'fpv') && (
           <>

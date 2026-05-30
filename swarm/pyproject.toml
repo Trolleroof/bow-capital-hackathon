@@ -15,8 +15,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# stretch: real quadrotor dynamics for B-roll only — install when needed
-drones = ["pybullet>=3.2.6"]
+# stretch: B-roll capture tooling only. If PyBullet/gym-pybullet-drones is
+# installed in a compatible local env, drones_broll.py will use it automatically.
+drones = [
+    "imageio>=2.34",
+    "imageio-ffmpeg>=0.5",
+]
 
 [tool.uv]
 package = false

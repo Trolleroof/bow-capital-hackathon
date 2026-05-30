@@ -1,19 +1,31 @@
 /**
- * SwarmPanel — Phase 0 Three.js view of the CombatOS swarm.
+ * SwarmPanel — Three.js view of the CombatOS swarm.
  *
- * Connects to the Python WebSocket bus (swarm/bus.py), subscribes to the `swarm`
- * topic, and renders N drones as dots moving inside a bounded box. Shows a
- * `COMMS: DENIED` label and the live agent count.
+ * Two data sources (prop `source`):
+ *   'local' (default) — Phase 3 / Edge A: runs the trained policy.onnx CLIENT-SIDE
+ *      via onnxruntime-web (WASM), stepping a faithful TS port of SwarmEnv each
+ *      frame. No WebSocket, no Python — works fully offline.
+ *   'bus' — Phase 0 fallback: subscribes to the Python WebSocket bus (swarm/bus.py)
+ *      `swarm` topic and renders the streamed agents.
+ *
+ * Phase 4 adds an ops-console layer on top of the in-browser inference:
+ *   - quadrotor drone meshes + fading motion trails
+ *   - the coverage grid tinted on the ground (watch the swarm paint the field)
+ *   - a top-down "COORDINATION MAP" minimap
+ *   - operator controls: KILL (button + click-to-kill raycast), REVIVE, RESET,
+ *     and an optional (default-OFF) auto-kill toggle
+ *   - an event status line ("agent 3 lost — swarm recovering")
  *
  * Bus message (SWARM.md §4 / TEAM_PLAN §5):
  *   { "topic": "swarm", "t": 1234.56, "comms": "denied",
  *     "agents": [ { id, x, y, z, yaw, role, alive }, ... ] }
- *
- * Self-contained: just render <SwarmPanel /> anywhere. Default bus URL is
- * ws://localhost:8765 (override via the `url` prop).
  */
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
+import { SwarmEnv, WORLD_HALF as ENV_WORLD_HALF, ALTITUDE, GRID } from '../swarm/sim'
+import { loadPolicy, type Policy } from '../swarm/policy'
+import { makeDrone, updateDrone, Trail, type Drone } from '../swarm/drone'
+import { drawMinimap, type MiniAgent } from '../swarm/minimap'
 
 // --- bus message types -------------------------------------------------------
 interface SwarmAgent {
@@ -33,22 +45,43 @@ interface SwarmMessage {
 }
 
 // World spans [-WORLD_HALF, WORLD_HALF] in x and y (matches env.WORLD_HALF).
-const WORLD_HALF = 10
+const WORLD_HALF = ENV_WORLD_HALF
+
+// Optional auto-kill (default OFF). When enabled, kills agent 0 at this step so
+// the demo can run hands-free.
+const AUTO_KILL_STEP = 200
 
 interface SwarmPanelProps {
   url?: string
+  /** 'local' = browser onnx inference (default), 'bus' = WebSocket fallback. */
+  source?: 'bus' | 'local'
 }
 
-export default function SwarmPanel({ url = 'ws://localhost:8765' }: SwarmPanelProps) {
+export default function SwarmPanel({
+  url = 'ws://localhost:8765',
+  source = 'local',
+}: SwarmPanelProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
-  // latest message, written by the WS handler and read by the render loop
+  const miniRef = useRef<HTMLCanvasElement | null>(null)
+  // latest bus message, written by the WS handler and read by the render loop
   const latest = useRef<SwarmMessage | null>(null)
   const [connected, setConnected] = useState(false)
   const [nAlive, setNAlive] = useState(0)
-  const [comms, setComms] = useState('—')
-
-  // --- WebSocket subscription ---
+  const [comms, setComms] = useState(source === 'local' ? 'denied' : '—')
+  const [coverage, setCoverage] = useState(0)
+  const [edgeLabel, setEdgeLabel] = useState(
+    source === 'local' ? 'BROWSER (onnx … loading)' : 'bus',
+  )
+  const [status, setStatus] = useState('all units nominal · coverage sweep active')
+  const [autoKill, setAutoKill] = useState(false)
+  const autoKillRef = useRef(false)
   useEffect(() => {
+    autoKillRef.current = autoKill
+  }, [autoKill])
+
+  // --- WebSocket subscription (bus mode only) ---
+  useEffect(() => {
+    if (source !== 'bus') return
     let ws: WebSocket | null = null
     let retry: ReturnType<typeof setTimeout> | null = null
     let closed = false
@@ -80,9 +113,77 @@ export default function SwarmPanel({ url = 'ws://localhost:8765' }: SwarmPanelPr
       if (retry) clearTimeout(retry)
       ws?.close()
     }
-  }, [url])
+  }, [url, source])
 
-  // --- Three.js scene ---
+  // --- local browser inference (local mode only): load policy + step sim ---
+  // Holds the sim + policy so operator handlers (kill/revive/reset) can reach
+  // them via the ref.
+  const simRef = useRef<SwarmEnv | null>(null)
+  const policyRef = useRef<Policy | null>(null)
+
+  useEffect(() => {
+    if (source !== 'local') return
+    let cancelled = false
+    const sim = new SwarmEnv(/* maxSteps */ 100000, /* seed */ 0)
+    simRef.current = sim
+    setComms('denied')
+
+    loadPolicy('/policy.onnx')
+      .then((p) => {
+        if (cancelled) return
+        policyRef.current = p
+        setEdgeLabel(`BROWSER (onnx · ${p.provider})`)
+      })
+      .catch((err) => {
+        console.error('[swarm] failed to load policy.onnx:', err)
+        setEdgeLabel('BROWSER (onnx FAILED)')
+      })
+
+    return () => {
+      cancelled = true
+      simRef.current = null
+      policyRef.current = null
+    }
+  }, [source])
+
+  // --- operator actions (local mode) ---
+  // kill the first live agent (or a specific id from click-to-kill)
+  const killAgent = (id?: number) => {
+    const sim = simRef.current
+    if (!sim) return
+    let target = id
+    if (target === undefined) {
+      target = sim.alive.findIndex((a) => a)
+      if (target < 0) return
+    }
+    if (!sim.alive[target]) return
+    sim.kill(target)
+    setNAlive(sim.nAlive())
+    setStatus(`agent ${target} lost — swarm recovering, redistributing coverage`)
+  }
+
+  const reviveAll = () => {
+    const sim = simRef.current
+    if (!sim) return
+    sim.reviveAll()
+    setNAlive(sim.nAlive())
+    setStatus('all units restored · swarm re-formed')
+  }
+
+  const resetEpisode = () => {
+    const sim = simRef.current
+    if (!sim) return
+    sim.reset(Math.floor(Math.random() * 1e9))
+    setNAlive(sim.nAlive())
+    setCoverage(sim.coverage())
+    setStatus('episode reset · coverage sweep restarting')
+    clearTrailsRef.current?.()
+  }
+
+  // lets resetEpisode wipe the trails created inside the three.js effect
+  const clearTrailsRef = useRef<(() => void) | null>(null)
+
+  // --- Three.js scene (both modes) ---
   useEffect(() => {
     const mount = mountRef.current
     if (!mount) return
@@ -93,7 +194,6 @@ export default function SwarmPanel({ url = 'ws://localhost:8765' }: SwarmPanelPr
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0x0a0e12)
 
-    // top-down-ish ortho-style perspective camera looking at the world box
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000)
     camera.position.set(0, WORLD_HALF * 2.2, WORLD_HALF * 1.6)
     camera.lookAt(0, 0, 0)
@@ -103,13 +203,13 @@ export default function SwarmPanel({ url = 'ws://localhost:8765' }: SwarmPanelPr
     renderer.setSize(width, height)
     mount.appendChild(renderer.domElement)
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.8))
-    const dir = new THREE.DirectionalLight(0xffffff, 0.6)
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7))
+    const dir = new THREE.DirectionalLight(0xffffff, 0.7)
     dir.position.set(5, 20, 10)
     scene.add(dir)
 
     // bounded world: ground grid + edge box
-    const grid = new THREE.GridHelper(WORLD_HALF * 2, 20, 0x1f6f4f, 0x16313a)
+    const grid = new THREE.GridHelper(WORLD_HALF * 2, GRID, 0x1f6f4f, 0x16313a)
     scene.add(grid)
     const box = new THREE.LineSegments(
       new THREE.EdgesGeometry(
@@ -120,45 +220,187 @@ export default function SwarmPanel({ url = 'ws://localhost:8765' }: SwarmPanelPr
     box.position.y = 3
     scene.add(box)
 
-    // drone meshes, created lazily / reused across frames
-    const droneGeo = new THREE.SphereGeometry(0.5, 16, 16)
-    const aliveMat = new THREE.MeshStandardMaterial({
+    // --- coverage ground: one InstancedMesh of GRID*GRID flat quads, faded in
+    // as cells get covered (alpha via per-instance scale + emissive material). ---
+    const cellSize = (WORLD_HALF * 2) / GRID
+    const coverGeo = new THREE.PlaneGeometry(cellSize * 0.96, cellSize * 0.96)
+    coverGeo.rotateX(-Math.PI / 2)
+    const coverMat = new THREE.MeshBasicMaterial({
       color: 0x4ef0a0,
-      emissive: 0x123b2a,
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false,
     })
-    const deadMat = new THREE.MeshStandardMaterial({
-      color: 0x553333,
-      emissive: 0x000000,
-    })
-    const drones: THREE.Mesh[] = []
+    const coverMesh = new THREE.InstancedMesh(coverGeo, coverMat, GRID * GRID)
+    coverMesh.position.y = 0.02
+    coverMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    scene.add(coverMesh)
+    const hideM = new THREE.Matrix4().makeScale(0, 0, 0)
+    const cellM = new THREE.Matrix4()
+    const tmpPos = new THREE.Vector3()
+    // env cell (cx,cy): world x = -WORLD_HALF + (cx+0.5)*cellSize, world y same
+    // for cy. scene maps (x,y) -> (x, _, y).
+    const coverShown = new Uint8Array(GRID * GRID)
+    for (let i = 0; i < GRID * GRID; i++) coverMesh.setMatrixAt(i, hideM)
+    coverMesh.instanceMatrix.needsUpdate = true
 
-    // map env world coords (x,y,z) -> three coords. env y is the ground plane,
-    // env z is altitude -> three's vertical axis.
-    const toScene = (a: SwarmAgent) =>
-      new THREE.Vector3(a.x, a.z, -a.y)
+    const refreshCover = (covered: Uint8Array) => {
+      let changed = false
+      for (let cx = 0; cx < GRID; cx++) {
+        for (let cy = 0; cy < GRID; cy++) {
+          const gi = cx * GRID + cy
+          if (covered[gi] && !coverShown[gi]) {
+            const wx = -WORLD_HALF + (cx + 0.5) * cellSize
+            const wy = -WORLD_HALF + (cy + 0.5) * cellSize
+            tmpPos.set(wx, 0, wy)
+            cellM.makeTranslation(tmpPos.x, tmpPos.y, tmpPos.z)
+            coverMesh.setMatrixAt(gi, cellM)
+            coverShown[gi] = 1
+            changed = true
+          } else if (!covered[gi] && coverShown[gi]) {
+            coverMesh.setMatrixAt(gi, hideM)
+            coverShown[gi] = 0
+            changed = true
+          }
+        }
+      }
+      if (changed) coverMesh.instanceMatrix.needsUpdate = true
+    }
+
+    // drone meshes + trails, created lazily / reused across frames
+    const drones: Drone[] = []
+    const trails: Trail[] = []
+    const ensureDrone = (i: number): Drone => {
+      let d = drones[i]
+      if (!d) {
+        d = makeDrone()
+        drones[i] = d
+        scene.add(d.group)
+        const t = new Trail(0x2fae7a)
+        trails[i] = t
+        scene.add(t.line)
+      }
+      return d
+    }
+
+    clearTrailsRef.current = () => {
+      for (const t of trails) t.clear()
+      for (let i = 0; i < GRID * GRID; i++) coverMesh.setMatrixAt(i, hideM)
+      coverShown.fill(0)
+      coverMesh.instanceMatrix.needsUpdate = true
+    }
+
+    // Coord mapping note: env (x,y,z) -> three (x, z, -y); env y is the ground
+    // plane, env z (= ALTITUDE) is three's vertical axis. updateDrone takes
+    // already-mapped args, so we pass (x, ALTITUDE, -y).
+
+    // --- click-to-kill: raycast on drone groups (local mode only) ---
+    const raycaster = new THREE.Raycaster()
+    const ndc = new THREE.Vector2()
+    const onClick = (ev: MouseEvent) => {
+      if (source !== 'local') return
+      const sim = simRef.current
+      if (!sim) return
+      const rect = renderer.domElement.getBoundingClientRect()
+      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1
+      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1
+      raycaster.setFromCamera(ndc, camera)
+      // find closest hit among live drone groups
+      let best = -1
+      let bestDist = Infinity
+      for (let i = 0; i < drones.length; i++) {
+        if (!sim.alive[i]) continue
+        const hits = raycaster.intersectObject(drones[i].group, true)
+        if (hits.length && hits[0].distance < bestDist) {
+          bestDist = hits[0].distance
+          best = i
+        }
+      }
+      if (best >= 0) killAgent(best)
+    }
+    renderer.domElement.addEventListener('click', onClick)
+    renderer.domElement.style.cursor = source === 'local' ? 'crosshair' : 'default'
+
+    const miniCtx = miniRef.current?.getContext('2d') ?? null
+    const miniSize = miniRef.current?.width ?? 0
+
+    // local-mode async inference guard
+    let inferring = false
+    let last = performance.now()
 
     let raf = 0
     const animate = () => {
       raf = requestAnimationFrame(animate)
-      const msg = latest.current
-      if (msg) {
-        for (let i = 0; i < msg.agents.length; i++) {
-          const a = msg.agents[i]
-          let m = drones[i]
-          if (!m) {
-            m = new THREE.Mesh(droneGeo, aliveMat)
-            drones[i] = m
-            scene.add(m)
-          }
-          m.position.copy(toScene(a))
-          m.material = a.alive ? aliveMat : deadMat
-          m.scale.setScalar(a.alive ? 1 : 0.6)
+      const now = performance.now()
+      const dt = Math.min(0.05, (now - last) / 1000)
+      last = now
+
+      if (source === 'local') {
+        const sim = simRef.current
+        const policy = policyRef.current
+        if (sim && policy && !inferring) {
+          inferring = true
+          const obs = sim.observe()
+          policy
+            .act(obs, sim.n)
+            .then((actions) => {
+              sim.step(actions)
+              if (autoKillRef.current && sim.steps === AUTO_KILL_STEP) {
+                killAgent(0)
+              }
+              setNAlive(sim.nAlive())
+              setCoverage(sim.coverage())
+            })
+            .catch((err) => {
+              console.error('[swarm] inference error:', err)
+            })
+            .finally(() => {
+              inferring = false
+            })
         }
-        // hide any stale extra meshes (agent count shrank)
-        for (let i = msg.agents.length; i < drones.length; i++) {
-          drones[i].visible = false
+        if (sim) {
+          refreshCover(sim.coveredCells())
+          for (let i = 0; i < sim.n; i++) {
+            const x = sim.pos[i * 2]
+            const y = sim.pos[i * 2 + 1]
+            const alive = sim.alive[i]
+            const yaw = Math.atan2(sim.vel[i * 2], sim.vel[i * 2 + 1])
+            const d = ensureDrone(i)
+            updateDrone(d, x, ALTITUDE, -y, yaw, alive, dt)
+            if (alive) trails[i].push(x, -y, ALTITUDE)
+          }
+          if (miniCtx) {
+            const agents: MiniAgent[] = []
+            for (let i = 0; i < sim.n; i++) {
+              agents.push({ x: sim.pos[i * 2], y: sim.pos[i * 2 + 1], alive: sim.alive[i] })
+            }
+            drawMinimap(miniCtx, miniSize, WORLD_HALF, GRID, sim.coveredCells(), agents)
+          }
+        }
+      } else {
+        const msg = latest.current
+        if (msg) {
+          for (let i = 0; i < msg.agents.length; i++) {
+            const a = msg.agents[i]
+            const d = ensureDrone(i)
+            const yaw = a.yaw ?? 0
+            updateDrone(d, a.x, a.z, -a.y, yaw, a.alive, dt)
+            if (a.alive) trails[i].push(a.x, -a.y, a.z)
+          }
+          for (let i = msg.agents.length; i < drones.length; i++) {
+            drones[i].group.visible = false
+          }
+          if (miniCtx) {
+            const agents: MiniAgent[] = msg.agents.map((a) => ({
+              x: a.x,
+              y: a.y,
+              alive: a.alive,
+            }))
+            drawMinimap(miniCtx, miniSize, WORLD_HALF, GRID, new Uint8Array(GRID * GRID), agents)
+          }
         }
       }
+
       renderer.render(scene, camera)
     }
     animate()
@@ -175,19 +417,26 @@ export default function SwarmPanel({ url = 'ws://localhost:8765' }: SwarmPanelPr
     return () => {
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', onResize)
+      renderer.domElement.removeEventListener('click', onClick)
+      clearTrailsRef.current = null
+      for (const t of trails) t.dispose()
+      coverGeo.dispose()
+      coverMat.dispose()
       renderer.dispose()
-      droneGeo.dispose()
-      aliveMat.dispose()
-      deadMat.dispose()
       if (renderer.domElement.parentNode === mount) {
         mount.removeChild(renderer.domElement)
       }
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source])
+
+  const local = source === 'local'
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', minHeight: 360 }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
+
+      {/* --- HUD (top-left) --- */}
       <div
         style={{
           position: 'absolute',
@@ -197,16 +446,150 @@ export default function SwarmPanel({ url = 'ws://localhost:8765' }: SwarmPanelPr
           color: '#4ef0a0',
           pointerEvents: 'none',
           textShadow: '0 0 4px #000',
+          lineHeight: 1.5,
         }}
       >
         <div style={{ fontWeight: 700, letterSpacing: 1 }}>
           COMMS: {comms.toUpperCase()}
         </div>
         <div style={{ opacity: 0.85 }}>AGENTS ALIVE: {nAlive}</div>
+        <div style={{ opacity: 0.85 }}>EDGE: {local ? edgeLabel : 'bus'}</div>
+        {local && (
+          <div style={{ opacity: 0.85 }}>
+            COVERAGE: {(coverage * 100).toFixed(0)}%
+          </div>
+        )}
         <div style={{ opacity: 0.6, fontSize: 11 }}>
-          {connected ? 'bus connected' : 'connecting…'}
+          {local
+            ? 'client-side · offline'
+            : connected
+              ? 'bus connected'
+              : 'connecting…'}
         </div>
       </div>
+
+      {/* --- event status line (top-center) --- */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 12,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          fontFamily: 'monospace',
+          fontSize: 12,
+          color: status.includes('lost') ? '#ff6b6b' : '#7fd9b0',
+          background: 'rgba(6, 12, 10, 0.6)',
+          border: `1px solid ${status.includes('lost') ? '#5a2020' : '#16313a'}`,
+          padding: '4px 10px',
+          borderRadius: 3,
+          pointerEvents: 'none',
+          letterSpacing: 0.5,
+          maxWidth: '70%',
+          textAlign: 'center',
+        }}
+      >
+        ▸ {status}
+      </div>
+
+      {/* --- coordination minimap (top-right) --- */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 12,
+          right: 12,
+          fontFamily: 'monospace',
+          color: '#4ef0a0',
+          background: 'rgba(6, 12, 10, 0.55)',
+          border: '1px solid #16313a',
+          borderRadius: 4,
+          padding: 6,
+          pointerEvents: 'none',
+        }}
+      >
+        <div style={{ fontSize: 10, letterSpacing: 1, opacity: 0.8, marginBottom: 4 }}>
+          COORDINATION MAP
+        </div>
+        <canvas
+          ref={miniRef}
+          width={160}
+          height={160}
+          style={{ display: 'block', width: 160, height: 160, borderRadius: 2 }}
+        />
+      </div>
+
+      {/* --- operator controls (bottom-center) --- */}
+      {local && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            fontFamily: 'monospace',
+            background: 'rgba(6, 12, 10, 0.7)',
+            border: '1px solid #16313a',
+            borderRadius: 6,
+            padding: '8px 12px',
+            backdropFilter: 'blur(2px)',
+          }}
+        >
+          <span style={{ color: '#4ef0a0', fontSize: 10, letterSpacing: 1, opacity: 0.7 }}>
+            OPERATOR
+          </span>
+          <button onClick={() => killAgent()} style={killBtnStyle}>
+            ◼ KILL AGENT
+          </button>
+          <button onClick={reviveAll} style={btnStyle}>
+            ⟲ REVIVE ALL
+          </button>
+          <button onClick={resetEpisode} style={btnStyle}>
+            ⟳ RESET
+          </button>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              color: '#7fd9b0',
+              fontSize: 11,
+              cursor: 'pointer',
+              userSelect: 'none',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={autoKill}
+              onChange={(e) => setAutoKill(e.target.checked)}
+              style={{ accentColor: '#4ef0a0' }}
+            />
+            AUTO-KILL @{AUTO_KILL_STEP}
+          </label>
+          <span style={{ color: '#4a6f5e', fontSize: 10 }}>click a drone to kill it</span>
+        </div>
+      )}
     </div>
   )
+}
+
+const btnStyle: React.CSSProperties = {
+  fontFamily: 'monospace',
+  fontSize: 11,
+  letterSpacing: 1,
+  color: '#4ef0a0',
+  background: '#0c1f18',
+  border: '1px solid #2fae7a',
+  borderRadius: 4,
+  padding: '6px 12px',
+  cursor: 'pointer',
+}
+
+const killBtnStyle: React.CSSProperties = {
+  ...btnStyle,
+  color: '#ff8585',
+  background: '#1f0c0c',
+  border: '1px solid #c0392b',
+  fontWeight: 700,
 }

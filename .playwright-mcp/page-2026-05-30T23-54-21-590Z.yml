@@ -1,0 +1,17 @@
+- main [ref=e39]:
+  - region "Search & Interdict training environment" [ref=e40]:
+    - generic [ref=e41]:
+      - button "← Environments" [ref=e42] [cursor=pointer]
+      - generic [ref=e43]:
+        - generic [ref=e44]: Search & Interdict
+        - emphasis [ref=e45]: Policy ready
+      - navigation "Primary" [ref=e47]:
+        - button "Gym" [ref=e48] [cursor=pointer]
+        - button "Mission Sim" [ref=e49] [cursor=pointer]
+    - generic [ref=e50]:
+      - button "Params ▼" [ref=e51] [cursor=pointer]
+      - button "Start training policy" [ref=e52] [cursor=pointer]: ▶ Train Policy
+    - generic "Search & Interdict simulated stage" [ref=e53]:
+      - img "Sweep a cluttered indoor floor, find the hidden mover, and collapse the net before it escapes." [ref=e54]:
+        - generic "Coverage heatmap overlay" [ref=e57]
+        - generic "Velocity vector overlay"

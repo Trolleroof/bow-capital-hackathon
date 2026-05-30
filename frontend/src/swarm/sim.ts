@@ -79,7 +79,7 @@ function sampleNormal(rand: () => number): number {
 }
 
 export class SwarmEnv {
-  readonly n = N_AGENTS
+  readonly n: number
   readonly k = K_NEIGHBORS
   readonly patch = PATCH
   readonly grid = GRID
@@ -107,6 +107,7 @@ export class SwarmEnv {
 
   constructor(maxSteps = 400, seed = 0, battlefield: BattlefieldParams | null = null) {
     this.battlefield = battlefield
+    this.n = battlefield?.logistics.swarmSize ?? N_AGENTS
     // BattlefieldParams.roe.timeLimitSec maps to maxSteps when provided
     this.maxSteps = battlefield
       ? Math.min(battlefield.roe.timeLimitSec, battlefield.logistics.batteryEnvelopeSec)

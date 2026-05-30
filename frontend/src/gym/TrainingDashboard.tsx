@@ -25,12 +25,6 @@ export interface TrainingMetrics {
 
 export type TrainingStatus = 'idle' | 'running' | 'stopped' | 'completed' | 'failed'
 
-function profileFromParams(params: BattlefieldParams): 'garrison' | 'combat' {
-  return params.logistics.attritionInjectRate < 0.01 && params.ew.gpsDenialLevel < 0.05
-    ? 'garrison'
-    : 'combat'
-}
-
 function eventToMetrics(event: TrainEvent, swarmSize: number): TrainingMetrics {
   const losses = event.losses ?? {}
   return {
@@ -112,8 +106,7 @@ export function useTraining(
     setStatus('running')
     closeSocket()
 
-    const profile = profileFromParams(params)
-    const { ok, error } = await startTraining(envId, profile)
+    const { ok, error } = await startTraining(envId, 'combat')
     if (!ok) {
       setStatus('failed')
       optionsRef.current?.onError?.(

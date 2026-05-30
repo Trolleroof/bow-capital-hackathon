@@ -5,6 +5,7 @@ import { ALTITUDE, GRID, N_AGENTS, SwarmEnv, WORLD_HALF, MAX_SPEED } from '../sw
 import { loadPolicy, type Policy } from '../swarm/policy'
 import { makeDrone, updateDrone, Trail, type Drone } from '../swarm/drone'
 import { drawMinimap, type MiniAgent } from '../swarm/minimap'
+import { getScenarioDefaults } from '../gym/battlefieldParams'
 
 interface PoseSample {
   t: number
@@ -18,6 +19,7 @@ interface PoseSample {
 }
 
 interface CompositeScenePanelProps {
+  envId: string
   trajectoryUrl?: string
   missionName?: string
   policyEnabled?: boolean
@@ -62,16 +64,7 @@ function makeOrbitPan(keys: Record<string, boolean>, dt: number) {
   return pan
 }
 
-function getControlLegend(cameraMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps', isPointerLocked: boolean) {
-  if (cameraMode === 'fps') {
-    return [
-      'Mouse look' + (isPointerLocked ? ' active' : ' on click'),
-      'WASD strafe on ground plane',
-      'Space up',
-      'Shift down',
-      'Esc release pointer lock',
-    ]
-  }
+function getControlLegend(cameraMode: 'drone-orbit' | 'fpv') {
   if (cameraMode === 'drone-orbit') {
     return [
       'LMB rotate around tracked drone',
@@ -88,13 +81,7 @@ function getControlLegend(cameraMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps', i
       'Use UAV selector to change feed',
     ]
   }
-  return [
-    'LMB rotate',
-    'RMB pan',
-    'Wheel zoom',
-    'Arrows move X/Z',
-    'R/E up · F/Q down',
-  ]
+  return []
 }
 
 function fakeTrajectory(): PoseSample[] {
@@ -194,6 +181,7 @@ const NOMINAL = 'trained policy active · coverage objective executing'
 const POLICY_REQUIRED = 'train and export policy before mission launch'
 
 export default function CompositeScenePanel({
+  envId,
   trajectoryUrl,
   splatPointsUrl,
   missionName = 'Land Coverage Survey',
@@ -201,7 +189,7 @@ export default function CompositeScenePanel({
 }: CompositeScenePanelProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const miniRef = useRef<HTMLCanvasElement | null>(null)
-  const envRef = useRef(new SwarmEnv(400, 7))
+  const envRef = useRef(new SwarmEnv(400, 7, getScenarioDefaults(envId)))
   const policyRef = useRef<Policy | null>(null)
   const resetNextRef = useRef(false)
   const reviveNextRef = useRef(false)
@@ -216,9 +204,8 @@ export default function CompositeScenePanel({
   const statusRef = useRef<{ text: string; lost: boolean } | null>(null)
 
   // Camera control state
-  const [cameraMode, setCameraMode] = useState<'orbit' | 'drone-orbit' | 'fpv' | 'fps'>('orbit')
+  const [cameraMode, setCameraMode] = useState<'drone-orbit' | 'fpv'>('drone-orbit')
   const [selectedDroneIndex, setSelectedDroneIndex] = useState<number>(0)
-  const [isPointerLocked, setIsPointerLocked] = useState(false)
   const [droneStates, setDroneStates] = useState<{ id: number; alive: boolean; x: number; y: number; vx: number; vy: number }[]>([])
 
   const cameraModeRef = useRef(cameraMode)
@@ -227,12 +214,6 @@ export default function CompositeScenePanel({
 
   useEffect(() => {
     cameraModeRef.current = cameraMode
-  }, [cameraMode])
-
-  useEffect(() => {
-    if (cameraMode !== 'fps' && document.pointerLockElement) {
-      document.exitPointerLock?.()
-    }
   }, [cameraMode])
 
   useEffect(() => {
@@ -312,7 +293,7 @@ export default function CompositeScenePanel({
     }
 
     let cancelled = false
-    loadPolicy('/policy.onnx')
+    loadPolicy(envId)
       .then((policy) => {
         if (!cancelled) {
           policyRef.current = policy
@@ -337,7 +318,7 @@ export default function CompositeScenePanel({
     return () => {
       cancelled = true
     }
-  }, [policyEnabled])
+  }, [envId, policyEnabled])
 
   useEffect(() => {
     const mount = mountRef.current
@@ -384,66 +365,8 @@ export default function CompositeScenePanel({
     controls.panSpeed = 0.95
     controls.rotateSpeed = 0.8
 
-    // FPS mouse drag & pointer lock variables
-    let isDragging = false
-    let previousMousePosition = { x: 0, y: 0 }
     let droneOrbitOffset = new THREE.Vector3(0, 0, 0)
-    let previousMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps' = cameraModeRef.current
-
-    const onMouseDown = (e: MouseEvent) => {
-      if (cameraModeRef.current !== 'fps') return
-      isDragging = true
-      previousMousePosition = { x: e.clientX, y: e.clientY }
-      
-      const canvas = renderer.domElement
-      if (canvas.requestPointerLock) {
-        canvas.requestPointerLock()
-      }
-    }
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (cameraModeRef.current !== 'fps') return
-
-      let movement: { dx: number; dy: number }
-      if (document.pointerLockElement === renderer.domElement) {
-        movement = { dx: e.movementX, dy: e.movementY }
-      } else if (isDragging) {
-        movement = {
-          dx: e.clientX - previousMousePosition.x,
-          dy: e.clientY - previousMousePosition.y,
-        }
-        previousMousePosition = { x: e.clientX, y: e.clientY }
-      } else {
-        return
-      }
-
-      const { dx, dy } = movement
-      const sensitivity = 0.0025
-      const euler = new THREE.Euler(0, 0, 0, 'YXZ')
-      euler.setFromQuaternion(camera.quaternion)
-
-      euler.y -= dx * sensitivity
-      euler.x -= dy * sensitivity
-
-      // Clamp pitch to avoid turning upside down (85 degrees)
-      euler.x = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, euler.x))
-
-      camera.quaternion.setFromEuler(euler)
-    }
-
-    const onMouseUp = () => {
-      isDragging = false
-    }
-
-    const handlePointerLockChange = () => {
-      const canvas = renderer.domElement
-      setIsPointerLocked(document.pointerLockElement === canvas)
-    }
-
-    renderer.domElement.addEventListener('mousedown', onMouseDown)
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-    document.addEventListener('pointerlockchange', handlePointerLockChange)
+    let previousMode: 'drone-orbit' | 'fpv' = cameraModeRef.current
 
     scene.add(new THREE.HemisphereLight(0xc9f0ff, 0x111911, 1.45))
     const key = new THREE.DirectionalLight(0xffffff, 1.4)
@@ -734,19 +657,11 @@ export default function CompositeScenePanel({
           droneOrbitOffset = targetDrone
             ? controls.target.clone().sub(targetDrone.group.position)
             : new THREE.Vector3(0, 0, 0)
-        } else if (previousMode === 'drone-orbit' && currentMode === 'orbit') {
-          droneOrbitOffset = new THREE.Vector3(0, 0, 0)
         }
         previousMode = currentMode
       }
 
-      if (currentMode === 'orbit') {
-        controls.enabled = true
-        applyKeyboardPan()
-        controls.update()
-        clampWorldVector(controls.target)
-        clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
-      } else if (currentMode === 'drone-orbit') {
+      if (currentMode === 'drone-orbit') {
         controls.enabled = true
         const targetDrone = drones[selectedDroneIdx]
         if (targetDrone) {
@@ -781,35 +696,6 @@ export default function CompositeScenePanel({
           const targetRotation = new THREE.Quaternion().setFromRotationMatrix(tempMatrix)
           camera.quaternion.slerp(targetRotation, 0.2)
         }
-      } else if (currentMode === 'fps') {
-        controls.enabled = false
-        const speed = 9.5 * dt
-        const moveDir = new THREE.Vector3()
-
-        const horizontalForward = camera
-          .getWorldDirection(new THREE.Vector3())
-          .setY(0)
-          .normalize()
-        const horizontalRight = new THREE.Vector3()
-          .crossVectors(horizontalForward, new THREE.Vector3(0, 1, 0))
-          .normalize()
-
-        if (keysPressed.current.w) moveDir.add(horizontalForward)
-        if (keysPressed.current.s) moveDir.sub(horizontalForward)
-        if (keysPressed.current.a) moveDir.sub(horizontalRight)
-        if (keysPressed.current.d) moveDir.add(horizontalRight)
-        if (keysPressed.current[' '] || keysPressed.current['e']) {
-          moveDir.y += 1.0
-        }
-        if (keysPressed.current['shift'] || keysPressed.current['q']) {
-          moveDir.y -= 1.0
-        }
-
-        if (moveDir.lengthSq() > 0) {
-          moveDir.normalize().multiplyScalar(speed)
-          camera.position.add(moveDir)
-          clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
-        }
       }
 
       renderer.render(scene, camera)
@@ -828,14 +714,9 @@ export default function CompositeScenePanel({
     return () => {
       disposed = true
       cancelAnimationFrame(raf)
-      window.removeEventListener('resize', onResize)
-      renderer.domElement.removeEventListener('contextmenu', onContextMenu)
-      
-      // Clean up pointer lock and mouse listeners
-      renderer.domElement.removeEventListener('mousedown', onMouseDown)
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-      document.removeEventListener('pointerlockchange', handlePointerLockChange)
+       // Clean up resize listener
+       window.removeEventListener('resize', onResize)
+       renderer.domElement.removeEventListener('contextmenu', onContextMenu)
 
       controls.dispose()
       actionArrows.forEach((arrow) => {
@@ -856,7 +737,7 @@ export default function CompositeScenePanel({
   }, [splatPointsUrl, trajectoryUrl])
 
   const selectedDroneState = droneStates[selectedDroneIndex]
-  const controlLegend = getControlLegend(cameraMode, isPointerLocked)
+  const controlLegend = getControlLegend(cameraMode)
 
   const handleKillDrone = (idx: number) => {
     const env = envRef.current
@@ -891,20 +772,6 @@ export default function CompositeScenePanel({
         <div className="console-btn-grid">
           <button
             type="button"
-            className={`console-btn ${cameraMode === 'orbit' ? 'active' : ''}`}
-            onClick={() => setCameraMode('orbit')}
-          >
-            GLOBAL ORBIT
-          </button>
-          <button
-            type="button"
-            className={`console-btn ${cameraMode === 'fps' ? 'active' : ''}`}
-            onClick={() => setCameraMode('fps')}
-          >
-            FREE FLY (FPS)
-          </button>
-          <button
-            type="button"
             className={`console-btn ${cameraMode === 'drone-orbit' ? 'active' : ''}`}
             onClick={() => setCameraMode('drone-orbit')}
           >
@@ -919,9 +786,8 @@ export default function CompositeScenePanel({
           </button>
         </div>
         <p className="console-hint">
-          Global orbit now uses standard mouse mapping: left drag rotates, right drag pans, and
-          the wheel zooms. Free fly keeps `WASD` on the horizontal plane so inspection does not
-          drift underground or into the ceiling.
+          Drone track orbits around the selected drone; left drag rotates, right drag adjusts offset, and
+          the wheel zooms. FPV locks the viewport to the selected drone's camera perspective.
         </p>
 
         <div className="console-section-title">Control Legend</div>
@@ -1074,57 +940,14 @@ export default function CompositeScenePanel({
         </div>
       )}
 
-      {/* FPS CONTROLS HUD */}
-      {cameraMode === 'fps' && (
-        <>
-          {!isPointerLocked && (
-            <div
-              className="fps-pointer-prompt"
-              onClick={() => {
-                const canvas = mountRef.current?.querySelector('canvas')
-                if (canvas && canvas.requestPointerLock) {
-                  canvas.requestPointerLock()
-                }
-              }}
-            >
-              [ CLICK TO ENGAGE FLIGHT CONTROLS ]
-            </div>
-          )}
 
-          <div className="fps-instructions">
-            <div className="fps-title">UAV SIM FLIGHT DECK</div>
-            <div className="fps-keys">
-              <div className="fps-key-row">
-                <span>[W][A][S][D]</span>
-                <span>MANEUVER</span>
-              </div>
-              <div className="fps-key-row">
-                <span>[SPACE]</span>
-                <span>ASCEND</span>
-              </div>
-              <div className="fps-key-row">
-                <span>[L-SHIFT]</span>
-                <span>DESCEND</span>
-              </div>
-              <div className="fps-key-row">
-                <span>[MOUSE]</span>
-                <span>LOOK AROUND</span>
-              </div>
-              <div className="fps-key-row">
-                <span>[ESC]</span>
-                <span>RELEASE MOUSE</span>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
 
       {/* coordination minimap (top-right) */}
       <div
         style={{
           position: 'absolute',
-          top: 12,
-          right: 12,
+          top: 80,
+          right: 16,
           padding: 6,
           background: 'rgba(7,18,14,0.78)',
           border: '1px solid rgba(47,174,122,0.5)',
@@ -1144,7 +967,7 @@ export default function CompositeScenePanel({
       <div
         style={{
           position: 'absolute',
-          top: 12,
+          top: 66,
           left: '50%',
           transform: 'translateX(-50%)',
           padding: '4px 12px',
@@ -1165,13 +988,11 @@ export default function CompositeScenePanel({
       <div className="mission-strip">
         <div>
           <strong>{missionName}</strong>
-        </div>
-        <div>
           <span>GPS: DENIED</span>
           <span>LINK: NONE</span>
           <span>LOCALIZED</span>
         </div>
-        <div>
+        <div className="mission-strip__metrics">
           <span>POLICY: {provider.toUpperCase()}</span>
           {provider !== 'loading' && provider !== 'required' && (
             <span>

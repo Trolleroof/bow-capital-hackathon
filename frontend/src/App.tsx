@@ -3,11 +3,14 @@ import './App.css'
 import CompositeScenePanel from './panels/CompositeScenePanel'
 import GymScenarioStage from './gym/GymScenarioStage'
 import { getScenarioById, scenarios } from './gym/scenarios'
+import { CombatOS } from './combatos/CombatOS'
 
-type View = 'sim' | 'gym'
+type View = 'sim' | 'gym' | 'combatos'
 
 function getInitialView(): View {
-  return window.location.hash === '#gym' ? 'gym' : 'sim'
+  if (window.location.hash === '#gym') return 'gym'
+  if (window.location.hash === '#combatos') return 'combatos'
+  return 'sim'
 }
 
 function App() {
@@ -21,11 +24,15 @@ function App() {
   }, [])
 
   const switchView = (nextView: View) => {
-    window.location.hash = nextView === 'gym' ? 'gym' : 'sim'
+    window.location.hash = nextView === 'gym' ? 'gym' : nextView === 'combatos' ? 'combatos' : 'sim'
     setView(nextView)
   }
 
   const gymEnvironment = getScenarioById(selectedGymEnvironment)
+
+  if (view === 'combatos') {
+    return <CombatOS />
+  }
 
   const nav = (
     <nav className="top-nav" aria-label="Primary">
@@ -42,6 +49,12 @@ function App() {
         onClick={() => switchView('gym')}
       >
         Gym Environments
+      </button>
+      <button
+        type="button"
+        onClick={() => switchView('combatos')}
+      >
+        CombatOS
       </button>
     </nav>
   )

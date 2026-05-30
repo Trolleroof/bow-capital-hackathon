@@ -1,0 +1,7 @@
+[install]
+# Keep optional native deps aligned with the machine Bun runs on.
+optional = true
+
+[run]
+# Use Bun instead of Node for npm scripts (avoids x64/arm64 binding mismatches).
+bun = true

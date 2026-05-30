@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { ALTITUDE, GRID, N_AGENTS, SwarmEnv, WORLD_HALF } from '../swarm/sim'
+import { ALTITUDE, GRID, N_AGENTS, SwarmEnv, WORLD_HALF, MAX_SPEED } from '../swarm/sim'
 import { loadPolicy, type Policy } from '../swarm/policy'
 import { makeDrone, updateDrone, Trail, type Drone } from '../swarm/drone'
 import { drawMinimap, type MiniAgent } from '../swarm/minimap'
@@ -19,6 +19,8 @@ interface PoseSample {
 
 interface CompositeScenePanelProps {
   trajectoryUrl?: string
+  missionName?: string
+  missionBrief?: string
   /**
    * Mock 3DGS point cloud by default. Swap-in seam for the REAL Gaussian splat
    * reconstructed from drone footage: point this at a JSON of {x,y,z,r,g,b}
@@ -70,8 +72,8 @@ function makeMockSplat() {
     const z = -0.08 + ridge + Math.random() * 0.16
     const p = scenePoint(x, y, z)
     positions.set([p.x, p.y, p.z], i * 3)
-    const warm = 0.28 + Math.random() * 0.26
-    colors.set([warm, 0.38 + Math.random() * 0.28, 0.32 + Math.random() * 0.18], i * 3)
+    const soil = 0.3 + Math.random() * 0.18
+    colors.set([soil, 0.44 + Math.random() * 0.22, 0.24 + Math.random() * 0.08], i * 3)
   }
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
@@ -142,7 +144,12 @@ function heuristicActions(env: SwarmEnv): Float32Array {
 
 const NOMINAL = 'all units nominal · coverage sweep active'
 
-export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: CompositeScenePanelProps) {
+export default function CompositeScenePanel({
+  trajectoryUrl,
+  splatPointsUrl,
+  missionName = 'Land Coverage Survey',
+  missionBrief = 'Field reconstruction and coverage sweep',
+}: CompositeScenePanelProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const miniRef = useRef<HTMLCanvasElement | null>(null)
   const envRef = useRef(new SwarmEnv(400, 7))
@@ -157,6 +164,46 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
 
   // setStatus lives in React; the render loop signals via this ref.
   const statusRef = useRef<{ text: string; lost: boolean } | null>(null)
+
+  // Camera control state
+  const [cameraMode, setCameraMode] = useState<'orbit' | 'drone-orbit' | 'fpv' | 'fps'>('orbit')
+  const [selectedDroneIndex, setSelectedDroneIndex] = useState<number>(0)
+  const [isPointerLocked, setIsPointerLocked] = useState(false)
+  const [droneStates, setDroneStates] = useState<{ id: number; alive: boolean; x: number; y: number; vx: number; vy: number }[]>([])
+
+  const cameraModeRef = useRef(cameraMode)
+  const selectedDroneIndexRef = useRef(selectedDroneIndex)
+  const keysPressed = useRef<{ [key: string]: boolean }>({})
+
+  useEffect(() => {
+    cameraModeRef.current = cameraMode
+  }, [cameraMode])
+
+  useEffect(() => {
+    selectedDroneIndexRef.current = selectedDroneIndex
+  }, [selectedDroneIndex])
+
+  // Key handlers for FPS movement
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase()
+      if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e'].includes(key)) {
+        keysPressed.current[key] = true
+      }
+    }
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase()
+      if (['w', 'a', 's', 'd', ' ', 'shift', 'q', 'e'].includes(key)) {
+        keysPressed.current[key] = false
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -212,6 +259,65 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
       ONE: THREE.TOUCH.ROTATE,
       TWO: THREE.TOUCH.DOLLY_PAN,
     }
+
+    // FPS mouse drag & pointer lock variables
+    let isDragging = false
+    let previousMousePosition = { x: 0, y: 0 }
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (cameraModeRef.current !== 'fps') return
+      isDragging = true
+      previousMousePosition = { x: e.clientX, y: e.clientY }
+      
+      const canvas = renderer.domElement
+      if (canvas.requestPointerLock) {
+        canvas.requestPointerLock()
+      }
+    }
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (cameraModeRef.current !== 'fps') return
+      
+      let dx = 0
+      let dy = 0
+      
+      if (document.pointerLockElement === renderer.domElement) {
+        dx = e.movementX
+        dy = e.movementY
+      } else if (isDragging) {
+        dx = e.clientX - previousMousePosition.x
+        dy = e.clientY - previousMousePosition.y
+        previousMousePosition = { x: e.clientX, y: e.clientY }
+      } else {
+        return
+      }
+      
+      const sensitivity = 0.0025
+      const euler = new THREE.Euler(0, 0, 0, 'YXZ')
+      euler.setFromQuaternion(camera.quaternion)
+      
+      euler.y -= dx * sensitivity
+      euler.x -= dy * sensitivity
+      
+      // Clamp pitch to avoid turning upside down (85 degrees)
+      euler.x = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, euler.x))
+      
+      camera.quaternion.setFromEuler(euler)
+    }
+
+    const onMouseUp = () => {
+      isDragging = false
+    }
+
+    const handlePointerLockChange = () => {
+      const canvas = renderer.domElement
+      setIsPointerLocked(document.pointerLockElement === canvas)
+    }
+
+    renderer.domElement.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    document.addEventListener('pointerlockchange', handlePointerLockChange)
 
     scene.add(new THREE.HemisphereLight(0xc9f0ff, 0x111911, 1.45))
     const key = new THREE.DirectionalLight(0xffffff, 1.4)
@@ -315,6 +421,7 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
 
     let raf = 0
     let last = performance.now()
+    let lastUIUpdate = 0
     const animate = (now: number) => {
       raf = requestAnimationFrame(animate)
       const delta = now - last
@@ -374,6 +481,20 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
         if (env.alive[i]) trails[i].push(current[i].x, current[i].z, current[i].y)
       }
 
+      // Update drone states for UI telemetry
+      if (now - lastUIUpdate > 80) {
+        lastUIUpdate = now
+        const states = Array.from({ length: env.n }, (_, i) => ({
+          id: i,
+          alive: env.alive[i],
+          x: env.pos[i * 2],
+          y: env.pos[i * 2 + 1],
+          vx: env.vel[i * 2] * MAX_SPEED,
+          vy: env.vel[i * 2 + 1] * MAX_SPEED,
+        }))
+        setDroneStates(states)
+      }
+
       // minimap (top-down coordination map)
       const mini = miniRef.current
       if (mini) {
@@ -394,7 +515,82 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
         statusRef.current = null
       }
 
-      controls.update()
+      // Camera control modes update
+      const currentMode = cameraModeRef.current
+      const selectedDroneIdx = selectedDroneIndexRef.current
+
+      if (currentMode === 'orbit') {
+        controls.enabled = true
+        controls.target.lerp(new THREE.Vector3(0, 1.1, 0), 0.1)
+        controls.update()
+      } else if (currentMode === 'drone-orbit') {
+        controls.enabled = true
+        const targetDrone = drones[selectedDroneIdx]
+        if (targetDrone) {
+          controls.target.lerp(targetDrone.group.position, 0.15)
+        }
+        controls.update()
+      } else if (currentMode === 'fpv') {
+        controls.enabled = false
+        const targetDrone = drones[selectedDroneIdx]
+        if (targetDrone) {
+          // FPV position: slightly above and forward in the drone's local coordinate space
+          const localOffset = new THREE.Vector3(0, 0.12, -0.32)
+          const worldOffset = localOffset.clone().applyQuaternion(targetDrone.group.quaternion)
+          const camPos = targetDrone.group.position.clone().add(worldOffset)
+          
+          camera.position.lerp(camPos, 0.25)
+          
+          // Look direction: local forward (0, 0, -1)
+          const localForward = new THREE.Vector3(0, 0, -1)
+          const worldForward = localForward.clone().applyQuaternion(targetDrone.group.quaternion)
+          const lookTarget = camera.position.clone().add(worldForward)
+          
+          const tempMatrix = new THREE.Matrix4()
+          tempMatrix.lookAt(camera.position, lookTarget, new THREE.Vector3(0, 1, 0))
+          const targetRotation = new THREE.Quaternion().setFromRotationMatrix(tempMatrix)
+          camera.quaternion.slerp(targetRotation, 0.2)
+        }
+      } else if (currentMode === 'fps') {
+        controls.enabled = false
+        // WASD key movement
+        const speed = 7.0 * dt
+        const moveDir = new THREE.Vector3()
+        
+        if (keysPressed.current['w']) {
+          const f = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
+          moveDir.add(f)
+        }
+        if (keysPressed.current['s']) {
+          const b = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion)
+          moveDir.add(b)
+        }
+        if (keysPressed.current['a']) {
+          const l = new THREE.Vector3(-1, 0, 0).applyQuaternion(camera.quaternion)
+          moveDir.add(l)
+        }
+        if (keysPressed.current['d']) {
+          const r = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion)
+          moveDir.add(r)
+        }
+        if (keysPressed.current[' '] || keysPressed.current['e']) {
+          moveDir.y += 1.0
+        }
+        if (keysPressed.current['shift'] || keysPressed.current['q']) {
+          moveDir.y -= 1.0
+        }
+        
+        if (moveDir.lengthSq() > 0) {
+          moveDir.normalize().multiplyScalar(speed)
+          camera.position.add(moveDir)
+          
+          // boundary checks
+          camera.position.x = Math.max(-WORLD_HALF * 1.5, Math.min(WORLD_HALF * 1.5, camera.position.x))
+          camera.position.y = Math.max(0.1, Math.min(15.0, camera.position.y))
+          camera.position.z = Math.max(-WORLD_HALF * 1.5, Math.min(WORLD_HALF * 1.5, camera.position.z))
+        }
+      }
+
       renderer.render(scene, camera)
     }
     raf = requestAnimationFrame(animate)
@@ -413,6 +609,13 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', onResize)
       renderer.domElement.removeEventListener('contextmenu', onContextMenu)
+      
+      // Clean up pointer lock and mouse listeners
+      renderer.domElement.removeEventListener('mousedown', onMouseDown)
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+      document.removeEventListener('pointerlockchange', handlePointerLockChange)
+
       controls.dispose()
       renderer.dispose()
       scene.traverse((obj) => {
@@ -427,9 +630,254 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
     }
   }, [splatPointsUrl, trajectoryUrl])
 
+  const selectedDroneState = droneStates[selectedDroneIndex]
+
+  const handleKillDrone = (idx: number) => {
+    const env = envRef.current
+    if (env) {
+      env.kill(idx)
+      setAlive(env.nAlive())
+      statusRef.current = { text: `UAV-0${idx + 1} propulsion system disabled · lost link`, lost: true }
+    }
+  }
+
+  const handleReviveDrone = (idx: number) => {
+    const env = envRef.current
+    if (env) {
+      env.revive(idx)
+      setAlive(env.nAlive())
+      statusRef.current = { text: `UAV-0${idx + 1} booted · link re-established`, lost: false }
+    }
+  }
+
   return (
     <section className="composite-scene" style={{ position: 'relative' }}>
       <div ref={mountRef} className="composite-canvas" />
+
+      {/* TACTICAL CAMERA CONSOLE */}
+      <div className="tactical-console">
+        <div className="console-header">
+          <span>◛ CAMERA SYSTEM</span>
+          <span style={{ fontSize: 9, opacity: 0.6 }}>CTRL_DECK</span>
+        </div>
+
+        <div className="console-section-title">Select View Mode</div>
+        <div className="console-btn-grid">
+          <button
+            type="button"
+            className={`console-btn ${cameraMode === 'orbit' ? 'active' : ''}`}
+            onClick={() => setCameraMode('orbit')}
+          >
+            GLOBAL ORBIT
+          </button>
+          <button
+            type="button"
+            className={`console-btn ${cameraMode === 'fps' ? 'active' : ''}`}
+            onClick={() => setCameraMode('fps')}
+          >
+            FREE FLY (FPS)
+          </button>
+          <button
+            type="button"
+            className={`console-btn ${cameraMode === 'drone-orbit' ? 'active' : ''}`}
+            onClick={() => setCameraMode('drone-orbit')}
+          >
+            DRONE TRACK
+          </button>
+          <button
+            type="button"
+            className={`console-btn ${cameraMode === 'fpv' ? 'active' : ''}`}
+            onClick={() => setCameraMode('fpv')}
+          >
+            DRONE FPV
+          </button>
+        </div>
+
+        {(cameraMode === 'drone-orbit' || cameraMode === 'fpv') && (
+          <>
+            <div className="console-section-title">Select UAV Platform</div>
+            <div className="uav-grid">
+              {Array.from({ length: N_AGENTS }).map((_, idx) => {
+                const droneInfo = droneStates[idx]
+                const isAlive = droneInfo ? droneInfo.alive : true
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    className={`uav-btn ${selectedDroneIndex === idx ? 'active' : ''}`}
+                    onClick={() => setSelectedDroneIndex(idx)}
+                  >
+                    0{idx + 1}
+                    <span className={`status-dot ${isAlive ? 'alive' : 'dead'}`} />
+                  </button>
+                )
+              })}
+            </div>
+
+            {selectedDroneState && (
+              <div className="telemetry-box">
+                <div style={{ fontWeight: 'bold', color: '#89f4c7', marginBottom: 4, fontSize: 11 }}>
+                  UAV-0{selectedDroneIndex + 1} TELEMETRY
+                </div>
+                <div className={`telemetry-row ${!selectedDroneState.alive ? 'warning' : ''}`}>
+                  <span>STATUS:</span>
+                  <span>{selectedDroneState.alive ? 'ONLINE' : 'LINK LOST'}</span>
+                </div>
+                <div className="telemetry-row">
+                  <span>POSITION X:</span>
+                  <span>{selectedDroneState.x.toFixed(2)}m</span>
+                </div>
+                <div className="telemetry-row">
+                  <span>POSITION Y:</span>
+                  <span>{selectedDroneState.y.toFixed(2)}m</span>
+                </div>
+                <div className="telemetry-row">
+                  <span>ALTITUDE:</span>
+                  <span>{selectedDroneState.alive ? '2.00m' : '0.00m'}</span>
+                </div>
+                <div className="telemetry-row">
+                  <span>SPEED:</span>
+                  <span>{Math.sqrt(selectedDroneState.vx ** 2 + selectedDroneState.vy ** 2).toFixed(2)} m/s</span>
+                </div>
+
+                <div className="telemetry-actions">
+                  {selectedDroneState.alive ? (
+                    <button
+                      type="button"
+                      className="btn-kill"
+                      onClick={() => handleKillDrone(selectedDroneIndex)}
+                    >
+                      KILL UAV
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-revive"
+                      onClick={() => handleReviveDrone(selectedDroneIndex)}
+                    >
+                      REVIVE UAV
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* FPV COCKPIT HUD OVERLAY */}
+      {cameraMode === 'fpv' && (
+        <div className="fpv-hud-overlay">
+          <div className="fpv-hud-glass" />
+          
+          {selectedDroneState && !selectedDroneState.alive ? (
+            <div className="fpv-hud-fault">
+              <div className="fault-title">▸ UAV SIGNAL LOST / FAULT ◂</div>
+              <div className="fault-desc">
+                Propulsion hardware disabled or link jammed. Coordinates frozen. Check operator command panel to re-establish connection.
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="fpv-hud-header">
+                <div>FEED: UAV-0{selectedDroneIndex + 1} // FPV COCKPIT</div>
+                <div className="rec-indicator">
+                  <span className="rec-dot" />
+                  <span>REC</span>
+                </div>
+              </div>
+
+              {/* Center Crosshair */}
+              <div className="fpv-hud-center">
+                <div className="hud-bracket hud-bracket-tl" />
+                <div className="hud-bracket hud-bracket-tr" />
+                <div className="hud-bracket hud-bracket-bl" />
+                <div className="hud-bracket hud-bracket-br" />
+                <div className="hud-crosshair-center" />
+              </div>
+
+              {/* Altitude Tape (Left) */}
+              <div className="fpv-hud-tape fpv-hud-tape-left">
+                <div style={{ fontSize: 8, opacity: 0.6, letterSpacing: 0.5 }}>ALT (m)</div>
+                <div className="tape-value">2.0</div>
+                <div className="tape-ticks">
+                  <span>- 3.0</span>
+                  <span>- 2.5</span>
+                  <span style={{ fontWeight: 'bold' }}>▸ 2.0</span>
+                  <span>- 1.5</span>
+                  <span>- 1.0</span>
+                </div>
+              </div>
+
+              {/* Speed Tape (Right) */}
+              <div className="fpv-hud-tape fpv-hud-tape-right">
+                <div style={{ fontSize: 8, opacity: 0.6, letterSpacing: 0.5 }}>SPD (m/s)</div>
+                <div className="tape-value">
+                  {selectedDroneState ? Math.sqrt(selectedDroneState.vx ** 2 + selectedDroneState.vy ** 2).toFixed(1) : '0.0'}
+                </div>
+                <div className="tape-ticks">
+                  <span>- 6.0</span>
+                  <span>- 4.0</span>
+                  <span>- 2.0</span>
+                  <span style={{ fontWeight: 'bold' }}>▸ ACT</span>
+                  <span>- 0.0</span>
+                </div>
+              </div>
+
+              <div className="fpv-hud-footer">
+                <div>GIMBAL PITCH: 0.0°</div>
+                <div>YAW: {selectedDroneState ? (Math.atan2(selectedDroneState.vy, selectedDroneState.vx) * (180 / Math.PI)).toFixed(0) : '0'}°</div>
+                <div>AUTONOMY STATUS: MAPPO_ACTIVE</div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* FPS CONTROLS HUD */}
+      {cameraMode === 'fps' && (
+        <>
+          {!isPointerLocked && (
+            <div
+              className="fps-pointer-prompt"
+              onClick={() => {
+                const canvas = mountRef.current?.querySelector('canvas')
+                if (canvas && canvas.requestPointerLock) {
+                  canvas.requestPointerLock()
+                }
+              }}
+            >
+              [ CLICK TO ENGAGE FLIGHT CONTROLS ]
+            </div>
+          )}
+
+          <div className="fps-instructions">
+            <div className="fps-title">UAV SIM FLIGHT DECK</div>
+            <div className="fps-keys">
+              <div className="fps-key-row">
+                <span>[W][A][S][D]</span>
+                <span>MANEUVER</span>
+              </div>
+              <div className="fps-key-row">
+                <span>[SPACE]</span>
+                <span>ASCEND</span>
+              </div>
+              <div className="fps-key-row">
+                <span>[L-SHIFT]</span>
+                <span>DESCEND</span>
+              </div>
+              <div className="fps-key-row">
+                <span>[MOUSE]</span>
+                <span>LOOK AROUND</span>
+              </div>
+              <div className="fps-key-row">
+                <span>[ESC]</span>
+                <span>RELEASE MOUSE</span>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* coordination minimap (top-right) */}
       <div
@@ -443,6 +891,7 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
           borderRadius: 4,
           fontFamily: 'monospace',
           color: '#4ef0a0',
+          zIndex: 10,
         }}
       >
         <div style={{ fontSize: 10, letterSpacing: 1, opacity: 0.8, marginBottom: 4 }}>
@@ -466,6 +915,7 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
           border: `1px solid ${lost ? 'rgba(255,107,107,0.5)' : 'rgba(47,174,122,0.4)'}`,
           borderRadius: 3,
           whiteSpace: 'nowrap',
+          zIndex: 10,
         }}
       >
         {lost ? '▸ ' : '▸ '}
@@ -474,7 +924,11 @@ export default function CompositeScenePanel({ trajectoryUrl, splatPointsUrl }: C
 
       <div className="mission-strip">
         <div>
-          <strong>GPS: DENIED</strong>
+          <strong>{missionName}</strong>
+          <span>{missionBrief}</span>
+        </div>
+        <div>
+          <span>GPS: DENIED</span>
           <span>LINK: NONE</span>
           <span>LOCALIZED</span>
         </div>

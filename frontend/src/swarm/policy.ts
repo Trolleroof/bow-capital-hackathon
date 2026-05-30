@@ -1,9 +1,9 @@
 /**
  * policy.ts — onnxruntime-web wrapper for the trained MAPPO actor.
  *
- * Loads frontend/public/policies/<envId>/policy.onnx (browser-served copy of
- * swarm/checkpoints/<envId>/policy.onnx from export_onnx.py) and runs inference
- * client-side (WASM) — no Python, works offline.
+ * Loads frontend/public/policies/<envId>/policy.onnx and runs it client-side
+ * (WASM execution provider) so the swarm's neural net inference happens
+ * entirely in the browser — no Python, works offline.
  *
  * ONNX contract (from swarm/export_onnx.py):
  *   input  "obs"     float32  (N, 36)   dynamic axis 0 = batch
@@ -25,27 +25,26 @@ export type PolicyStatus = 'not-trained' | 'training' | 'ready'
 const DEFAULT_ENV_ID = 'search-and-interdict'
 
 /**
- * Module-level active env ID. Set before Mission Sim mounts so
- * CompositeScenePanel's zero-arg `loadPolicy()` resolves correctly (#23).
+ * Module-level active env ID. Set this before Mission Sim mounts so zero-arg
+ * `loadPolicy()` resolves to the chosen scenario artifact.
  */
 let _activeEnvId: string | null = null
 
-/** Call from App before rendering Mission Sim to bind the checkpoint path. */
+/** Call from App before rendering Mission Sim to bind the active scenario. */
 export function setActiveEnvId(envId: string | null): void {
   _activeEnvId = envId
 }
 
-function resolvePolicyPath(envIdOrUrl?: string): string {
-  const target = envIdOrUrl ?? _activeEnvId ?? DEFAULT_ENV_ID
+function resolvePolicyPath(envIdOrUrl: string): string {
   if (
-    target.startsWith('/') ||
-    target.startsWith('./') ||
-    target.startsWith('../') ||
-    target.endsWith('.onnx')
+    envIdOrUrl.startsWith('/') ||
+    envIdOrUrl.startsWith('./') ||
+    envIdOrUrl.startsWith('../') ||
+    envIdOrUrl.endsWith('.onnx')
   ) {
-    return target
+    return envIdOrUrl
   }
-  return `/policies/${target}/policy.onnx`
+  return `/policies/${envIdOrUrl}/policy.onnx`
 }
 
 /**
@@ -88,15 +87,17 @@ function configureWasm() {
  * Load the policy and return an `act()` runner.
  *
  * Resolution order:
- *  1. Explicit env id or full URL/path argument
- *  2. `_activeEnvId` set via setActiveEnvId()
- *  3. DEFAULT_ENV_ID (`search-and-interdict`)
+ *  1. Explicit `envIdOrUrl` argument
+ *  2. `_activeEnvId` set via `setActiveEnvId()`
+ *  3. `search-and-interdict`
  */
 export async function loadPolicy(envIdOrUrl?: string): Promise<Policy> {
   configureWasm()
-  const url = resolvePolicyPath(envIdOrUrl)
+  const resolvedUrl = resolvePolicyPath(
+    envIdOrUrl ?? _activeEnvId ?? DEFAULT_ENV_ID,
+  )
 
-  const session = await ort.InferenceSession.create(url, {
+  const session = await ort.InferenceSession.create(resolvedUrl, {
     executionProviders: ['wasm'],
     graphOptimizationLevel: 'all',
   })

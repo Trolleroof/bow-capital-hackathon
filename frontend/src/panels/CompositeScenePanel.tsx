@@ -20,6 +20,7 @@ interface PoseSample {
 interface CompositeScenePanelProps {
   trajectoryUrl?: string
   missionName?: string
+  policyEnabled?: boolean
   /**
    * Mock 3DGS point cloud by default. Swap-in seam for the REAL Gaussian splat
    * reconstructed from drone footage: point this at a JSON of {x,y,z,r,g,b}
@@ -188,24 +189,15 @@ async function loadSplatPoints(url?: string): Promise<THREE.Points> {
   }
 }
 
-function heuristicActions(env: SwarmEnv): Float32Array {
-  const actions = new Float32Array(env.n * 2)
-  for (let i = 0; i < env.n; i++) {
-    const angle = (i / env.n) * Math.PI * 2 + env.t * 0.18
-    const targetX = Math.cos(angle) * WORLD_HALF * 0.74
-    const targetY = Math.sin(angle) * WORLD_HALF * 0.74
-    actions[i * 2] = Math.max(-1, Math.min(1, (targetX - env.pos[i * 2]) / 5))
-    actions[i * 2 + 1] = Math.max(-1, Math.min(1, (targetY - env.pos[i * 2 + 1]) / 5))
-  }
-  return actions
-}
 
-const NOMINAL = 'all units nominal · coverage sweep active'
+const NOMINAL = 'trained policy active · coverage objective executing'
+const POLICY_REQUIRED = 'train and export policy before mission launch'
 
 export default function CompositeScenePanel({
   trajectoryUrl,
   splatPointsUrl,
   missionName = 'Land Coverage Survey',
+  policyEnabled = false,
 }: CompositeScenePanelProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const miniRef = useRef<HTMLCanvasElement | null>(null)
@@ -214,7 +206,7 @@ export default function CompositeScenePanel({
   const resetNextRef = useRef(false)
   const reviveNextRef = useRef(false)
   const [provider, setProvider] = useState('loading')
-  const [alive, setAlive] = useState(N_AGENTS)
+  const [alive, setAlive] = useState(0)
   const [coverage, setCoverage] = useState(0)
   const [meanAction, setMeanAction] = useState(0)
   const [status, setStatus] = useState(NOMINAL)
@@ -308,25 +300,44 @@ export default function CompositeScenePanel({
   }, [])
 
   useEffect(() => {
+    if (!policyEnabled) {
+      policyRef.current = null
+      setProvider('required')
+      setAlive(0)
+      setCoverage(0)
+      setMeanAction(0)
+      setStatus(POLICY_REQUIRED)
+      setLost(true)
+      return
+    }
+
     let cancelled = false
-    loadPolicy()
+    loadPolicy('/policy.onnx')
       .then((policy) => {
         if (!cancelled) {
           policyRef.current = policy
           setProvider(policy.provider)
-          setStatus('trained policy active · coverage objective executing')
+          setAlive(envRef.current.nAlive())
+          setStatus(NOMINAL)
+          setLost(false)
         }
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
-          setProvider('heuristic')
-          setStatus('policy load failed · heuristic fallback active')
+          console.error('[mission-sim] trained policy required:', err)
+          policyRef.current = null
+          setProvider('required')
+          setAlive(0)
+          setCoverage(0)
+          setMeanAction(0)
+          setStatus(POLICY_REQUIRED)
+          setLost(true)
         }
       })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [policyEnabled])
 
   useEffect(() => {
     const mount = mountRef.current
@@ -508,11 +519,15 @@ export default function CompositeScenePanel({
       ),
       new THREE.LineBasicMaterial({ color: 0x55b8ff, transparent: true, opacity: 0.34 }),
     )
+    trajectoryLine.visible = false
     scene.add(trajectoryLine)
 
     // --- drones (quadrotor meshes + trails from drone.ts) ---
     const drones: Drone[] = Array.from({ length: env0.n }, () => makeDrone())
-    drones.forEach((d) => scene.add(d.group))
+    drones.forEach((d) => {
+      d.group.visible = false
+      scene.add(d.group)
+    })
     const actionArrows = drones.map(() => {
       const arrow = new THREE.ArrowHelper(
         new THREE.Vector3(1, 0, 0),
@@ -522,6 +537,7 @@ export default function CompositeScenePanel({
         0.45,
         0.22,
       )
+      arrow.visible = false
       scene.add(arrow)
       return arrow
     })
@@ -530,6 +546,7 @@ export default function CompositeScenePanel({
     )
     const trails = drones.map(() => {
       const t = new Trail(0x4df09a)
+      t.line.visible = false
       scene.add(t.line)
       return t
     })
@@ -537,13 +554,18 @@ export default function CompositeScenePanel({
     let frameTimer = 0
     let disposed = false
     let stepping = false
+    let splatObject: THREE.Points | null = null
     void loadTrajectory(trajectoryUrl).then((loaded) => {
       const vertices = loaded.map((p) => scenePoint(p.x, p.y, p.z))
       trajectoryLine.geometry.dispose()
       trajectoryLine.geometry = new THREE.BufferGeometry().setFromPoints(vertices)
     })
     void loadSplatPoints(splatPointsUrl).then((points) => {
-      if (!disposed) scene.add(points)
+      if (!disposed) {
+        points.visible = Boolean(policyRef.current)
+        splatObject = points
+        scene.add(points)
+      }
     })
 
     let raf = 0
@@ -557,6 +579,22 @@ export default function CompositeScenePanel({
       frameTimer += delta
 
       const env = envRef.current
+      const policy = policyRef.current
+      const missionLaunched = Boolean(policy)
+
+      coverMesh.visible = missionLaunched
+      trajectoryLine.visible = missionLaunched
+      if (splatObject) splatObject.visible = missionLaunched
+      drones.forEach((drone, i) => {
+        drone.group.visible = missionLaunched
+        trails[i].line.visible = missionLaunched
+        if (!missionLaunched) actionArrows[i].visible = false
+      })
+      if (!missionLaunched && lastCoveredCount !== 0) {
+        for (let idx = 0; idx < GRID * GRID; idx++) coverMesh.setMatrixAt(idx, HIDDEN)
+        coverMesh.instanceMatrix.needsUpdate = true
+        lastCoveredCount = 0
+      }
 
       if (resetNextRef.current) {
         resetNextRef.current = false
@@ -565,26 +603,36 @@ export default function CompositeScenePanel({
         lastCoveredCount = -1
         for (let idx = 0; idx < GRID * GRID; idx++) coverMesh.setMatrixAt(idx, HIDDEN)
         coverMesh.instanceMatrix.needsUpdate = true
-        statusRef.current = { text: NOMINAL, lost: false }
+        statusRef.current = missionLaunched
+          ? { text: NOMINAL, lost: false }
+          : { text: POLICY_REQUIRED, lost: true }
       }
       if (reviveNextRef.current) {
         reviveNextRef.current = false
         env.reviveAll()
-        statusRef.current = { text: NOMINAL, lost: false }
+        statusRef.current = missionLaunched
+          ? { text: NOMINAL, lost: false }
+          : { text: POLICY_REQUIRED, lost: true }
       }
-      if (frameTimer >= FRAME_MS && !stepping) {
+      if (frameTimer >= FRAME_MS && !stepping && policy) {
         frameTimer = 0
         stepping = true
         const obs = env.observe()
-        const actionPromise = policyRef.current
-          ? policyRef.current.act(obs, env.n)
-          : Promise.resolve(heuristicActions(env))
-        void actionPromise
+        void policy
+          .act(obs, env.n)
           .catch(() => {
-            setProvider('heuristic')
-            return heuristicActions(env)
+            policyRef.current = null
+            setProvider('required')
+            setAlive(0)
+            setCoverage(0)
+            setMeanAction(0)
+            setStatus(POLICY_REQUIRED)
+            setLost(true)
+            stepping = false
+            return null
           })
           .then((actions) => {
+            if (!actions) return
             env.step(actions)
             setAlive(env.nAlive())
             setCoverage(env.coverage())
@@ -601,7 +649,7 @@ export default function CompositeScenePanel({
       // drones: smooth toward target, then drone.ts handles spin + dead-state.
       // updateDrone(x, y, z) places at position.set(x, z, y), so we pass the
       // scene vector as (sx, sz, sy) to land at the intended (sx, sy, sz).
-      for (let i = 0; i < env.n; i++) {
+      if (missionLaunched) for (let i = 0; i < env.n; i++) {
         const target = scenePoint(
           env.pos[i * 2],
           env.pos[i * 2 + 1],
@@ -624,14 +672,16 @@ export default function CompositeScenePanel({
       // Update drone states for UI telemetry
       if (now - lastUIUpdate > 80) {
         lastUIUpdate = now
-        const states = Array.from({ length: env.n }, (_, i) => ({
-          id: i,
-          alive: env.alive[i],
-          x: env.pos[i * 2],
-          y: env.pos[i * 2 + 1],
-          vx: env.vel[i * 2] * MAX_SPEED,
-          vy: env.vel[i * 2 + 1] * MAX_SPEED,
-        }))
+        const states = missionLaunched
+          ? Array.from({ length: env.n }, (_, i) => ({
+              id: i,
+              alive: env.alive[i],
+              x: env.pos[i * 2],
+              y: env.pos[i * 2 + 1],
+              vx: env.vel[i * 2] * MAX_SPEED,
+              vy: env.vel[i * 2 + 1] * MAX_SPEED,
+            }))
+          : []
         setDroneStates(states)
       }
 
@@ -641,10 +691,19 @@ export default function CompositeScenePanel({
         const ctx = mini.getContext('2d')
         if (ctx) {
           const agents: MiniAgent[] = []
-          for (let i = 0; i < env.n; i++) {
-            agents.push({ x: env.pos[i * 2], y: env.pos[i * 2 + 1], alive: env.alive[i] })
+          if (missionLaunched) {
+            for (let i = 0; i < env.n; i++) {
+              agents.push({ x: env.pos[i * 2], y: env.pos[i * 2 + 1], alive: env.alive[i] })
+            }
           }
-          drawMinimap(ctx, mini.width, WORLD_HALF, GRID, env.coveredCells(), agents)
+          drawMinimap(
+            ctx,
+            mini.width,
+            WORLD_HALF,
+            GRID,
+            missionLaunched ? env.coveredCells() : new Uint8Array(GRID * GRID),
+            agents,
+          )
         }
       }
 
@@ -1114,7 +1173,7 @@ export default function CompositeScenePanel({
         </div>
         <div>
           <span>POLICY: {provider.toUpperCase()}</span>
-          {provider !== 'loading' && provider !== 'heuristic' && (
+          {provider !== 'loading' && provider !== 'required' && (
             <span>
               EVAL: {Math.round(TRAINED_COVERAGE * 100)}% / RANDOM {Math.round(RANDOM_COVERAGE * 100)}%
             </span>

@@ -2,7 +2,7 @@
  * verify_local_sim.mjs — headless parity check for the TS env port.
  *
  * Runs one full episode of the TypeScript SwarmEnv driven by the real trained
- * policies/search-and-interdict/policy.onnx (via onnxruntime-web in Node/Bun),
+ * policy.onnx (via onnxruntime-web in Node/Bun),
  * and prints final coverage.
  * If the obs construction / constants match env.py, the policy coordinates and
  * coverage reaches > 0.9 (Python reaches ~0.99). A wrong obs layout yields
@@ -14,10 +14,7 @@
 import * as ort from 'onnxruntime-web'
 import { SwarmEnv, OBS_DIM, ACT_DIM } from '../src/swarm/sim.ts'
 
-const ONNX = new URL(
-  '../public/policies/search-and-interdict/policy.onnx',
-  import.meta.url,
-).pathname
+const ONNX = new URL('../public/policy.onnx', import.meta.url).pathname
 const STEPS = 400
 const KILL_AT = 200 // mirror the demo: kill an agent mid-rollout
 

@@ -1406,6 +1406,268 @@
   outline-offset: 3px;
 }
 
+/* ── Menu screen ─────────────────────────────────────────────────────────── */
+
+.app-shell--menu {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  padding: 24px 32px;
+}
+
+.menu-viewport {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  position: relative;
+  z-index: 1;
+  max-width: 1280px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.menu-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 48px;
+}
+
+.menu-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.menu-title {
+  margin: 0;
+  font: 800 2.2rem/1 'Sora', 'Fira Sans', sans-serif;
+  letter-spacing: -0.05em;
+  color: var(--text);
+}
+
+.menu-subtitle {
+  color: var(--accent);
+  font: 700 0.74rem/1 'Fira Code', monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.menu-kicker {
+  margin-bottom: 20px;
+  color: var(--muted);
+  font: 600 0.78rem/1 'Fira Code', monospace;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.menu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.menu-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 24px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 30%),
+    var(--bg-panel);
+  backdrop-filter: blur(20px);
+  cursor: pointer;
+  transition:
+    border-color 200ms ease,
+    background-color 200ms ease,
+    transform 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.menu-card:hover {
+  border-color: rgba(113, 215, 255, 0.4);
+  background:
+    linear-gradient(180deg, rgba(113, 215, 255, 0.07), transparent 40%),
+    var(--bg-panel);
+  transform: translateY(-2px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+}
+
+.menu-card--ready {
+  border-color: rgba(113, 215, 255, 0.28);
+}
+
+.menu-card-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(120, 154, 180, 0.16);
+  background: rgba(3, 12, 20, 0.72);
+  transition: border-color 200ms ease;
+}
+
+.menu-card:hover .menu-card-preview {
+  border-color: rgba(113, 215, 255, 0.35);
+}
+
+.gym-mini-preview {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gym-mini-preview__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.menu-card-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.menu-card-name {
+  color: var(--text);
+  font: 700 1.1rem/1.2 'Fira Sans', sans-serif;
+}
+
+.menu-card-badge {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font: 700 0.72rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+
+.menu-card-badge[data-status='Ready'] {
+  background: rgba(113, 215, 255, 0.12);
+  color: var(--accent);
+}
+
+.menu-card-badge[data-status='Queued'] {
+  background: rgba(110, 240, 163, 0.1);
+  color: #6ef0a3;
+}
+
+.menu-card-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.menu-card-meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.menu-card-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text);
+  font: 600 0.82rem/1 'Fira Sans', sans-serif;
+}
+
+.menu-card-meta-label {
+  color: var(--muted);
+  font: 600 0.66rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.menu-card-cta {
+  margin-top: auto;
+  color: var(--accent);
+  font: 700 0.82rem/1 'Fira Code', monospace;
+  letter-spacing: 0.06em;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.menu-card:hover .menu-card-cta {
+  opacity: 1;
+}
+
+@media (max-width: 720px) {
+  .app-shell--menu {
+    padding: 16px;
+  }
+
+  .menu-header {
+    margin-bottom: 28px;
+  }
+
+  .menu-title {
+    font-size: 1.7rem;
+  }
+
+  .menu-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Gym env scenario dropdown ────────────────────────────────────────────── */
+
+.gym-env-select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.gym-env-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 36px;
+  padding: 0 36px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(8, 15, 23, 0.72);
+  color: var(--text);
+  font: 600 0.9rem/1 'Fira Sans', sans-serif;
+  cursor: pointer;
+  backdrop-filter: blur(16px);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.gym-env-select:hover,
+.gym-env-select:focus {
+  border-color: rgba(113, 215, 255, 0.5);
+  background: rgba(113, 215, 255, 0.1);
+  outline: none;
+}
+
+.gym-env-select option {
+  background: #0a141e;
+  color: var(--text);
+}
+
+.gym-env-select-arrow {
+  position: absolute;
+  right: 13px;
+  pointer-events: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
 /* ── #23 — Mission Sim policy badge ─────────────────────────────────────── */
 
 .sim-policy-badge {

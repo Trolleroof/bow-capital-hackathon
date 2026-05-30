@@ -17,7 +17,8 @@
 import { useEffect, useRef, useState } from 'react'
 import BattlefieldParamsPanel from './BattlefieldParamsPanel'
 import { getScenarioDefaults } from './battlefieldParams'
-import type { ScenarioCard, ScenarioTelemetry } from './scenarios'
+import { type ScenarioCard, type ScenarioTelemetry, getScenarioById } from './scenarios'
+import { checkPolicyExists } from '../swarm/policy'
 import { TrainingStatsDrawer, useTraining } from './TrainingDashboard'
 
 // ──────────────────────────────────────────────── scene types ──────────────
@@ -234,7 +235,19 @@ function emptyGrid(): number[][] {
 
 // ─────────────────────────────────────────────── component ────────────────
 
-export default function GymScenarioStage({ scenario }: { scenario: ScenarioCard }) {
+export interface GymScenarioStageProps {
+  scenario: ScenarioCard
+  onPolicyReady?: (envId: string) => void
+  onTrainingStart?: (envId: string) => void
+  onTrainingError?: (message: string) => void
+}
+
+export default function GymScenarioStage({
+  scenario,
+  onPolicyReady,
+  onTrainingStart,
+  onTrainingError,
+}: GymScenarioStageProps) {
   // ── animation tick ──────────────────────────────────────────────────────
   const [tick, setTick] = useState(0)
 
@@ -248,8 +261,19 @@ export default function GymScenarioStage({ scenario }: { scenario: ScenarioCard 
   const [paramsOpen, setParamsOpen] = useState(false)
 
   // ── training (#16) ──────────────────────────────────────────────────────
-  const { status, metrics, start, stop } = useTraining(scenario.id, params)
+  const { status, metrics, start, stop } = useTraining(scenario.id, params, {
+    onComplete: async envId => {
+      const exists = await checkPolicyExists(envId)
+      if (exists) onPolicyReady?.(envId)
+    },
+    onError: msg => onTrainingError?.(msg),
+  })
   const isTraining = status === 'running'
+
+  const handleTrain = () => {
+    onTrainingStart?.(scenario.id)
+    void start()
+  }
 
   // ── overlay #1: coverage heatmap (#20) ──────────────────────────────────
   const heatmapRef = useRef<number[][]>(emptyGrid())
@@ -287,7 +311,20 @@ export default function GymScenarioStage({ scenario }: { scenario: ScenarioCard 
   // ── overlay #2: velocity vectors (#20) ──────────────────────────────────
   const prevAgentsRef = useRef<Map<string, Point>>(new Map())
 
-  const frame = renderFrame(scenario, tick % 120)
+  let frame = renderFrame(scenario, tick % 120)
+  if (isTraining && params.weather.windSpeed > 0) {
+    const drift = params.weather.windSpeed * 0.04
+    const dx = Math.cos(params.weather.windDirRad) * drift
+    const dy = Math.sin(params.weather.windDirRad) * drift
+    frame = {
+      ...frame,
+      agents: frame.agents.map(a => ({
+        ...a,
+        x: clamp(a.x + dx, 4, 96),
+        y: clamp(a.y + dy, 4, 96),
+      })),
+    }
+  }
 
   // Compute per-agent velocity from frame diff (scaled for visibility)
   const velocities = frame.agents.map(agent => {
@@ -317,8 +354,8 @@ export default function GymScenarioStage({ scenario }: { scenario: ScenarioCard 
         params={params}
         onChange={setParams}
         isTraining={isTraining}
-        onTrain={start}
-        onStop={stop}
+        onTrain={handleTrain}
+        onStop={() => void stop()}
         open={paramsOpen}
         onToggleOpen={() => setParamsOpen(v => !v)}
       />
@@ -468,3 +505,96 @@ export default function GymScenarioStage({ scenario }: { scenario: ScenarioCard 
     </>
   )
 }
+
+export interface ScenarioMiniPreviewProps {
+  scenarioId: string
+  className?: string
+}
+
+export function ScenarioMiniPreview({ scenarioId, className }: ScenarioMiniPreviewProps) {
+  const [tick, setTick] = useState(() => Math.floor(Math.random() * 120))
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick(v => (v + 1) % 120), 120)
+    return () => window.clearInterval(id)
+  }, [scenarioId])
+
+  const scenario = getScenarioById(scenarioId)
+  const frame = renderFrame(scenario, tick)
+
+  return (
+    <div className={`gym-mini-preview ${className ?? ''}`}>
+      <svg
+        className="gym-mini-preview__svg"
+        viewBox="0 0 100 100"
+        role="img"
+        aria-label={scenario.summary}
+      >
+        <defs>
+          <pattern id={`mini-grid-${scenarioId}`} width="10" height="10" patternUnits="userSpaceOnUse">
+            <path d="M 10 0 L 0 0 0 10" fill="none" className="gym-scene__grid-line" stroke="rgba(255,255,255,0.03)" strokeWidth="0.5" />
+          </pattern>
+        </defs>
+
+        <rect x="0" y="0" width="100" height="100" className="gym-scene__floor" fill="#080f17" />
+        <rect x="0" y="0" width="100" height="100" fill={`url(#mini-grid-${scenarioId})`} />
+
+        {/* boundary geometry */}
+        {frame.contour ? (
+          <polygon
+            points={frame.contour.map(p => `${p.x},${p.y}`).join(' ')}
+            className="gym-scene__boundary"
+          />
+        ) : null}
+
+        {frame.ringRadius ? (
+          <circle cx="50" cy="50" r={frame.ringRadius} className="gym-scene__ring" />
+        ) : null}
+
+        {frame.assets?.map(asset => (
+          <g key={asset.id}>
+            <circle cx={asset.x} cy={asset.y} r={asset.radius} className="gym-scene__asset" />
+            <circle cx={asset.x} cy={asset.y} r={asset.radius + 5} className="gym-scene__asset-halo" />
+          </g>
+        ))}
+
+        {frame.paths?.map((path, i) => (
+          <polyline
+            key={`path-${i}`}
+            points={path.map(p => `${p.x},${p.y}`).join(' ')}
+            className="gym-scene__path"
+          />
+        ))}
+
+        {frame.obstacles?.map(obs => (
+          <rect
+            key={obs.id}
+            x={obs.x - obs.width / 2}
+            y={obs.y - obs.height / 2}
+            width={obs.width}
+            height={obs.height}
+            rx="2.5"
+            className="gym-scene__obstacle"
+            transform={obs.rotation ? `rotate(${obs.rotation} ${obs.x} ${obs.y})` : undefined}
+          />
+        ))}
+
+        {frame.agents.map(agent => (
+          <g key={agent.id} opacity={agent.alive === false ? 0.28 : 1}>
+            <circle
+              cx={agent.x} cy={agent.y}
+              r={(agent.radius ?? 3.2) + 2.5}
+              className="gym-scene__agent-halo"
+            />
+            <circle
+              cx={agent.x} cy={agent.y}
+              r={agent.radius ?? 3.2}
+              className={teamClass(agent.team)}
+            />
+          </g>
+        ))}
+      </svg>
+    </div>
+  )
+}
+

@@ -1,18 +1,15 @@
 /**
- * TrainingDashboard.tsx
- *
- * Issue #16 — Train Policy / Stop Training button logic (mock stream).
- * Issue #17 — Live stats drawer: step, episode, reward, losses, coverage, n_alive, params_hash.
- *
- * When Track A ships the real SSE bus (#22), replace the setInterval block in
- * useTraining with an EventSource subscription on /api/train/stream?job_id=…
- * The TrainingMetrics shape already matches the #22 schema.
+ * TrainingDashboard.tsx — live metrics from swarm/train_service WebSocket (#16–#17, #22).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BattlefieldParams } from './battlefieldParams'
-
-// ─────────────────────────────────────── types (match #22 schema) ──────────
+import {
+  TRAIN_WS_URL,
+  type TrainEvent,
+  startTraining,
+  stopTraining,
+} from './trainApi'
 
 export interface TrainingMetrics {
   step: number
@@ -21,41 +18,38 @@ export interface TrainingMetrics {
   actor_loss: number
   critic_loss: number
   entropy: number
-  /** Fraction 0–1 of map cells visited by the swarm */
   coverage: number
   n_alive: number
   params_hash: string
 }
 
-export type TrainingStatus = 'idle' | 'running' | 'stopped'
+export type TrainingStatus = 'idle' | 'running' | 'stopped' | 'completed' | 'failed'
 
-// ──────────────────────────────────────────────── helpers ──────────────────
+function profileFromParams(params: BattlefieldParams): 'garrison' | 'combat' {
+  return params.logistics.attritionInjectRate < 0.01 && params.ew.gpsDenialLevel < 0.05
+    ? 'garrison'
+    : 'combat'
+}
 
-function djb2Hash(s: string): string {
-  let h = 5381
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h + s.charCodeAt(i)) >>> 0
+function eventToMetrics(event: TrainEvent, swarmSize: number): TrainingMetrics {
+  const losses = event.losses ?? {}
+  return {
+    step: event.step,
+    episode: Math.floor(event.step / 200),
+    reward: event.reward_mean ?? 0,
+    actor_loss: losses.pg_loss ?? 0,
+    critic_loss: losses.v_loss ?? 0,
+    entropy: losses.entropy ?? 0,
+    coverage: event.coverage ?? 0,
+    n_alive: swarmSize,
+    params_hash: (event.params_hash ?? '').slice(0, 8).toUpperCase(),
   }
-  return h.toString(16).padStart(8, '0').toUpperCase()
 }
 
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t
+export interface UseTrainingOptions {
+  onComplete?: (envId: string) => void
+  onError?: (message: string) => void
 }
-
-function noise(scale: number) {
-  return (Math.random() - 0.5) * scale
-}
-
-const SCENARIO_TARGETS: Record<string, { reward: number; coverage: number }> = {
-  'drone-vs-drone':       { reward: 1.4,  coverage: 0.68 },
-  'moving-target-track':  { reward: 0.9,  coverage: 0.82 },
-  'search-and-interdict': { reward: 1.1,  coverage: 0.92 },
-  'defend-asset':         { reward: 0.8,  coverage: 0.71 },
-  'swarm-vs-swarm-race':  { reward: 1.2,  coverage: 0.85 },
-}
-
-// ──────────────────────────────────────────── useTraining hook ─────────────
 
 export interface UseTrainingResult {
   status: TrainingStatus
@@ -65,143 +59,147 @@ export interface UseTrainingResult {
   stop: () => void
 }
 
-/**
- * Mock training loop — replace setInterval body with real SSE from #22 when ready.
- *
- * To wire real backend:
- *   1. POST /api/train  { env_id, params }  → { job_id }
- *   2. Open EventSource /api/train/stream?job_id=…
- *   3. Parse each `data:` line as TrainingMetrics JSON
- *   4. Call setMetrics / setHistory exactly as done here
- */
 export function useTraining(
   envId: string,
   params: BattlefieldParams,
+  options?: UseTrainingOptions,
 ): UseTrainingResult {
   const [status, setStatus] = useState<TrainingStatus>('idle')
   const [metrics, setMetrics] = useState<TrainingMetrics | null>(null)
   const [history, setHistory] = useState<TrainingMetrics[]>([])
 
-  const stepRef    = useRef(0)
-  const episodeRef = useRef(0)
-  const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const optionsRef = useRef(options)
+  optionsRef.current = options
 
-  const start = useCallback(() => {
-    stepRef.current    = 0
-    episodeRef.current = 0
-    setMetrics(null)
-    setHistory([])
-    setStatus('running')
+  const closeSocket = useCallback(() => {
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
+    }
   }, [])
 
-  const stop = useCallback(() => setStatus('stopped'), [])
+  const handleEvent = useCallback(
+    (event: TrainEvent) => {
+      if (event.env_id && event.env_id !== envId) return
 
-  useEffect(() => {
-    if (status !== 'running') {
-      if (timerRef.current !== null) {
-        clearInterval(timerRef.current)
-        timerRef.current = null
-      }
-      return
-    }
-
-    const target      = SCENARIO_TARGETS[envId] ?? { reward: 1.0, coverage: 0.75 }
-    const paramsHash  = djb2Hash(JSON.stringify(params))
-
-    // ── mock metric stream (250 ms cadence) ──────────────────────────────
-    timerRef.current = setInterval(() => {
-      stepRef.current += Math.floor(Math.random() * 8) + 1
-      const step = stepRef.current
-
-      // rough episode boundary every ~200 steps
-      episodeRef.current = Math.floor(step / 200)
-
-      const t = Math.min(step / 3000, 1) // convergence horizon
-
-      const reward      = lerp(-2,   target.reward,    Math.pow(t, 0.7)) + noise(0.25)
-      const actor_loss  = lerp(1.5,  0.12,             Math.pow(t, 0.6)) + noise(0.06)
-      const critic_loss = lerp(2.0,  0.18,             Math.pow(t, 0.55)) + noise(0.1)
-      const entropy     = lerp(0.95, 0.18,             Math.pow(t, 0.5))  + noise(0.04)
-      const coverage    = Math.min(
-        lerp(0, target.coverage, Math.pow(t, 0.8)) + noise(0.015),
-        1,
-      )
-      const n_alive = Math.max(
-        1,
-        Math.round(
-          params.logistics.swarmSize -
-            params.logistics.attritionInjectRate *
-            params.logistics.swarmSize *
-            3 *
-            Math.random(),
-        ),
-      )
-
-      const m: TrainingMetrics = {
-        step,
-        episode:     episodeRef.current,
-        reward:      Math.round(reward * 100) / 100,
-        actor_loss:  Math.max(0, Math.round(actor_loss  * 1000) / 1000),
-        critic_loss: Math.max(0, Math.round(critic_loss * 1000) / 1000),
-        entropy:     Math.max(0, Math.round(entropy     * 1000) / 1000),
-        coverage:    Math.max(0, Math.round(coverage    * 100)  / 100),
-        n_alive,
-        params_hash: paramsHash,
-      }
-
+      const m = eventToMetrics(event, params.logistics.swarmSize)
       setMetrics(m)
       setHistory(prev => {
         const next = [...prev, m]
         return next.length > 80 ? next.slice(-80) : next
       })
-    }, 250)
 
-    return () => {
-      if (timerRef.current !== null) {
-        clearInterval(timerRef.current)
-        timerRef.current = null
+      if (event.phase === 'export_failed') {
+        setStatus('failed')
+        optionsRef.current?.onError?.(event.error ?? 'ONNX export failed')
+        closeSocket()
+        return
+      }
+
+      if (event.phase === 'final' || event.phase === 'exported') {
+        setStatus('completed')
+        closeSocket()
+        optionsRef.current?.onComplete?.(envId)
+      }
+    },
+    [envId, params.logistics.swarmSize, closeSocket],
+  )
+
+  const start = useCallback(async () => {
+    setMetrics(null)
+    setHistory([])
+    setStatus('running')
+    closeSocket()
+
+    const profile = profileFromParams(params)
+    const { ok, error } = await startTraining(envId, profile)
+    if (!ok) {
+      setStatus('failed')
+      optionsRef.current?.onError?.(
+        error ??
+          'Training service not reachable. Restart with `cd frontend && bun dev` (needs `uv` installed), or run train_service manually.',
+      )
+      return
+    }
+
+    const ws = new WebSocket(TRAIN_WS_URL)
+    wsRef.current = ws
+
+    ws.onmessage = (ev) => {
+      try {
+        const parsed = JSON.parse(String(ev.data)) as TrainEvent
+        if (parsed.topic === 'train') handleEvent(parsed)
+      } catch {
+        /* ignore malformed frames */
       }
     }
-  }, [status, envId, params])
+
+    ws.onerror = () => {
+      setStatus(prev => {
+        if (prev === 'running') {
+          optionsRef.current?.onError?.(
+            'WebSocket connection to training service failed',
+          )
+          return 'failed'
+        }
+        return prev
+      })
+    }
+
+    ws.onclose = () => {
+      wsRef.current = null
+    }
+  }, [envId, params, closeSocket, handleEvent])
+
+  const stop = useCallback(async () => {
+    closeSocket()
+    await stopTraining(envId)
+    setStatus('stopped')
+  }, [envId, closeSocket])
+
+  useEffect(() => () => closeSocket(), [closeSocket])
 
   return { status, metrics, history, start, stop }
 }
-
-// ──────────────────────────────────── TrainingStatsDrawer component ────────
 
 interface TrainingStatsDrawerProps {
   metrics: TrainingMetrics | null
   status: TrainingStatus
 }
 
-/**
- * Issue #17 — live stats overlay anchored to the bottom of .gym-scene.
- * Appears whenever status !== 'idle'.
- */
 export function TrainingStatsDrawer({ metrics, status }: TrainingStatsDrawerProps) {
   if (status === 'idle' || !metrics) return null
 
+  const statusLabel =
+    status === 'running'
+      ? 'TRAINING'
+      : status === 'completed'
+        ? 'COMPLETE'
+        : status === 'failed'
+          ? 'FAILED'
+          : 'STOPPED'
+
   const chips = [
-    { label: 'Step',        value: metrics.step.toLocaleString() },
-    { label: 'Episode',     value: String(metrics.episode) },
-    { label: 'Reward',      value: metrics.reward.toFixed(2),     accent: metrics.reward > 0 },
-    { label: 'Actor ℒ',    value: metrics.actor_loss.toFixed(3) },
-    { label: 'Critic ℒ',   value: metrics.critic_loss.toFixed(3) },
-    { label: 'Coverage',    value: `${Math.round(metrics.coverage * 100)}%`, accent: true },
-    { label: 'N Alive',     value: String(metrics.n_alive) },
-    { label: 'Hash',        value: metrics.params_hash.slice(0, 7) },
+    { label: 'Step', value: metrics.step.toLocaleString() },
+    { label: 'Episode', value: String(metrics.episode) },
+    { label: 'Reward', value: metrics.reward.toFixed(2), accent: metrics.reward > 0 },
+    { label: 'Actor ℒ', value: metrics.actor_loss.toFixed(3) },
+    { label: 'Critic ℒ', value: metrics.critic_loss.toFixed(3) },
+    { label: 'Coverage', value: `${Math.round(metrics.coverage * 100)}%`, accent: true },
+    { label: 'N Alive', value: String(metrics.n_alive) },
+    { label: 'Hash', value: metrics.params_hash.slice(0, 7) },
   ]
 
   return (
     <div className="gym-stats-overlay" aria-live="polite" aria-label="Training metrics">
-      {/* status chip */}
-      <div className={`gym-stat-chip ${status === 'running' ? 'gym-stat-chip--pulse' : ''}`}>
+      <div
+        className={`gym-stat-chip ${status === 'running' ? 'gym-stat-chip--pulse' : ''} ${status === 'completed' ? 'gym-stat-chip--accent' : ''}`}
+      >
         <span className="gym-stat-chip__label">Status</span>
         <strong className="gym-stat-chip__value">
-          {status === 'running' && (
-            <span className="gym-training-dot" aria-hidden="true" />
-          )}
-          {status === 'running' ? 'TRAINING' : 'STOPPED'}
+          {status === 'running' && <span className="gym-training-dot" aria-hidden="true" />}
+          {statusLabel}
         </strong>
       </div>
 

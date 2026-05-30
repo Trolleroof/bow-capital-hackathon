@@ -1,3 +1,8 @@
+# Clean
+.clean/
+.clean-agent/
+.clean-worktrees/
+
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

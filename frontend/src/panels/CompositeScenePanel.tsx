@@ -34,6 +34,8 @@ const CELL = (2 * WORLD_HALF) / GRID
 const WORLD_Y_MIN = 0.35
 const WORLD_Y_MAX = 11
 const WORLD_XZ_LIMIT = WORLD_HALF
+const TRAINED_COVERAGE = 0.9965
+const RANDOM_COVERAGE = 0.4725
 
 // scene mapping: world (x,y,z) -> three (x = x, up = z, depth = -y)
 function scenePoint(x: number, y: number, z: number): THREE.Vector3 {
@@ -214,6 +216,7 @@ export default function CompositeScenePanel({
   const [provider, setProvider] = useState('loading')
   const [alive, setAlive] = useState(N_AGENTS)
   const [coverage, setCoverage] = useState(0)
+  const [meanAction, setMeanAction] = useState(0)
   const [status, setStatus] = useState(NOMINAL)
   const [lost, setLost] = useState(false)
 
@@ -311,10 +314,14 @@ export default function CompositeScenePanel({
         if (!cancelled) {
           policyRef.current = policy
           setProvider(policy.provider)
+          setStatus('trained policy active · coverage objective executing')
         }
       })
       .catch(() => {
-        if (!cancelled) setProvider('heuristic')
+        if (!cancelled) {
+          setProvider('heuristic')
+          setStatus('policy load failed · heuristic fallback active')
+        }
       })
     return () => {
       cancelled = true
@@ -506,6 +513,18 @@ export default function CompositeScenePanel({
     // --- drones (quadrotor meshes + trails from drone.ts) ---
     const drones: Drone[] = Array.from({ length: env0.n }, () => makeDrone())
     drones.forEach((d) => scene.add(d.group))
+    const actionArrows = drones.map(() => {
+      const arrow = new THREE.ArrowHelper(
+        new THREE.Vector3(1, 0, 0),
+        new THREE.Vector3(0, ALTITUDE + 0.35, 0),
+        1.8,
+        0x7fd9ff,
+        0.45,
+        0.22,
+      )
+      scene.add(arrow)
+      return arrow
+    })
     const current: THREE.Vector3[] = drones.map((_, i) =>
       scenePoint(env0.pos[i * 2], env0.pos[i * 2 + 1], ALTITUDE),
     )
@@ -569,6 +588,11 @@ export default function CompositeScenePanel({
             env.step(actions)
             setAlive(env.nAlive())
             setCoverage(env.coverage())
+            let total = 0
+            for (let i = 0; i < env.n; i++) {
+              total += Math.hypot(actions[i * 2], actions[i * 2 + 1])
+            }
+            setMeanAction(total / env.n)
             refreshCoverage()
             stepping = false
           })
@@ -587,6 +611,14 @@ export default function CompositeScenePanel({
         const yaw = -Math.atan2(env.vel[i * 2 + 1], env.vel[i * 2])
         updateDrone(drones[i], current[i].x, current[i].z, current[i].y, yaw, env.alive[i], dt)
         if (env.alive[i]) trails[i].push(current[i].x, current[i].z, current[i].y)
+        const speed = Math.hypot(env.vel[i * 2], env.vel[i * 2 + 1])
+        const arrow = actionArrows[i]
+        arrow.visible = env.alive[i] && speed > 0.03
+        arrow.position.set(current[i].x, current[i].y + 0.45, current[i].z)
+        if (speed > 0.03) {
+          arrow.setDirection(new THREE.Vector3(env.vel[i * 2], 0, -env.vel[i * 2 + 1]).normalize())
+          arrow.setLength(1.0 + speed * 1.4, 0.45, 0.22)
+        }
       }
 
       // Update drone states for UI telemetry
@@ -747,6 +779,10 @@ export default function CompositeScenePanel({
       document.removeEventListener('pointerlockchange', handlePointerLockChange)
 
       controls.dispose()
+      actionArrows.forEach((arrow) => {
+        arrow.line.geometry.dispose()
+        arrow.cone.geometry.dispose()
+      })
       renderer.dispose()
       scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.Points || obj instanceof THREE.Line) {
@@ -1078,6 +1114,12 @@ export default function CompositeScenePanel({
         </div>
         <div>
           <span>POLICY: {provider.toUpperCase()}</span>
+          {provider !== 'loading' && provider !== 'heuristic' && (
+            <span>
+              EVAL: {Math.round(TRAINED_COVERAGE * 100)}% / RANDOM {Math.round(RANDOM_COVERAGE * 100)}%
+            </span>
+          )}
+          <span>CMD: {Math.round(meanAction * 100)}%</span>
           <span>ALIVE: {alive}</span>
           <span>COVERAGE: {Math.round(coverage * 100)}%</span>
         </div>

@@ -45,6 +45,8 @@ interface SwarmMessage {
 
 // World spans [-WORLD_HALF, WORLD_HALF] in x and y (matches env.WORLD_HALF).
 const WORLD_HALF = ENV_WORLD_HALF
+const TRAINED_COVERAGE = 0.9965
+const RANDOM_COVERAGE = 0.4725
 
 interface SwarmPanelProps {
   url?: string
@@ -67,6 +69,10 @@ export default function SwarmPanel({
   const [edgeLabel, setEdgeLabel] = useState(
     source === 'local' ? 'BROWSER (onnx … loading)' : 'bus',
   )
+  const [policyState, setPolicyState] = useState<'loading' | 'active' | 'failed' | 'bus'>(
+    source === 'local' ? 'loading' : 'bus',
+  )
+  const [meanAction, setMeanAction] = useState(0)
   const [status, setStatus] = useState('all units nominal · coverage sweep active')
 
   // --- WebSocket subscription (bus mode only) ---
@@ -122,10 +128,14 @@ export default function SwarmPanel({
         if (cancelled) return
         policyRef.current = p
         setEdgeLabel(`BROWSER (onnx · ${p.provider})`)
+        setPolicyState('active')
+        setStatus('trained policy active · coverage objective executing')
       })
       .catch((err) => {
         console.error('[swarm] failed to load policy.onnx:', err)
         setEdgeLabel('BROWSER (onnx FAILED)')
+        setPolicyState('failed')
+        setStatus('policy load failed · no learned control available')
       })
 
     return () => {
@@ -244,6 +254,7 @@ export default function SwarmPanel({
     // drone meshes + trails, created lazily / reused across frames
     const drones: Drone[] = []
     const trails: Trail[] = []
+    const actionArrows: THREE.ArrowHelper[] = []
     const ensureDrone = (i: number): Drone => {
       let d = drones[i]
       if (!d) {
@@ -253,6 +264,16 @@ export default function SwarmPanel({
         const t = new Trail(0x2fae7a)
         trails[i] = t
         scene.add(t.line)
+        const arrow = new THREE.ArrowHelper(
+          new THREE.Vector3(1, 0, 0),
+          new THREE.Vector3(0, ALTITUDE + 0.25, 0),
+          1.8,
+          0x7fd9ff,
+          0.45,
+          0.22,
+        )
+        actionArrows[i] = arrow
+        scene.add(arrow)
       }
       return d
     }
@@ -296,6 +317,13 @@ export default function SwarmPanel({
               sim.step(actions)
               setNAlive(sim.nAlive())
               setCoverage(sim.coverage())
+              let total = 0
+              for (let i = 0; i < sim.n; i++) {
+                const ax = actions[i * 2]
+                const ay = actions[i * 2 + 1]
+                total += Math.hypot(ax, ay)
+              }
+              setMeanAction(total / sim.n)
             })
             .catch((err) => {
               console.error('[swarm] inference error:', err)
@@ -314,6 +342,18 @@ export default function SwarmPanel({
             const d = ensureDrone(i)
             updateDrone(d, x, ALTITUDE, -y, yaw, alive, dt)
             if (alive) trails[i].push(x, -y, ALTITUDE)
+            const arrow = actionArrows[i]
+            if (arrow) {
+              const ax = sim.vel[i * 2]
+              const ay = sim.vel[i * 2 + 1]
+              const speed = Math.hypot(ax, ay)
+              arrow.visible = alive && speed > 0.03
+              arrow.position.set(x, ALTITUDE + 0.45, -y)
+              if (speed > 0.03) {
+                arrow.setDirection(new THREE.Vector3(ax, 0, -ay).normalize())
+                arrow.setLength(1.0 + speed * 1.4, 0.45, 0.22)
+              }
+            }
           }
           if (miniCtx) {
             const agents: MiniAgent[] = []
@@ -336,6 +376,7 @@ export default function SwarmPanel({
           for (let i = msg.agents.length; i < drones.length; i++) {
             drones[i].group.visible = false
           }
+          for (const arrow of actionArrows) arrow.visible = false
           if (miniCtx) {
             const agents: MiniAgent[] = msg.agents.map((a) => ({
               x: a.x,
@@ -365,6 +406,10 @@ export default function SwarmPanel({
       window.removeEventListener('resize', onResize)
       clearTrailsRef.current = null
       for (const t of trails) t.dispose()
+      for (const arrow of actionArrows) {
+        arrow.line.geometry.dispose()
+        arrow.cone.geometry.dispose()
+      }
       coverGeo.dispose()
       coverMat.dispose()
       renderer.dispose()
@@ -399,6 +444,26 @@ export default function SwarmPanel({
         </div>
         <div style={{ opacity: 0.85 }}>AGENTS ALIVE: {nAlive}</div>
         <div style={{ opacity: 0.85 }}>EDGE: {local ? edgeLabel : 'bus'}</div>
+        {local && (
+          <div
+            style={{
+              opacity: 0.95,
+              color: policyState === 'active' ? '#7fd9ff' : policyState === 'failed' ? '#ff6b6b' : '#d5b76a',
+            }}
+          >
+            POLICY: {policyState.toUpperCase()}
+          </div>
+        )}
+        {local && policyState === 'active' && (
+          <>
+            <div style={{ opacity: 0.85 }}>
+              EVAL: {(TRAINED_COVERAGE * 100).toFixed(0)}% / RANDOM {(RANDOM_COVERAGE * 100).toFixed(0)}%
+            </div>
+            <div style={{ opacity: 0.85 }}>
+              CMD: {(meanAction * 100).toFixed(0)}%
+            </div>
+          </>
+        )}
         {local && (
           <div style={{ opacity: 0.85 }}>
             COVERAGE: {(coverage * 100).toFixed(0)}%

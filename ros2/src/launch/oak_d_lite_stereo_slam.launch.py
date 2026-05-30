@@ -12,6 +12,7 @@ Launches:
 import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
 from launch_ros.descriptions import ComposableNode
@@ -23,6 +24,11 @@ def launch_setup(context, *args, **kwargs):
     resolution = LaunchConfiguration("resolution", default="400p").perform(context)
     fps = float(LaunchConfiguration("fps", default="15.0").perform(context))
     settings_name = LaunchConfiguration("settings_name", default="OAK_D_Lite").perform(context)
+    enable_combatos_bridge = LaunchConfiguration("enable_combatos_bridge", default="true")
+    orch_ws = LaunchConfiguration("orch_ws", default="ws://localhost:8000").perform(context)
+    video_fps = float(LaunchConfiguration("video_fps", default="8.0").perform(context))
+    jpeg_quality = int(LaunchConfiguration("jpeg_quality", default="70").perform(context))
+    enable_right_camera = LaunchConfiguration("enable_right_camera", default="false").perform(context).lower() in ("1", "true", "yes")
 
     depthai_config = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -97,6 +103,29 @@ def launch_setup(context, *args, **kwargs):
             }],
             output="screen",
         ),
+        Node(
+            package="combatos_slam_bridge",
+            executable="slam_bridge",
+            name="combatos_slam_bridge",
+            namespace=namespace,
+            condition=IfCondition(enable_combatos_bridge),
+            parameters=[{
+                "orch_ws": orch_ws,
+                "pose_topic": "/slam/pose",
+                "odom_topic": "/slam/odometry",
+                "path_topic": "/slam/path",
+                "status_topic": "/slam/status",
+                "camera_topic": f"{prefix}/left/image_rect",
+                "right_camera_topic": f"{prefix}/right/image_rect",
+                "annotated_topic": "/slam/tracked_image",
+                "enable_camera": True,
+                "enable_right_camera": enable_right_camera,
+                "enable_annotated": True,
+                "video_fps": video_fps,
+                "jpeg_quality": jpeg_quality,
+            }],
+            output="screen",
+        ),
     ]
 
 
@@ -107,5 +136,10 @@ def generate_launch_description():
         DeclareLaunchArgument("resolution",    default_value="400p"),
         DeclareLaunchArgument("fps",           default_value="15.0"),
         DeclareLaunchArgument("settings_name", default_value="OAK_D_Lite"),
+        DeclareLaunchArgument("enable_combatos_bridge", default_value="true"),
+        DeclareLaunchArgument("orch_ws", default_value="ws://localhost:8000"),
+        DeclareLaunchArgument("video_fps", default_value="8.0"),
+        DeclareLaunchArgument("jpeg_quality", default_value="70"),
+        DeclareLaunchArgument("enable_right_camera", default_value="false"),
         OpaqueFunction(function=launch_setup),
     ])

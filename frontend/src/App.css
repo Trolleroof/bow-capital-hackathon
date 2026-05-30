@@ -279,6 +279,105 @@
   z-index: 20;
 }
 
+.slam-test-panel {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 21;
+  width: min(680px, calc(100% - 32px));
+  padding: 12px;
+  border: 1px solid rgba(113, 215, 255, 0.32);
+  border-radius: 12px;
+  background: rgba(4, 12, 18, 0.86);
+  color: var(--text);
+  font-family: 'Fira Code', monospace;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(14px);
+}
+
+.slam-test-head,
+.slam-test-video-grid,
+.slam-test-metrics {
+  display: grid;
+  gap: 10px;
+}
+
+.slam-test-head {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+}
+
+.slam-test-head span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+}
+
+.slam-test-head .is-up {
+  background: rgba(110, 240, 163, 0.14);
+  color: #89f4c7;
+}
+
+.slam-test-head .is-down {
+  background: rgba(255, 107, 107, 0.14);
+  color: #ffb4ad;
+}
+
+.slam-test-video-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.slam-test-video-grid figure {
+  min-width: 0;
+  margin: 0;
+}
+
+.slam-test-video {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid rgba(120, 154, 180, 0.22);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.slam-test-video img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.slam-test-video-grid figcaption {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.slam-test-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.slam-test-metrics b {
+  color: var(--text);
+  font-weight: 700;
+}
+
+@media (max-width: 840px) {
+  .slam-test-video-grid,
+  .slam-test-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
 .sim-viewport-full .composite-scene {
   flex: 1;
   min-height: 0;

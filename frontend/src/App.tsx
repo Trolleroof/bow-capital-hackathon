@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import './App.css'
 import CompositeScenePanel from './panels/CompositeScenePanel'
+import SlamTestPanel from './panels/SlamTestPanel'
 import GymScenarioStage from './gym/GymScenarioStage'
 import { getScenarioById, scenarios } from './gym/scenarios'
 
@@ -54,6 +55,7 @@ function App() {
         <section className="sim-viewport-full" aria-label="Mission simulation">
           <div className="sim-viewport-nav">{nav}</div>
           <CompositeScenePanel missionName="Land Coverage Survey" />
+          <SlamTestPanel />
         </section>
       ) : (
         <div className="gym-viewport">

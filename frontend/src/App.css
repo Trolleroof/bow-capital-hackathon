@@ -60,8 +60,7 @@
 }
 
 .brand-lockup h1,
-.panel-frame h2,
-.blank-stage-content h3 {
+.panel-frame h2 {
   margin: 0;
   font-family: 'Sora', 'Fira Sans', sans-serif;
   letter-spacing: -0.04em;
@@ -344,59 +343,145 @@
   letter-spacing: 0.12em;
 }
 
-.blank-stage {
+.gym-scene {
   position: relative;
-  display: grid;
-  place-items: center;
   min-height: 420px;
   margin: 24px;
   border: 1px solid rgba(120, 154, 180, 0.18);
   border-radius: 28px;
   background:
-    radial-gradient(circle at center, rgba(113, 215, 255, 0.12), transparent 42%),
+    radial-gradient(circle at top, rgba(113, 215, 255, 0.14), transparent 34%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
   overflow: hidden;
 }
 
-.blank-stage-grid {
+.gym-scene__hud,
+.gym-scene__legend {
   position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(113, 215, 255, 0.12) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(113, 215, 255, 0.12) 1px, transparent 1px);
-  background-size: 44px 44px;
-  opacity: 0.52;
-}
-
-.blank-stage-content {
-  position: relative;
+  left: 18px;
+  right: 18px;
   z-index: 1;
-  max-width: 26rem;
-  padding: 28px;
-  border: 1px solid rgba(120, 154, 180, 0.22);
-  border-radius: 24px;
-  background: rgba(5, 12, 18, 0.78);
-  text-align: center;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.25);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
-.blank-stage-content p {
-  margin-bottom: 10px;
-  color: var(--accent);
-  font: 700 0.82rem/1.1 'Fira Code', monospace;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.gym-scene__hud {
+  top: 18px;
 }
 
-.blank-stage-content h3 {
-  font-size: clamp(2rem, 4vw, 3rem);
+.gym-scene__legend {
+  bottom: 18px;
 }
 
-.blank-stage-content span {
-  display: block;
-  margin-top: 12px;
+.gym-scene__hud article,
+.gym-scene__legend span {
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid rgba(120, 154, 180, 0.2);
+  border-radius: 18px;
+  background: rgba(5, 12, 18, 0.76);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.gym-scene__hud span,
+.gym-scene__legend span {
   color: var(--muted);
-  line-height: 1.6;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.gym-scene__hud strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--text);
+  font: 700 1rem/1.1 'Fira Sans', sans-serif;
+}
+
+.gym-scene__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.gym-scene__grid-line {
+  stroke: rgba(113, 215, 255, 0.12);
+  stroke-width: 0.4;
+}
+
+.gym-scene__floor {
+  fill: rgba(3, 12, 20, 0.72);
+}
+
+.gym-scene__boundary {
+  fill: rgba(113, 215, 255, 0.03);
+  stroke: rgba(113, 215, 255, 0.28);
+  stroke-width: 0.7;
+  stroke-dasharray: 3 2;
+}
+
+.gym-scene__ring {
+  fill: rgba(113, 215, 255, 0.04);
+  stroke: rgba(113, 215, 255, 0.24);
+  stroke-width: 0.8;
+  stroke-dasharray: 2.5 2.5;
+}
+
+.gym-scene__asset {
+  fill: rgba(255, 138, 61, 0.34);
+  stroke: rgba(255, 192, 140, 0.82);
+  stroke-width: 0.8;
+}
+
+.gym-scene__asset-halo {
+  fill: none;
+  stroke: rgba(255, 138, 61, 0.24);
+  stroke-width: 0.6;
+}
+
+.gym-scene__path {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.16);
+  stroke-width: 0.8;
+  stroke-dasharray: 2 2;
+}
+
+.gym-scene__obstacle {
+  fill: rgba(18, 34, 46, 0.92);
+  stroke: rgba(120, 154, 180, 0.34);
+  stroke-width: 0.8;
+}
+
+.gym-scene__agent-halo {
+  fill: rgba(255, 255, 255, 0.05);
+}
+
+.gym-scene__agent {
+  stroke-width: 0.9;
+}
+
+.gym-scene__agent--blue {
+  fill: rgba(113, 215, 255, 0.88);
+  stroke: rgba(196, 240, 255, 0.96);
+}
+
+.gym-scene__agent--red {
+  fill: rgba(255, 138, 61, 0.86);
+  stroke: rgba(255, 205, 170, 0.92);
+}
+
+.gym-scene__agent--neutral {
+  fill: rgba(174, 255, 158, 0.82);
+  stroke: rgba(226, 255, 219, 0.92);
+}
+
+.gym-scene__legend span {
+  font: 600 0.8rem/1.35 'Fira Code', monospace;
+}
+
+.gym-scene__legend span:last-child {
+  color: var(--accent);
 }
 
 .gym-notes {
@@ -419,6 +504,235 @@
 .composite-canvas {
   position: absolute;
   inset: 0;
+}
+
+.tactical-console {
+  position: absolute;
+  top: 92px;
+  left: 16px;
+  z-index: 12;
+  width: min(320px, calc(100% - 32px));
+  padding: 16px;
+  border: 1px solid rgba(113, 215, 255, 0.2);
+  border-radius: 20px;
+  background: rgba(7, 16, 24, 0.82);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+}
+
+.console-header,
+.console-section-title,
+.console-hint,
+.control-legend-row,
+.uav-btn,
+.telemetry-row,
+.fps-title,
+.fps-key-row {
+  font-family: 'Fira Code', monospace;
+}
+
+.console-header,
+.console-btn-grid,
+.uav-grid,
+.telemetry-actions,
+.fps-keys {
+  display: grid;
+  gap: 10px;
+}
+
+.console-header {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  margin-bottom: 14px;
+  color: var(--text);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+}
+
+.console-section-title {
+  margin-bottom: 10px;
+  color: var(--accent);
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.console-btn-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.console-btn,
+.uav-btn,
+.btn-kill,
+.btn-revive {
+  min-height: 42px;
+  border: 1px solid rgba(120, 154, 180, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: 700 0.78rem/1.15 'Fira Code', monospace;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    transform 180ms ease;
+}
+
+.console-btn:hover,
+.console-btn.active,
+.uav-btn:hover,
+.uav-btn.active,
+.btn-kill:hover,
+.btn-revive:hover {
+  border-color: rgba(113, 215, 255, 0.44);
+  background: rgba(113, 215, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.console-hint {
+  margin: 12px 0 16px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+
+.control-legend {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.control-legend-row {
+  padding: 10px 12px;
+  border: 1px solid rgba(120, 154, 180, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.uav-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.uav-btn {
+  position: relative;
+}
+
+.status-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.alive {
+  background: #6ef0a3;
+  box-shadow: 0 0 8px rgba(110, 240, 163, 0.8);
+}
+
+.status-dot.dead {
+  background: #ff7f78;
+  box-shadow: 0 0 8px rgba(255, 127, 120, 0.68);
+}
+
+.telemetry-box,
+.fps-instructions,
+.fps-pointer-prompt {
+  border: 1px solid rgba(120, 154, 180, 0.2);
+  background: rgba(7, 16, 24, 0.82);
+  backdrop-filter: blur(14px);
+}
+
+.telemetry-box {
+  padding: 12px;
+  border-radius: 16px;
+}
+
+.telemetry-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  border-bottom: 1px solid rgba(120, 154, 180, 0.12);
+}
+
+.telemetry-row.warning {
+  color: #ffb3aa;
+}
+
+.telemetry-row:last-child {
+  border-bottom: 0;
+}
+
+.telemetry-actions {
+  margin-top: 12px;
+}
+
+.btn-kill {
+  border-color: rgba(255, 107, 107, 0.34);
+  color: #ffd5d5;
+}
+
+.btn-kill:hover {
+  background: rgba(255, 107, 107, 0.16);
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.btn-revive {
+  border-color: rgba(110, 240, 163, 0.34);
+  color: #d7ffe5;
+}
+
+.btn-revive:hover {
+  background: rgba(110, 240, 163, 0.14);
+  border-color: rgba(110, 240, 163, 0.48);
+}
+
+.fps-pointer-prompt,
+.fps-instructions {
+  position: absolute;
+  z-index: 13;
+}
+
+.fps-pointer-prompt {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 14px 18px;
+  border-radius: 999px;
+  color: var(--accent);
+  font: 700 0.8rem/1 'Fira Code', monospace;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.fps-instructions {
+  right: 12px;
+  bottom: 76px;
+  width: min(260px, calc(100% - 24px));
+  padding: 14px;
+  border-radius: 18px;
+}
+
+.fps-title {
+  margin-bottom: 12px;
+  color: var(--accent);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+}
+
+.fps-key-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .mission-strip {
@@ -495,7 +809,7 @@
     grid-template-columns: 1fr;
   }
 
-  .blank-stage {
+  .gym-scene {
     min-height: 340px;
   }
 }
@@ -523,9 +837,15 @@
   }
 
   .composite-scene,
-  .blank-stage {
+  .gym-scene {
     margin: 16px;
     border-radius: 22px;
+  }
+
+  .gym-scene__hud,
+  .gym-scene__legend {
+    left: 12px;
+    right: 12px;
   }
 
   .mission-strip {
@@ -533,6 +853,18 @@
     right: 12px;
     top: 12px;
     flex-direction: column;
+  }
+
+  .tactical-console,
+  .fps-instructions {
+    position: static;
+    width: auto;
+    margin: 88px 12px 0;
+  }
+
+  .fps-pointer-prompt {
+    width: calc(100% - 24px);
+    text-align: center;
   }
 
   .scene-actions {

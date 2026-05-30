@@ -101,11 +101,11 @@ COLMAP. Wire that interface early; it's a free win and a great slide.
 
 | Role | Owner | Repo area |
 |------|-------|-----------|
-| ⓵ Navigation Lead | _claim me_ | `nav/` |
-| ⓶ Targeting Lead | _claim me_ | `perception/` |
+| ⓵ Navigation Lead | Vikram (VSLAM experience) | `nav/` |
+| ⓶ Targeting Lead | Matthieu Fuller | `perception/` |
 | ⓷ Surveillance Lead | _claim me_ | `recon/` |
-| ⓸ Swarm + Integration Lead | _claim me_ | `swarm/` + `frontend/` |
-
+| ⓸ Swarm + Integration Lead | Nikhil | `swarm/` + `frontend/` |
+Alex? Dashboard? Maybe @alexgaoth look here
 ---
 
 ### ⓵ Navigation Lead — GPS-Denied Stereo VSLAM  🔴 *hero #1*

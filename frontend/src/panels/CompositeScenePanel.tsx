@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { ALTITUDE, GRID, N_AGENTS, SwarmEnv, WORLD_HALF, MAX_SPEED } from '../swarm/sim'
-import { loadPolicy, type Policy } from '../swarm/policy'
+import { ALTITUDE, GRID, SwarmEnv, WORLD_HALF, MAX_SPEED } from '../swarm/sim'
 import { makeDrone, updateDrone, Trail, type Drone } from '../swarm/drone'
 import { drawMinimap, type MiniAgent } from '../swarm/minimap'
+import { getScenarioDefaults } from '../gym/battlefieldParams'
 
 interface PoseSample {
   t: number
@@ -18,8 +18,10 @@ interface PoseSample {
 }
 
 interface CompositeScenePanelProps {
+  envId: string
   trajectoryUrl?: string
   missionName?: string
+  policyEnabled?: boolean
   /**
    * Mock 3DGS point cloud by default. Swap-in seam for the REAL Gaussian splat
    * reconstructed from drone footage: point this at a JSON of {x,y,z,r,g,b}
@@ -37,6 +39,11 @@ const WORLD_XZ_LIMIT = WORLD_HALF
 const TRAINED_COVERAGE = 0.9965
 const RANDOM_COVERAGE = 0.4725
 
+interface Waypoint {
+  x: number
+  y: number
+}
+
 // scene mapping: world (x,y,z) -> three (x = x, up = z, depth = -y)
 function scenePoint(x: number, y: number, z: number): THREE.Vector3 {
   return new THREE.Vector3(x, z, -y)
@@ -47,6 +54,173 @@ function clampWorldVector(point: THREE.Vector3, minY = WORLD_Y_MIN, maxY = WORLD
   point.y = Math.max(minY, Math.min(maxY, point.y))
   point.z = Math.max(-WORLD_XZ_LIMIT, Math.min(WORLD_XZ_LIMIT, point.z))
   return point
+}
+
+function wrapIndex(index: number, length: number) {
+  return ((index % length) + length) % length
+}
+
+function routePoint(route: Waypoint[], phase: number): Waypoint {
+  if (route.length === 0) return { x: 0, y: 0 }
+  if (route.length === 1) return route[0]
+
+  const raw = Math.floor(phase)
+  const i = wrapIndex(raw, route.length)
+  const a = route[i]
+  const b = route[(i + 1) % route.length]
+  const t = phase - raw
+  const eased = t * t * (3 - 2 * t)
+  return {
+    x: a.x + (b.x - a.x) * eased,
+    y: a.y + (b.y - a.y) * eased,
+  }
+}
+
+function hashString(value: string) {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+function seededRandom(seed: number) {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6d2b79f5) | 0
+    let t = Math.imul(state ^ (state >>> 15), 1 | state)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function missionRoutes(envId: string): Waypoint[][] {
+  if (envId === 'drone-vs-drone') {
+    return [
+      [{ x: -8, y: -4 }, { x: -4, y: -2 }, { x: -1.2, y: 0 }, { x: -4, y: 2 }, { x: -8, y: 4 }],
+      [{ x: -8, y: 0 }, { x: -4, y: -1.6 }, { x: -0.8, y: 0.6 }, { x: -4, y: 1.7 }],
+      [{ x: -7, y: 4 }, { x: -3, y: 3 }, { x: -1.4, y: 0.7 }, { x: -5, y: -2.8 }],
+      [{ x: 8, y: -4 }, { x: 4, y: -2 }, { x: 1.4, y: 0 }, { x: 4, y: 2 }, { x: 8, y: 4 }],
+      [{ x: 8, y: 0 }, { x: 4, y: -1.4 }, { x: 1, y: -0.5 }, { x: 4, y: 1.8 }],
+      [{ x: 7, y: 4 }, { x: 3, y: 3 }, { x: 1.2, y: 0.6 }, { x: 5, y: -2.8 }],
+    ]
+  }
+
+  if (envId === 'moving-target-track') {
+    return [
+      [{ x: -8, y: -2 }, { x: -3, y: -4 }, { x: 2, y: -3 }, { x: 7, y: -1 }, { x: 3, y: 2 }, { x: -4, y: 2 }],
+      [{ x: -7, y: 3 }, { x: -2, y: 5 }, { x: 4, y: 4 }, { x: 8, y: 2 }, { x: 2, y: -1 }, { x: -5, y: -1 }],
+      [{ x: -5, y: 0 }, { x: 0, y: -2 }, { x: 5, y: -1 }, { x: 6, y: 3 }, { x: 0, y: 4 }],
+      [{ x: -6, y: -4 }, { x: -1, y: -5 }, { x: 5, y: -4 }, { x: 8, y: 0 }, { x: 1, y: 1 }],
+    ]
+  }
+
+  if (envId === 'defend-asset') {
+    return [
+      [{ x: -4, y: 0 }, { x: -2, y: 3.5 }, { x: 2, y: 3.5 }, { x: 4, y: 0 }, { x: 2, y: -3.5 }, { x: -2, y: -3.5 }],
+      [{ x: 0, y: 4.5 }, { x: 3.8, y: 1.5 }, { x: 2.3, y: -3.8 }, { x: -2.8, y: -3.6 }, { x: -4, y: 1.2 }],
+      [{ x: 4.5, y: 0 }, { x: 1.5, y: -3.8 }, { x: -3.8, y: -2.2 }, { x: -3.5, y: 2.6 }, { x: 1.4, y: 4 }],
+      [{ x: 0, y: -4.5 }, { x: -3.8, y: -1.5 }, { x: -2.3, y: 3.8 }, { x: 2.8, y: 3.6 }, { x: 4, y: -1.2 }],
+      [{ x: -5.5, y: -5.5 }, { x: -4, y: 0 }, { x: -5.5, y: 5.5 }, { x: 0, y: 4 }, { x: 5.5, y: 5.5 }, { x: 4, y: 0 }, { x: 5.5, y: -5.5 }, { x: 0, y: -4 }],
+    ]
+  }
+
+  if (envId === 'swarm-vs-swarm-race') {
+    return [
+      [{ x: -8, y: -7 }, { x: -5, y: -3 }, { x: -8, y: 1 }, { x: -5, y: 6 }, { x: -1, y: 4 }, { x: -2, y: -5 }],
+      [{ x: -5, y: -8 }, { x: -2, y: -4 }, { x: -5, y: 1 }, { x: -1, y: 7 }, { x: 2, y: 3 }, { x: 1, y: -6 }],
+      [{ x: -2, y: -7 }, { x: 1, y: -3 }, { x: -1, y: 2 }, { x: 2, y: 7 }, { x: 5, y: 2 }, { x: 4, y: -5 }],
+      [{ x: 8, y: 7 }, { x: 5, y: 3 }, { x: 8, y: -1 }, { x: 5, y: -6 }, { x: 1, y: -4 }, { x: 2, y: 5 }],
+      [{ x: 5, y: 8 }, { x: 2, y: 4 }, { x: 5, y: -1 }, { x: 1, y: -7 }, { x: -2, y: -3 }, { x: -1, y: 6 }],
+      [{ x: 2, y: 7 }, { x: -1, y: 3 }, { x: 1, y: -2 }, { x: -2, y: -7 }, { x: -5, y: -2 }, { x: -4, y: 5 }],
+    ]
+  }
+
+  return [
+    [{ x: -8, y: -7 }, { x: -3, y: -7 }, { x: 2, y: -6 }, { x: 8, y: -5 }, { x: 8, y: -1 }, { x: 2, y: -1 }, { x: -5, y: -2 }],
+    [{ x: -8, y: 2 }, { x: -3, y: 3 }, { x: 2, y: 2 }, { x: 8, y: 1 }, { x: 8, y: 6 }, { x: 2, y: 7 }, { x: -6, y: 6 }],
+    [{ x: -7, y: -3 }, { x: -3, y: -2 }, { x: 0, y: 0 }, { x: 4, y: 1 }, { x: 8, y: 4 }],
+    [{ x: 7, y: 7 }, { x: 4, y: 4 }, { x: 1, y: 1 }, { x: -2, y: 0 }, { x: -6, y: 1 }],
+    [{ x: -6, y: 7 }, { x: -1, y: 5 }, { x: 4, y: 6 }, { x: 7, y: 2 }, { x: 3, y: -2 }, { x: -2, y: -4 }],
+  ]
+}
+
+function scriptedMissionActions(env: SwarmEnv, envId: string, now: number): Float32Array {
+  const routes = missionRoutes(envId)
+  const actions = new Float32Array(env.n * 2)
+  const phaseBase = now / 5200
+  const stepScale = MAX_SPEED * 0.1
+
+  for (let i = 0; i < env.n; i++) {
+    if (!env.alive[i]) continue
+    const route = routes[i % routes.length]
+    const target = routePoint(route, phaseBase + i * 0.18)
+    const px = env.pos[i * 2]
+    const py = env.pos[i * 2 + 1]
+    let ax = (target.x - px) / stepScale
+    let ay = (target.y - py) / stepScale
+
+    for (let j = 0; j < env.n; j++) {
+      if (i === j || !env.alive[j]) continue
+      const dx = px - env.pos[j * 2]
+      const dy = py - env.pos[j * 2 + 1]
+      const d2 = dx * dx + dy * dy
+      if (d2 > 0.0001 && d2 < 2.8) {
+        const push = (2.8 - d2) / 2.8
+        ax += (dx / Math.sqrt(d2)) * push * 0.85
+        ay += (dy / Math.sqrt(d2)) * push * 0.85
+      }
+    }
+
+    const edge = WORLD_HALF - 1.2
+    if (px > edge) ax -= 1.1
+    if (px < -edge) ax += 1.1
+    if (py > edge) ay -= 1.1
+    if (py < -edge) ay += 1.1
+
+    const mag = Math.max(1, Math.hypot(ax, ay))
+    actions[i * 2] = Math.max(-1, Math.min(1, ax / mag))
+    actions[i * 2 + 1] = Math.max(-1, Math.min(1, ay / mag))
+  }
+
+  return actions
+}
+
+function getMissionSimParams(envId: string) {
+  const params = getScenarioDefaults(envId)
+  return {
+    ...params,
+    logistics: {
+      ...params.logistics,
+      attritionInjectRate: 0,
+    },
+  }
+}
+
+function seedMissionEnv(env: SwarmEnv, envId: string) {
+  env.reset(hashString(envId))
+  env.vel.fill(0)
+  env.covered.fill(0)
+  env.reviveAll()
+
+  const routes = missionRoutes(envId)
+  for (let i = 0; i < env.n; i++) {
+    const start = routes[i % routes.length]?.[0] ?? { x: 0, y: 0 }
+    env.pos[i * 2] = start.x
+    env.pos[i * 2 + 1] = start.y
+  }
+
+  env.steps = 0
+  env.step(new Float32Array(env.n * 2))
+  env.steps = 0
+  env.vel.fill(0)
+}
+
+function createMissionEnv(envId: string) {
+  const env = new SwarmEnv(400, 7, getMissionSimParams(envId))
+  seedMissionEnv(env, envId)
+  return env
 }
 
 function makeOrbitPan(keys: Record<string, boolean>, dt: number) {
@@ -61,16 +235,7 @@ function makeOrbitPan(keys: Record<string, boolean>, dt: number) {
   return pan
 }
 
-function getControlLegend(cameraMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps', isPointerLocked: boolean) {
-  if (cameraMode === 'fps') {
-    return [
-      'Mouse look' + (isPointerLocked ? ' active' : ' on click'),
-      'WASD strafe on ground plane',
-      'Space up',
-      'Shift down',
-      'Esc release pointer lock',
-    ]
-  }
+function getControlLegend(cameraMode: 'drone-orbit' | 'fpv') {
   if (cameraMode === 'drone-orbit') {
     return [
       'LMB rotate around tracked drone',
@@ -87,13 +252,7 @@ function getControlLegend(cameraMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps', i
       'Use UAV selector to change feed',
     ]
   }
-  return [
-    'LMB rotate',
-    'RMB pan',
-    'Wheel zoom',
-    'Arrows move X/Z',
-    'R/E up · F/Q down',
-  ]
+  return []
 }
 
 function fakeTrajectory(): PoseSample[] {
@@ -117,21 +276,22 @@ function fakeTrajectory(): PoseSample[] {
 
 // ----------------------------------------------------------------- splat ---
 // (swap-in seam — see splatPointsUrl above)
-function makeMockSplat() {
+function makeMockSplat(envId: string) {
+  const rand = seededRandom(hashString(`splat:${envId}`))
   const count = 2400
   const positions = new Float32Array(count * 3)
   const colors = new Float32Array(count * 3)
   for (let i = 0; i < count; i++) {
-    const r = Math.sqrt(Math.random()) * WORLD_HALF * 0.82
-    const theta = Math.random() * Math.PI * 2
+    const r = Math.sqrt(rand()) * WORLD_HALF * 0.82
+    const theta = rand() * Math.PI * 2
     const x = Math.cos(theta) * r
     const y = Math.sin(theta) * r
     const ridge = Math.sin(x * 0.8) * Math.cos(y * 0.55) * 0.45
-    const z = -0.08 + ridge + Math.random() * 0.16
+    const z = -0.08 + ridge + rand() * 0.16
     const p = scenePoint(x, y, z)
     positions.set([p.x, p.y, p.z], i * 3)
-    const soil = 0.3 + Math.random() * 0.18
-    colors.set([soil, 0.44 + Math.random() * 0.22, 0.24 + Math.random() * 0.08], i * 3)
+    const soil = 0.3 + rand() * 0.18
+    colors.set([soil, 0.44 + rand() * 0.22, 0.24 + rand() * 0.08], i * 3)
   }
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
@@ -160,14 +320,14 @@ async function loadTrajectory(url?: string): Promise<PoseSample[]> {
   return fakeTrajectory()
 }
 
-async function loadSplatPoints(url?: string): Promise<THREE.Points> {
-  if (!url) return makeMockSplat()
+async function loadSplatPoints(url: string | undefined, envId: string): Promise<THREE.Points> {
+  if (!url) return makeMockSplat(envId)
   try {
     const res = await fetch(url)
     if (!res.ok) throw new Error(`${res.status}`)
     const data = await res.json()
     const points = Array.isArray(data) ? data : data.points
-    if (!Array.isArray(points)) return makeMockSplat()
+    if (!Array.isArray(points)) return makeMockSplat(envId)
     const positions = new Float32Array(points.length * 3)
     const colors = new Float32Array(points.length * 3)
     for (let i = 0; i < points.length; i++) {
@@ -184,37 +344,29 @@ async function loadSplatPoints(url?: string): Promise<THREE.Points> {
       new THREE.PointsMaterial({ size: 0.09, vertexColors: true, transparent: true, opacity: 0.9 }),
     )
   } catch {
-    return makeMockSplat()
+    return makeMockSplat(envId)
   }
 }
 
-function heuristicActions(env: SwarmEnv): Float32Array {
-  const actions = new Float32Array(env.n * 2)
-  for (let i = 0; i < env.n; i++) {
-    const angle = (i / env.n) * Math.PI * 2 + env.t * 0.18
-    const targetX = Math.cos(angle) * WORLD_HALF * 0.74
-    const targetY = Math.sin(angle) * WORLD_HALF * 0.74
-    actions[i * 2] = Math.max(-1, Math.min(1, (targetX - env.pos[i * 2]) / 5))
-    actions[i * 2 + 1] = Math.max(-1, Math.min(1, (targetY - env.pos[i * 2 + 1]) / 5))
-  }
-  return actions
-}
 
-const NOMINAL = 'all units nominal · coverage sweep active'
+const NOMINAL = 'mission controller active · task behavior executing'
+const POLICY_REQUIRED = 'train and export policy before mission launch'
 
 export default function CompositeScenePanel({
+  envId,
   trajectoryUrl,
   splatPointsUrl,
   missionName = 'Land Coverage Survey',
+  policyEnabled = false,
 }: CompositeScenePanelProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const miniRef = useRef<HTMLCanvasElement | null>(null)
-  const envRef = useRef(new SwarmEnv(400, 7))
-  const policyRef = useRef<Policy | null>(null)
+  const envRef = useRef(createMissionEnv(envId))
+  const missionActiveRef = useRef(false)
   const resetNextRef = useRef(false)
   const reviveNextRef = useRef(false)
   const [provider, setProvider] = useState('loading')
-  const [alive, setAlive] = useState(N_AGENTS)
+  const [alive, setAlive] = useState(0)
   const [coverage, setCoverage] = useState(0)
   const [meanAction, setMeanAction] = useState(0)
   const [status, setStatus] = useState(NOMINAL)
@@ -224,9 +376,8 @@ export default function CompositeScenePanel({
   const statusRef = useRef<{ text: string; lost: boolean } | null>(null)
 
   // Camera control state
-  const [cameraMode, setCameraMode] = useState<'orbit' | 'drone-orbit' | 'fpv' | 'fps'>('orbit')
+  const [cameraMode, setCameraMode] = useState<'drone-orbit' | 'fpv'>('drone-orbit')
   const [selectedDroneIndex, setSelectedDroneIndex] = useState<number>(0)
-  const [isPointerLocked, setIsPointerLocked] = useState(false)
   const [droneStates, setDroneStates] = useState<{ id: number; alive: boolean; x: number; y: number; vx: number; vy: number }[]>([])
 
   const cameraModeRef = useRef(cameraMode)
@@ -235,12 +386,6 @@ export default function CompositeScenePanel({
 
   useEffect(() => {
     cameraModeRef.current = cameraMode
-  }, [cameraMode])
-
-  useEffect(() => {
-    if (cameraMode !== 'fps' && document.pointerLockElement) {
-      document.exitPointerLock?.()
-    }
   }, [cameraMode])
 
   useEffect(() => {
@@ -308,25 +453,26 @@ export default function CompositeScenePanel({
   }, [])
 
   useEffect(() => {
-    let cancelled = false
-    loadPolicy()
-      .then((policy) => {
-        if (!cancelled) {
-          policyRef.current = policy
-          setProvider(policy.provider)
-          setStatus('trained policy active · coverage objective executing')
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setProvider('heuristic')
-          setStatus('policy load failed · heuristic fallback active')
-        }
-      })
-    return () => {
-      cancelled = true
+    if (!policyEnabled) {
+      missionActiveRef.current = false
+      setProvider('required')
+      setAlive(0)
+      setCoverage(0)
+      setMeanAction(0)
+      setStatus(POLICY_REQUIRED)
+      setLost(true)
+      return
     }
-  }, [])
+
+    missionActiveRef.current = true
+    seedMissionEnv(envRef.current, envId)
+    setProvider('scripted')
+    setAlive(envRef.current.nAlive())
+    setCoverage(envRef.current.coverage())
+    setMeanAction(0)
+    setStatus(NOMINAL)
+    setLost(false)
+  }, [envId, policyEnabled])
 
   useEffect(() => {
     const mount = mountRef.current
@@ -373,66 +519,8 @@ export default function CompositeScenePanel({
     controls.panSpeed = 0.95
     controls.rotateSpeed = 0.8
 
-    // FPS mouse drag & pointer lock variables
-    let isDragging = false
-    let previousMousePosition = { x: 0, y: 0 }
     let droneOrbitOffset = new THREE.Vector3(0, 0, 0)
-    let previousMode: 'orbit' | 'drone-orbit' | 'fpv' | 'fps' = cameraModeRef.current
-
-    const onMouseDown = (e: MouseEvent) => {
-      if (cameraModeRef.current !== 'fps') return
-      isDragging = true
-      previousMousePosition = { x: e.clientX, y: e.clientY }
-      
-      const canvas = renderer.domElement
-      if (canvas.requestPointerLock) {
-        canvas.requestPointerLock()
-      }
-    }
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (cameraModeRef.current !== 'fps') return
-
-      let movement: { dx: number; dy: number }
-      if (document.pointerLockElement === renderer.domElement) {
-        movement = { dx: e.movementX, dy: e.movementY }
-      } else if (isDragging) {
-        movement = {
-          dx: e.clientX - previousMousePosition.x,
-          dy: e.clientY - previousMousePosition.y,
-        }
-        previousMousePosition = { x: e.clientX, y: e.clientY }
-      } else {
-        return
-      }
-
-      const { dx, dy } = movement
-      const sensitivity = 0.0025
-      const euler = new THREE.Euler(0, 0, 0, 'YXZ')
-      euler.setFromQuaternion(camera.quaternion)
-
-      euler.y -= dx * sensitivity
-      euler.x -= dy * sensitivity
-
-      // Clamp pitch to avoid turning upside down (85 degrees)
-      euler.x = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, euler.x))
-
-      camera.quaternion.setFromEuler(euler)
-    }
-
-    const onMouseUp = () => {
-      isDragging = false
-    }
-
-    const handlePointerLockChange = () => {
-      const canvas = renderer.domElement
-      setIsPointerLocked(document.pointerLockElement === canvas)
-    }
-
-    renderer.domElement.addEventListener('mousedown', onMouseDown)
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-    document.addEventListener('pointerlockchange', handlePointerLockChange)
+    let previousMode: 'drone-orbit' | 'fpv' = cameraModeRef.current
 
     scene.add(new THREE.HemisphereLight(0xc9f0ff, 0x111911, 1.45))
     const key = new THREE.DirectionalLight(0xffffff, 1.4)
@@ -508,11 +596,15 @@ export default function CompositeScenePanel({
       ),
       new THREE.LineBasicMaterial({ color: 0x55b8ff, transparent: true, opacity: 0.34 }),
     )
+    trajectoryLine.visible = false
     scene.add(trajectoryLine)
 
     // --- drones (quadrotor meshes + trails from drone.ts) ---
     const drones: Drone[] = Array.from({ length: env0.n }, () => makeDrone())
-    drones.forEach((d) => scene.add(d.group))
+    drones.forEach((d) => {
+      d.group.visible = false
+      scene.add(d.group)
+    })
     const actionArrows = drones.map(() => {
       const arrow = new THREE.ArrowHelper(
         new THREE.Vector3(1, 0, 0),
@@ -522,6 +614,7 @@ export default function CompositeScenePanel({
         0.45,
         0.22,
       )
+      arrow.visible = false
       scene.add(arrow)
       return arrow
     })
@@ -530,6 +623,7 @@ export default function CompositeScenePanel({
     )
     const trails = drones.map(() => {
       const t = new Trail(0x4df09a)
+      t.line.visible = false
       scene.add(t.line)
       return t
     })
@@ -537,17 +631,23 @@ export default function CompositeScenePanel({
     let frameTimer = 0
     let disposed = false
     let stepping = false
+    let splatObject: THREE.Points | null = null
     void loadTrajectory(trajectoryUrl).then((loaded) => {
       const vertices = loaded.map((p) => scenePoint(p.x, p.y, p.z))
       trajectoryLine.geometry.dispose()
       trajectoryLine.geometry = new THREE.BufferGeometry().setFromPoints(vertices)
     })
-    void loadSplatPoints(splatPointsUrl).then((points) => {
-      if (!disposed) scene.add(points)
+    void loadSplatPoints(splatPointsUrl, envId).then((points) => {
+      if (!disposed) {
+        points.visible = missionActiveRef.current
+        splatObject = points
+        scene.add(points)
+      }
     })
 
     let raf = 0
     let last = performance.now()
+    const missionStartedAt = last
     let lastUIUpdate = 0
     const animate = (now: number) => {
       raf = requestAnimationFrame(animate)
@@ -557,51 +657,60 @@ export default function CompositeScenePanel({
       frameTimer += delta
 
       const env = envRef.current
+      const missionLaunched = missionActiveRef.current
+
+      coverMesh.visible = missionLaunched
+      trajectoryLine.visible = missionLaunched
+      if (splatObject) splatObject.visible = missionLaunched
+      drones.forEach((drone, i) => {
+        drone.group.visible = missionLaunched
+        trails[i].line.visible = missionLaunched
+        if (!missionLaunched) actionArrows[i].visible = false
+      })
+      if (!missionLaunched && lastCoveredCount !== 0) {
+        for (let idx = 0; idx < GRID * GRID; idx++) coverMesh.setMatrixAt(idx, HIDDEN)
+        coverMesh.instanceMatrix.needsUpdate = true
+        lastCoveredCount = 0
+      }
 
       if (resetNextRef.current) {
         resetNextRef.current = false
-        env.reset(Math.floor(Math.random() * 1e9))
+        seedMissionEnv(env, envId)
         trails.forEach((t) => t.clear())
         lastCoveredCount = -1
         for (let idx = 0; idx < GRID * GRID; idx++) coverMesh.setMatrixAt(idx, HIDDEN)
         coverMesh.instanceMatrix.needsUpdate = true
-        statusRef.current = { text: NOMINAL, lost: false }
+        statusRef.current = missionLaunched
+          ? { text: NOMINAL, lost: false }
+          : { text: POLICY_REQUIRED, lost: true }
       }
       if (reviveNextRef.current) {
         reviveNextRef.current = false
         env.reviveAll()
-        statusRef.current = { text: NOMINAL, lost: false }
+        statusRef.current = missionLaunched
+          ? { text: NOMINAL, lost: false }
+          : { text: POLICY_REQUIRED, lost: true }
       }
-      if (frameTimer >= FRAME_MS && !stepping) {
+      if (frameTimer >= FRAME_MS && !stepping && missionLaunched) {
         frameTimer = 0
         stepping = true
-        const obs = env.observe()
-        const actionPromise = policyRef.current
-          ? policyRef.current.act(obs, env.n)
-          : Promise.resolve(heuristicActions(env))
-        void actionPromise
-          .catch(() => {
-            setProvider('heuristic')
-            return heuristicActions(env)
-          })
-          .then((actions) => {
-            env.step(actions)
-            setAlive(env.nAlive())
-            setCoverage(env.coverage())
-            let total = 0
-            for (let i = 0; i < env.n; i++) {
-              total += Math.hypot(actions[i * 2], actions[i * 2 + 1])
-            }
-            setMeanAction(total / env.n)
-            refreshCoverage()
-            stepping = false
-          })
+        const actions = scriptedMissionActions(env, envId, now - missionStartedAt)
+        env.step(actions)
+        setAlive(env.nAlive())
+        setCoverage(env.coverage())
+        let total = 0
+        for (let i = 0; i < env.n; i++) {
+          total += Math.hypot(actions[i * 2], actions[i * 2 + 1])
+        }
+        setMeanAction(total / env.n)
+        refreshCoverage()
+        stepping = false
       }
 
       // drones: smooth toward target, then drone.ts handles spin + dead-state.
       // updateDrone(x, y, z) places at position.set(x, z, y), so we pass the
       // scene vector as (sx, sz, sy) to land at the intended (sx, sy, sz).
-      for (let i = 0; i < env.n; i++) {
+      if (missionLaunched) for (let i = 0; i < env.n; i++) {
         const target = scenePoint(
           env.pos[i * 2],
           env.pos[i * 2 + 1],
@@ -624,14 +733,16 @@ export default function CompositeScenePanel({
       // Update drone states for UI telemetry
       if (now - lastUIUpdate > 80) {
         lastUIUpdate = now
-        const states = Array.from({ length: env.n }, (_, i) => ({
-          id: i,
-          alive: env.alive[i],
-          x: env.pos[i * 2],
-          y: env.pos[i * 2 + 1],
-          vx: env.vel[i * 2] * MAX_SPEED,
-          vy: env.vel[i * 2 + 1] * MAX_SPEED,
-        }))
+        const states = missionLaunched
+          ? Array.from({ length: env.n }, (_, i) => ({
+              id: i,
+              alive: env.alive[i],
+              x: env.pos[i * 2],
+              y: env.pos[i * 2 + 1],
+              vx: env.vel[i * 2] * MAX_SPEED,
+              vy: env.vel[i * 2 + 1] * MAX_SPEED,
+            }))
+          : []
         setDroneStates(states)
       }
 
@@ -641,10 +752,19 @@ export default function CompositeScenePanel({
         const ctx = mini.getContext('2d')
         if (ctx) {
           const agents: MiniAgent[] = []
-          for (let i = 0; i < env.n; i++) {
-            agents.push({ x: env.pos[i * 2], y: env.pos[i * 2 + 1], alive: env.alive[i] })
+          if (missionLaunched) {
+            for (let i = 0; i < env.n; i++) {
+              agents.push({ x: env.pos[i * 2], y: env.pos[i * 2 + 1], alive: env.alive[i] })
+            }
           }
-          drawMinimap(ctx, mini.width, WORLD_HALF, GRID, env.coveredCells(), agents)
+          drawMinimap(
+            ctx,
+            mini.width,
+            WORLD_HALF,
+            GRID,
+            missionLaunched ? env.coveredCells() : new Uint8Array(GRID * GRID),
+            agents,
+          )
         }
       }
 
@@ -675,19 +795,11 @@ export default function CompositeScenePanel({
           droneOrbitOffset = targetDrone
             ? controls.target.clone().sub(targetDrone.group.position)
             : new THREE.Vector3(0, 0, 0)
-        } else if (previousMode === 'drone-orbit' && currentMode === 'orbit') {
-          droneOrbitOffset = new THREE.Vector3(0, 0, 0)
         }
         previousMode = currentMode
       }
 
-      if (currentMode === 'orbit') {
-        controls.enabled = true
-        applyKeyboardPan()
-        controls.update()
-        clampWorldVector(controls.target)
-        clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
-      } else if (currentMode === 'drone-orbit') {
+      if (currentMode === 'drone-orbit') {
         controls.enabled = true
         const targetDrone = drones[selectedDroneIdx]
         if (targetDrone) {
@@ -722,35 +834,6 @@ export default function CompositeScenePanel({
           const targetRotation = new THREE.Quaternion().setFromRotationMatrix(tempMatrix)
           camera.quaternion.slerp(targetRotation, 0.2)
         }
-      } else if (currentMode === 'fps') {
-        controls.enabled = false
-        const speed = 9.5 * dt
-        const moveDir = new THREE.Vector3()
-
-        const horizontalForward = camera
-          .getWorldDirection(new THREE.Vector3())
-          .setY(0)
-          .normalize()
-        const horizontalRight = new THREE.Vector3()
-          .crossVectors(horizontalForward, new THREE.Vector3(0, 1, 0))
-          .normalize()
-
-        if (keysPressed.current.w) moveDir.add(horizontalForward)
-        if (keysPressed.current.s) moveDir.sub(horizontalForward)
-        if (keysPressed.current.a) moveDir.sub(horizontalRight)
-        if (keysPressed.current.d) moveDir.add(horizontalRight)
-        if (keysPressed.current[' '] || keysPressed.current['e']) {
-          moveDir.y += 1.0
-        }
-        if (keysPressed.current['shift'] || keysPressed.current['q']) {
-          moveDir.y -= 1.0
-        }
-
-        if (moveDir.lengthSq() > 0) {
-          moveDir.normalize().multiplyScalar(speed)
-          camera.position.add(moveDir)
-          clampWorldVector(camera.position, WORLD_Y_MIN, WORLD_Y_MAX)
-        }
       }
 
       renderer.render(scene, camera)
@@ -769,14 +852,9 @@ export default function CompositeScenePanel({
     return () => {
       disposed = true
       cancelAnimationFrame(raf)
-      window.removeEventListener('resize', onResize)
-      renderer.domElement.removeEventListener('contextmenu', onContextMenu)
-      
-      // Clean up pointer lock and mouse listeners
-      renderer.domElement.removeEventListener('mousedown', onMouseDown)
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-      document.removeEventListener('pointerlockchange', handlePointerLockChange)
+       // Clean up resize listener
+       window.removeEventListener('resize', onResize)
+       renderer.domElement.removeEventListener('contextmenu', onContextMenu)
 
       controls.dispose()
       actionArrows.forEach((arrow) => {
@@ -794,10 +872,10 @@ export default function CompositeScenePanel({
       })
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
     }
-  }, [splatPointsUrl, trajectoryUrl])
+  }, [envId, splatPointsUrl, trajectoryUrl])
 
   const selectedDroneState = droneStates[selectedDroneIndex]
-  const controlLegend = getControlLegend(cameraMode, isPointerLocked)
+  const controlLegend = getControlLegend(cameraMode)
 
   const handleKillDrone = (idx: number) => {
     const env = envRef.current
@@ -818,9 +896,15 @@ export default function CompositeScenePanel({
   }
 
   return (
-    <section className="composite-scene" style={{ position: 'relative' }}>
+    <section className="composite-scene" aria-label={`${missionName} mission simulation`}>
       <div ref={mountRef} className="composite-canvas" />
 
+      <div className="composite-hud" aria-label="Mission HUD">
+        <div className={`composite-hud__status${lost ? ' is-lost' : ''}`} role="status">
+          {status}
+        </div>
+
+        <aside className="composite-hud__left">
       {/* TACTICAL CAMERA CONSOLE */}
       <div className="tactical-console">
         <div className="console-header">
@@ -830,20 +914,6 @@ export default function CompositeScenePanel({
 
         <div className="console-section-title">Select View Mode</div>
         <div className="console-btn-grid">
-          <button
-            type="button"
-            className={`console-btn ${cameraMode === 'orbit' ? 'active' : ''}`}
-            onClick={() => setCameraMode('orbit')}
-          >
-            GLOBAL ORBIT
-          </button>
-          <button
-            type="button"
-            className={`console-btn ${cameraMode === 'fps' ? 'active' : ''}`}
-            onClick={() => setCameraMode('fps')}
-          >
-            FREE FLY (FPS)
-          </button>
           <button
             type="button"
             className={`console-btn ${cameraMode === 'drone-orbit' ? 'active' : ''}`}
@@ -860,9 +930,8 @@ export default function CompositeScenePanel({
           </button>
         </div>
         <p className="console-hint">
-          Global orbit now uses standard mouse mapping: left drag rotates, right drag pans, and
-          the wheel zooms. Free fly keeps `WASD` on the horizontal plane so inspection does not
-          drift underground or into the ceiling.
+          Drone track orbits around the selected drone; left drag rotates, right drag adjusts offset, and
+          the wheel zooms. FPV locks the viewport to the selected drone's camera perspective.
         </p>
 
         <div className="console-section-title">Control Legend</div>
@@ -878,7 +947,7 @@ export default function CompositeScenePanel({
           <>
             <div className="console-section-title">Select UAV Platform</div>
             <div className="uav-grid">
-              {Array.from({ length: N_AGENTS }).map((_, idx) => {
+              {Array.from({ length: envRef.current.n }).map((_, idx) => {
                 const droneInfo = droneStates[idx]
                 const isAlive = droneInfo ? droneInfo.alive : true
                 return (
@@ -944,6 +1013,38 @@ export default function CompositeScenePanel({
             )}
           </>
         )}
+      </div>
+        </aside>
+
+        <aside className="composite-hud__right">
+          <div className="coordination-map">
+            <div className="coordination-map__label">COORDINATION MAP</div>
+            <canvas ref={miniRef} width={150} height={150} className="coordination-map__canvas" />
+          </div>
+
+          <div className="mission-metrics" aria-label="Mission telemetry">
+            <span>POLICY: {provider.toUpperCase()}</span>
+            {provider !== 'loading' && provider !== 'required' && (
+              <span>
+                EVAL: {Math.round(TRAINED_COVERAGE * 100)}% / RANDOM {Math.round(RANDOM_COVERAGE * 100)}%
+              </span>
+            )}
+            <span>CMD: {Math.round(meanAction * 100)}%</span>
+            <span>ALIVE: {alive}</span>
+            <span>COVERAGE: {Math.round(coverage * 100)}%</span>
+          </div>
+        </aside>
+
+        <footer className="composite-hud__footer">
+          <div className="scene-actions">
+            <button type="button" onClick={() => { reviveNextRef.current = true }}>
+              Revive All
+            </button>
+            <button type="button" onClick={() => { resetNextRef.current = true }}>
+              Reset
+            </button>
+          </div>
+        </footer>
       </div>
 
       {/* FPV COCKPIT HUD OVERLAY */}
@@ -1014,125 +1115,6 @@ export default function CompositeScenePanel({
           )}
         </div>
       )}
-
-      {/* FPS CONTROLS HUD */}
-      {cameraMode === 'fps' && (
-        <>
-          {!isPointerLocked && (
-            <div
-              className="fps-pointer-prompt"
-              onClick={() => {
-                const canvas = mountRef.current?.querySelector('canvas')
-                if (canvas && canvas.requestPointerLock) {
-                  canvas.requestPointerLock()
-                }
-              }}
-            >
-              [ CLICK TO ENGAGE FLIGHT CONTROLS ]
-            </div>
-          )}
-
-          <div className="fps-instructions">
-            <div className="fps-title">UAV SIM FLIGHT DECK</div>
-            <div className="fps-keys">
-              <div className="fps-key-row">
-                <span>[W][A][S][D]</span>
-                <span>MANEUVER</span>
-              </div>
-              <div className="fps-key-row">
-                <span>[SPACE]</span>
-                <span>ASCEND</span>
-              </div>
-              <div className="fps-key-row">
-                <span>[L-SHIFT]</span>
-                <span>DESCEND</span>
-              </div>
-              <div className="fps-key-row">
-                <span>[MOUSE]</span>
-                <span>LOOK AROUND</span>
-              </div>
-              <div className="fps-key-row">
-                <span>[ESC]</span>
-                <span>RELEASE MOUSE</span>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* coordination minimap (top-right) */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 12,
-          right: 12,
-          padding: 6,
-          background: 'rgba(7,18,14,0.78)',
-          border: '1px solid rgba(47,174,122,0.5)',
-          borderRadius: 4,
-          fontFamily: 'monospace',
-          color: '#4ef0a0',
-          zIndex: 10,
-        }}
-      >
-        <div style={{ fontSize: 10, letterSpacing: 1, opacity: 0.8, marginBottom: 4 }}>
-          COORDINATION MAP
-        </div>
-        <canvas ref={miniRef} width={150} height={150} style={{ display: 'block' }} />
-      </div>
-
-      {/* event status line */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 12,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          padding: '4px 12px',
-          fontFamily: 'monospace',
-          fontSize: 13,
-          color: lost ? '#ff6b6b' : '#4ef0a0',
-          background: 'rgba(5,8,10,0.7)',
-          border: `1px solid ${lost ? 'rgba(255,107,107,0.5)' : 'rgba(47,174,122,0.4)'}`,
-          borderRadius: 3,
-          whiteSpace: 'nowrap',
-          zIndex: 10,
-        }}
-      >
-        {lost ? '▸ ' : '▸ '}
-        {status}
-      </div>
-
-      <div className="mission-strip">
-        <div>
-          <strong>{missionName}</strong>
-        </div>
-        <div>
-          <span>GPS: DENIED</span>
-          <span>LINK: NONE</span>
-          <span>LOCALIZED</span>
-        </div>
-        <div>
-          <span>POLICY: {provider.toUpperCase()}</span>
-          {provider !== 'loading' && provider !== 'heuristic' && (
-            <span>
-              EVAL: {Math.round(TRAINED_COVERAGE * 100)}% / RANDOM {Math.round(RANDOM_COVERAGE * 100)}%
-            </span>
-          )}
-          <span>CMD: {Math.round(meanAction * 100)}%</span>
-          <span>ALIVE: {alive}</span>
-          <span>COVERAGE: {Math.round(coverage * 100)}%</span>
-        </div>
-      </div>
-
-      <div className="scene-actions">
-        <button type="button" onClick={() => { reviveNextRef.current = true }}>
-          Revive All
-        </button>
-        <button type="button" onClick={() => { resetNextRef.current = true }}>
-          Reset
-        </button>
-      </div>
     </section>
   )
 }

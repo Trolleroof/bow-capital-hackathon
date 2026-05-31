@@ -134,6 +134,25 @@ This serves a WebSocket broadcaster on `ws://localhost:8766` that emits the same
 `topic: "train"` JSON shape as the real trainer, so frontend work can proceed
 without waiting on a live MAPPO run.
 
+### Training service (gym UI bridge)
+
+For the React gym page, run the combined HTTP + WebSocket bridge:
+
+```bash
+uv run --project swarm python -m swarm.train_service
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/train/start` | `{"env_id","profile","timesteps"?}` → spawns `swarm.train` |
+| `POST /api/train/stop` | `{"env_id"?}` → terminates job |
+| `POST /api/train/export` | `{"env_id"}` → `swarm.export_onnx` |
+| `GET /api/train/status?env_id=` | running / last event |
+| `ws://localhost:8766` | live `topic: "train"` NDJSON (stdout fan-out) |
+
+On successful training the service auto-exports ONNX to
+`frontend/public/policies/<env_id>/policy.onnx`. Vite proxies `/api/*` → `:8787`.
+
 ---
 
 ## 5. Build phases (never get blocked)

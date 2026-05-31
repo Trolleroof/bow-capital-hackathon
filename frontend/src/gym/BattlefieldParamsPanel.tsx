@@ -3,39 +3,13 @@
  *
  * Issue #25 — Slim panel for P0 battlefield knobs.
  *
- * • Preset toggle: Garrison (low-stress baseline) vs Combat (per-scenario defaults).
  * • Exposes only P0 knobs that wire directly into sim dynamics / obs / rewards.
  * • Validates on every change via validateBattlefieldParams.
  * • Disabled during training so params stay locked to the running job.
  */
 
 import type { BattlefieldParams } from './battlefieldParams'
-import {
-  PARAM_BOUNDS,
-  getScenarioDefaults,
-  validateBattlefieldParams,
-} from './battlefieldParams'
-
-// ─────────────────────────────── garrison baseline (mirror of env_config.py) ──
-
-function getGarrisonDefaults(envId: string): BattlefieldParams {
-  return {
-    envId,
-    weather:  { windSpeed: 0, windDirRad: 0, visibility: 1.0, temperatureC: 20 },
-    ew:       { gpsDenialLevel: 0, jamDutyCycle: 0, spoofingEnabled: false },
-    terrain:  { elevRoughness: 0, urbanDensity: 0 },
-    threat:   { hostileUasCount: 0, movingTargetSpeed: 0.3 },
-    roe:      { engagementAuthority: 'hold-fire', minStandoffM: 0, civilianDensity: 0, timeLimitSec: 400 },
-    logistics:{ swarmSize: 5, batteryEnvelopeSec: 400, attritionInjectRate: 0 },
-  }
-}
-
-function detectPreset(params: BattlefieldParams): 'garrison' | 'combat' {
-  // Heuristic: garrison has zero attrition and no GPS denial
-  return params.logistics.attritionInjectRate < 0.01 && params.ew.gpsDenialLevel < 0.05
-    ? 'garrison'
-    : 'combat'
-}
+import { PARAM_BOUNDS, validateBattlefieldParams } from './battlefieldParams'
 
 // ────────────────────────────── P0 knob manifest ──────────────────────────
 
@@ -80,15 +54,6 @@ export default function BattlefieldParamsPanel({
   onToggleOpen,
 }: BattlefieldParamsPanelProps) {
   const errors = validateBattlefieldParams(params)
-  const preset = detectPreset(params)
-
-  function applyPreset(p: 'garrison' | 'combat') {
-    onChange(
-      p === 'combat'
-        ? getScenarioDefaults(params.envId)
-        : getGarrisonDefaults(params.envId),
-    )
-  }
 
   function setKnob(group: KnobDef['group'], key: string, value: number) {
     onChange({
@@ -101,32 +66,6 @@ export default function BattlefieldParamsPanel({
     <>
       {/* ── compact toolbar row ───────────────────────────────────────── */}
       <div className="gym-training-bar">
-        {/* preset toggle */}
-        <div
-          className="gym-preset-toggle"
-          role="group"
-          aria-label="Stress preset"
-        >
-          <button
-            type="button"
-            className={preset === 'garrison' ? 'is-active' : ''}
-            onClick={() => applyPreset('garrison')}
-            disabled={isTraining}
-            title="Garrison: zero-stress baseline"
-          >
-            Garrison
-          </button>
-          <button
-            type="button"
-            className={preset === 'combat' ? 'is-active' : ''}
-            onClick={() => applyPreset('combat')}
-            disabled={isTraining}
-            title="Combat: per-scenario stress defaults"
-          >
-            Combat
-          </button>
-        </div>
-
         {/* params toggle */}
         <button
           type="button"

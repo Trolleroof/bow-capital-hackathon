@@ -1,7 +1,7 @@
 {
   "act_dim": 2,
-  "best_checkpoint_coverage": 0.085417,
-  "best_global_step": 800,
+  "best_checkpoint_coverage": 0.099306,
+  "best_global_step": 4000,
   "checkpoint": "checkpoints/search-and-interdict/policy.pt",
   "config": {
     "actor_hidden": 64,
@@ -14,22 +14,22 @@
     "log_std_init": -0.5,
     "lr": 0.0003,
     "max_grad_norm": 0.5,
-    "num_minibatches": 1,
+    "num_minibatches": 4,
     "rollout_steps": 400,
-    "seed": 1,
-    "update_epochs": 1,
+    "seed": 0,
+    "update_epochs": 8,
     "vf_clip": 0.2,
     "vf_coef": 0.5
   },
   "env_id": "search-and-interdict",
   "events": "checkpoints/search-and-interdict/train-events.ndjson",
-  "final_coverage": 0.092361,
-  "global_step": 800,
+  "final_coverage": 0.107986,
+  "global_step": 12000,
   "losses_at_best": {
-    "approx_kl": 0.0,
-    "entropy": 1.837877,
-    "pg_loss": -0.0,
-    "v_loss": 12.393264
+    "approx_kl": 0.004541,
+    "entropy": 1.836322,
+    "pg_loss": -0.006792,
+    "v_loss": 24.307619
   },
   "obs_dim": 36,
   "onnx": {
@@ -41,7 +41,7 @@
   "profile": "combat",
   "random_coverage": 0.114063,
   "rollout_steps": 400,
-  "run_name": "mappo_search-and-interdict_combat_1780179056",
-  "seed": 1,
-  "timesteps": 800
+  "run_name": "mappo_search-and-interdict_combat_1780184218",
+  "seed": 0,
+  "timesteps": 12000
 }

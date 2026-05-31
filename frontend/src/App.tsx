@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import CompositeScenePanel from './panels/CompositeScenePanel'
-import GymScenarioStage from './gym/GymScenarioStage'
+import GymScenarioStage, { ScenarioMiniPreview } from './gym/GymScenarioStage'
 import { getScenarioById, scenarios } from './gym/scenarios'
 import { CombatOS } from './combatos/CombatOS'
 import {
@@ -10,341 +10,343 @@ import {
   type PolicyStatus,
 } from './swarm/policy'
 
-// Dev escape: VITE_ALLOW_HEURISTIC_MISSION=1 skips policy gate in Mission Sim.
-const ALLOW_HEURISTIC = import.meta.env.VITE_ALLOW_HEURISTIC_MISSION === '1'
-
-// ─── Routing ─────────────────────────────────────────────────────────────────
+const ALLOW_HEURISTIC = true
 
 type AppRoute =
-  | { view: 'gym-registry' }
-  | { view: 'gym-env'; envId: string }
-  | { view: 'sim' }
+  | { view: 'menu' }
+  | { view: 'gym'; envId: string }
+  | { view: 'sim'; envId: string }
   | { view: 'combatos' }
 
-function parseRoute(): AppRoute {
-  const raw = window.location.hash.replace(/^#/, '')
-  if (!raw || raw === 'gym') return { view: 'gym-registry' }
-  if (raw.startsWith('gym/')) {
-    const envId = raw.slice(4)
-    return { view: 'gym-env', envId: envId || scenarios[0].id }
+const scenarioExists = (envId: string) => getScenarioById(envId) != null
+
+const parseRoute = (): AppRoute => {
+  const hash = window.location.hash.replace(/^#\/?/, '')
+  const [view, envId] = hash.split('/')
+
+  if (view === 'combatos') return { view: 'combatos' }
+
+  if (view === 'gym' && envId && scenarioExists(envId)) {
+    return { view: 'gym', envId }
   }
-  if (raw === 'sim') return { view: 'sim' }
-  if (raw === 'combatos') return { view: 'combatos' }
-  return { view: 'gym-registry' }
+
+  if (view === 'sim' && envId && scenarioExists(envId)) {
+    return { view: 'sim', envId }
+  }
+
+  if (view === 'sim') {
+    return { view: 'sim', envId: scenarios[0].id }
+  }
+
+  return { view: 'menu' }
 }
 
-function pushHash(route: AppRoute) {
-  if (route.view === 'gym-registry') window.location.hash = 'gym'
-  else if (route.view === 'gym-env') window.location.hash = `gym/${route.envId}`
-  else if (route.view === 'combatos') window.location.hash = 'combatos'
-  else window.location.hash = 'sim'
+const setHashRoute = (hash: string) => {
+  window.history.pushState(null, '', `#${hash}`)
 }
 
-// ─── App ─────────────────────────────────────────────────────────────────────
-
-function App() {
-  const [route, setRoute] = useState<AppRoute>(parseRoute)
-
-  // Last env selected / entered in the gym — drives registry preview & sim.
-  const [selectedEnvId, setSelectedEnvId] = useState(scenarios[0].id)
-
-  // The env whose checkpoint is (or will be) loaded into Mission Sim.
-  const [simEnvId, setSimEnvId] = useState(scenarios[0].id)
-
+export default function App() {
+  const [route, setRoute] = useState<AppRoute>(() => parseRoute())
   const [policyStore, setPolicyStore] = useState<Record<string, PolicyStatus>>(
     () =>
       Object.fromEntries(
-        scenarios.map((s) => [s.id, 'not-trained' as PolicyStatus]),
-      ),
+        scenarios.map((scenario) => [
+          scenario.id,
+          'not-trained' as PolicyStatus,
+        ]),
+      ) as Record<string, PolicyStatus>,
   )
-
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | null>(null)
 
-  // ── Hash-driven routing ──────────────────────────────────────────────────
   useEffect(() => {
-    // Fresh load always lands on #gym, not sim.
-    if (!window.location.hash || window.location.hash === '#') {
-      window.location.hash = 'gym'
+    if (!window.location.hash) {
+      setHashRoute('menu')
     }
+
     const onHashChange = () => setRoute(parseRoute())
     window.addEventListener('hashchange', onHashChange)
-    return () => window.removeEventListener('hashchange', onHashChange)
+    window.addEventListener('popstate', onHashChange)
+
+    return () => {
+      window.removeEventListener('hashchange', onHashChange)
+      window.removeEventListener('popstate', onHashChange)
+    }
   }, [])
 
-  // ── Probe checkpoints on mount ───────────────────────────────────────────
   useEffect(() => {
-    scenarios.forEach(async (s) => {
-      const exists = await checkPolicyExists(s.id)
-      if (exists) {
-        setPolicyStore((prev) => ({ ...prev, [s.id]: 'ready' }))
+    let canceled = false
+
+    Promise.all(
+      scenarios.map(async (scenario) => {
+        const exists = await checkPolicyExists(scenario.id)
+        const status: PolicyStatus = exists ? 'ready' : 'not-trained'
+        return [scenario.id, status] as const
+      }),
+    ).then((entries) => {
+      if (!canceled) {
+        setPolicyStore(Object.fromEntries(entries) as Record<string, PolicyStatus>)
       }
     })
+
+    return () => {
+      canceled = true
+    }
   }, [])
 
-  // ── Derived: is Mission Sim reachable? ───────────────────────────────────
-  const hasAnyReadyPolicy = Object.values(policyStore).some(
-    (s) => s === 'ready',
-  )
-  const simAllowed = hasAnyReadyPolicy || ALLOW_HEURISTIC
+  const showToast = (message: string) => {
+    setToast(message)
 
-  // ── Guard: redirect sim → gym if policy gate blocks access ───────────────
-  useEffect(() => {
-    if (route.view === 'sim' && !simAllowed) {
-      showToast('Train a policy in Gym first.')
-      setRoute({ view: 'gym-registry' })
-      window.location.hash = 'gym'
+    if (toastTimer.current != null) {
+      window.clearTimeout(toastTimer.current)
     }
-  }, [route.view, simAllowed])
 
-  // ── Toast ────────────────────────────────────────────────────────────────
-  function showToast(msg: string) {
-    setToast(msg)
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => setToast(null), 4000)
+    toastTimer.current = window.setTimeout(() => setToast(null), 2600)
   }
 
-  // ── Navigation ───────────────────────────────────────────────────────────
+  const simAllowedFor = (envId: string) =>
+    policyStore[envId] === 'ready' || ALLOW_HEURISTIC
 
-  const goToRegistry = () => {
-    const next: AppRoute = { view: 'gym-registry' }
-    pushHash(next)
-    setRoute(next)
+  const enterMenu = () => {
+    setHashRoute('menu')
+    setRoute({ view: 'menu' })
   }
 
-  const enterGymEnv = (envId: string) => {
-    setSelectedEnvId(envId)
-    const next: AppRoute = { view: 'gym-env', envId }
-    pushHash(next)
-    setRoute(next)
+  const enterGym = (envId: string) => {
+    setHashRoute(`gym/${envId}`)
+    setRoute({ view: 'gym', envId })
   }
 
-  const goToCombatOS = () => {
-    const next: AppRoute = { view: 'combatos' }
-    pushHash(next)
-    setRoute(next)
-  }
-
-  /** #19 / #23 — attempt to enter Mission Sim. */
-  const goToSim = () => {
-    if (!simAllowed) {
-      showToast('Train a policy in Gym first.')
+  const enterSim = (envId: string) => {
+    if (!simAllowedFor(envId)) {
+      showToast('Train this environment first to unlock Mission Sim.')
       return
     }
 
-    const activeEnvId =
-      route.view === 'gym-env' ? route.envId : selectedEnvId
-    const chosenEnvId =
-      policyStore[activeEnvId] === 'ready' || ALLOW_HEURISTIC
-        ? activeEnvId
-        : (scenarios.find((s) => policyStore[s.id] === 'ready')?.id ??
-          activeEnvId)
-
-    setActiveEnvId(chosenEnvId)
-    setSimEnvId(chosenEnvId)
-    setSelectedEnvId(chosenEnvId)
-
-    const next: AppRoute = { view: 'sim' }
-    pushHash(next)
-    setRoute(next)
+    setActiveEnvId(envId)
+    setHashRoute(`sim/${envId}`)
+    setRoute({ view: 'sim', envId })
   }
 
-  // ── Render: CombatOS (full takeover, no app-shell chrome) ────────────────
+  const enterCombatOS = () => {
+    setHashRoute('combatos')
+    setRoute({ view: 'combatos' })
+  }
+
+  const handlePolicyReady = (envId: string) => {
+    setPolicyStore((current) => ({ ...current, [envId]: 'ready' }))
+  }
+
+  const handleTrainingStart = (envId: string) => {
+    setPolicyStore((current) => ({ ...current, [envId]: 'training' }))
+  }
+
+  const handleTrainingError = (message: string) => {
+    showToast(message)
+  }
+
+  const scopedNav = (envId: string, active: 'gym' | 'sim') => {
+    const simLocked = !simAllowedFor(envId)
+
+    return (
+      <div className="app-nav app-nav--scoped" aria-label="Scenario navigation">
+        <button
+          type="button"
+          className={`nav-pill ${active === 'gym' ? 'nav-pill--active' : ''}`}
+          onClick={() => enterGym(envId)}
+        >
+          Gym
+        </button>
+        <button
+          type="button"
+          className={`nav-pill ${active === 'sim' ? 'nav-pill--active' : ''}`}
+          onClick={() => enterSim(envId)}
+          disabled={simLocked}
+          title={simLocked ? 'Train this environment first.' : undefined}
+        >
+          Mission Sim
+        </button>
+        <button type="button" className="nav-pill" onClick={enterCombatOS}>
+          CombatOS
+        </button>
+      </div>
+    )
+  }
+
   if (route.view === 'combatos') {
     return <CombatOS />
   }
 
-  // ── Derived ──────────────────────────────────────────────────────────────
-  const gymFullEnvId =
-    route.view === 'gym-env' ? route.envId : selectedEnvId
-  const gymEnv = getScenarioById(gymFullEnvId)
-  const registryEnv = getScenarioById(selectedEnvId)
-
-  // ── Shared top-nav ───────────────────────────────────────────────────────
-  const nav = (
-    <nav className="top-nav" aria-label="Primary">
-      <button
-        type="button"
-        className={route.view === 'sim' ? 'is-active' : undefined}
-        onClick={goToSim}
-        disabled={!simAllowed}
-        title={!simAllowed ? 'Train a policy in Gym first.' : undefined}
-      >
-        Mission Sim
-      </button>
-      <button
-        type="button"
-        className={route.view !== 'sim' && route.view !== 'combatos' ? 'is-active' : undefined}
-        onClick={goToRegistry}
-      >
-        Gym Environments
-      </button>
-      <button
-        type="button"
-        className={route.view === 'combatos' ? 'is-active' : undefined}
-        onClick={goToCombatOS}
-      >
-        CombatOS
-      </button>
-    </nav>
-  )
-
-  // ── Render: fullscreen gym environment (#18) ─────────────────────────────
-  if (route.view === 'gym-env') {
-    return (
-      <main className="app-shell app-shell--gym-full">
-        <div className="app-backdrop" />
-        <section
-          className="gym-scene-full"
-          aria-label={`${gymEnv.name} training environment`}
-        >
-          <div className="gym-scene-full-nav">
-            <button
-              type="button"
-              className="gym-back-btn"
-              onClick={goToRegistry}
-              aria-label="Back to environment registry"
-            >
-              ← Environments
-            </button>
-            <div className="gym-scene-full-meta">
-              <span className="gym-scene-full-name">{gymEnv.name}</span>
-              <em
-                data-status={
-                  policyStore[gymEnv.id] === 'ready' ? 'Ready' : gymEnv.status
-                }
-              >
-                {policyStore[gymEnv.id] === 'ready'
-                  ? 'Policy ready'
-                  : gymEnv.label}
-              </em>
-            </div>
-            <div className="gym-scene-full-right">{nav}</div>
-          </div>
-
-          <GymScenarioStage key={gymEnv.id} scenario={gymEnv} />
-        </section>
-
-        {toast && (
-          <div className="app-toast" role="status">
-            {toast}
-          </div>
-        )}
-      </main>
-    )
-  }
-
-  // ── Render: Mission Sim ──────────────────────────────────────────────────
-  if (route.view === 'sim' && simAllowed) {
-    const simEnv = getScenarioById(simEnvId)
-    const policyReady = policyStore[simEnvId] === 'ready'
+  if (route.view === 'sim') {
+    const env = getScenarioById(route.envId) ?? scenarios[0]
+    const policyReady = policyStore[env.id] === 'ready'
+    const controllerActive = policyReady || ALLOW_HEURISTIC
 
     return (
       <main className="app-shell app-shell--sim">
-        <div className="app-backdrop" />
-        <section className="sim-viewport-full" aria-label="Mission simulation">
-          <div className="sim-viewport-nav">{nav}</div>
-
-          <div className="sim-policy-badge" aria-label="Active policy info">
-            <span className="sim-policy-env">{simEnv.name}</span>
-            <em data-status={policyReady ? 'Ready' : 'Queued'}>
-              {policyReady ? 'ONNX' : 'Heuristic'}
-            </em>
+        <div className="sim-top-bar">
+          <button type="button" className="sim-back-link" onClick={enterMenu}>
+            Back to gym menu
+          </button>
+          <div className="sim-title-block">
+            <span>Mission Sim</span>
+            <strong>{env.name}</strong>
           </div>
-
-          <CompositeScenePanel key={simEnvId} missionName={simEnv.name} />
-        </section>
-
-        {toast && (
-          <div className="app-toast" role="status">
-            {toast}
+          {scopedNav(env.id, 'sim')}
+          <div
+            className={`sim-policy-badge ${
+              controllerActive ? 'sim-policy-badge--ready' : ''
+            }`}
+          >
+            <span className="sim-policy-badge__kicker">Controller</span>
+            <span>
+              {policyReady
+                ? 'Trained policy'
+                : ALLOW_HEURISTIC
+                  ? 'Task behavior'
+                  : 'Locked'}
+            </span>
           </div>
-        )}
+        </div>
+
+        {!policyReady && ALLOW_HEURISTIC ? (
+          <div className="sim-status-callout">
+            mission controller active - task behavior executing
+          </div>
+        ) : null}
+
+        <CompositeScenePanel
+          key={env.id}
+          envId={env.id}
+          missionName={env.name}
+          policyEnabled={controllerActive}
+        />
       </main>
     )
   }
 
-  // ── Render: Gym registry (default / #gym) ────────────────────────────────
-  return (
-    <main className="app-shell app-shell--gym">
-      <div className="app-backdrop" />
+  if (route.view === 'gym') {
+    const env = getScenarioById(route.envId) ?? scenarios[0]
 
-      <div className="gym-viewport">
-        <header className="app-header app-header--minimal">{nav}</header>
-
-        <section className="gym-layout">
-          <aside className="gym-sidebar panel-frame">
-            <div className="panel-kicker">Environments</div>
-
-            <div
-              className="gym-card-stack"
-              role="list"
-              aria-label="Selectable environments"
-            >
-              {scenarios.map((env) => {
-                const isSelected = selectedEnvId === env.id
-                const status = policyStore[env.id]
-                return (
-                  <button
-                    key={env.id}
-                    type="button"
-                    className={`gym-card ${isSelected ? 'is-selected' : ''}`}
-                    onClick={() => enterGymEnv(env.id)}
-                    aria-label={`Enter ${env.name} fullscreen`}
-                  >
-                    <span className="gym-card-topline">
-                      <strong>{env.name}</strong>
-                      <em
-                        data-status={
-                          status === 'ready'
-                            ? 'Ready'
-                            : status === 'training'
-                              ? 'Queued'
-                              : env.status
-                        }
-                      >
-                        {status === 'ready'
-                          ? 'Policy ready'
-                          : status === 'training'
-                            ? 'Training…'
-                            : env.status}
-                      </em>
-                    </span>
-                    <span className="gym-card-label">{env.label}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </aside>
-
-          <section className="gym-stage panel-frame">
-            <div className="panel-head">
-              <h2>{registryEnv.name}</h2>
-              <span
-                data-status={
-                  policyStore[registryEnv.id] === 'ready'
-                    ? 'Ready'
-                    : registryEnv.status
-                }
-              >
-                {policyStore[registryEnv.id] === 'ready'
-                  ? 'Policy ready'
-                  : registryEnv.status}
-              </span>
-            </div>
-
-            <GymScenarioStage key={registryEnv.id} scenario={registryEnv} />
-          </section>
-        </section>
-      </div>
-
-      {toast && (
-        <div className="app-toast" role="status">
-          {toast}
+    return (
+      <main className="app-shell app-shell--gym-full">
+        <div className="gym-top-bar">
+          <button type="button" className="sim-back-link" onClick={enterMenu}>
+            Back to gym menu
+          </button>
+          <div className="sim-title-block">
+            <span>Training Gym</span>
+            <strong>{env.name}</strong>
+          </div>
+          {scopedNav(env.id, 'gym')}
+          <div
+            className={`sim-policy-badge ${
+              policyStore[env.id] === 'ready' ? 'sim-policy-badge--ready' : ''
+            }`}
+          >
+            <span className="sim-policy-badge__kicker">Policy</span>
+            <span>{policyStore[env.id] ?? 'not-trained'}</span>
+          </div>
         </div>
-      )}
+
+        <GymScenarioStage
+          key={env.id}
+          scenario={env}
+          onPolicyReady={handlePolicyReady}
+          onTrainingStart={handleTrainingStart}
+          onTrainingError={handleTrainingError}
+          policyStatus={policyStore[env.id] ?? 'not-trained'}
+        />
+      </main>
+    )
+  }
+
+  return (
+    <main className="app-shell app-shell--menu">
+      <section className="menu-viewport">
+        <div className="menu-header">
+          <div className="menu-header-left">
+            <span className="menu-subtitle">Select training environment</span>
+            <h1 className="menu-title">Training Gym</h1>
+            <p className="menu-kicker">
+              Pick a scenario, train the controller, then open Mission Sim with
+              the same environment and policy context.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="menu-action"
+            onClick={enterCombatOS}
+          >
+            CombatOS
+          </button>
+        </div>
+
+        <div className="menu-grid">
+          {scenarios.map((scenario) => {
+            const status = policyStore[scenario.id] ?? 'not-trained'
+            const ready = status === 'ready'
+
+            return (
+              <article
+                key={scenario.id}
+                className={`menu-card ${ready ? 'menu-card--ready' : ''}`}
+              >
+                <div className="menu-card-preview">
+                  <ScenarioMiniPreview scenarioId={scenario.id} />
+                </div>
+                <div className="menu-card-topline">
+                  <div>
+                    <span className="menu-card-meta-label">
+                      {scenario.label}
+                    </span>
+                    <h2 className="menu-card-name">{scenario.name}</h2>
+                  </div>
+                  <span
+                    className="menu-card-badge"
+                    data-status={ready ? 'Ready' : 'Not trained'}
+                  >
+                    {ready ? 'Policy ready' : status}
+                  </span>
+                </div>
+                <p className="menu-card-summary">{scenario.summary}</p>
+                <div className="menu-card-meta">
+                  <span className="menu-card-meta-item">
+                    <span className="menu-card-meta-label">Reward</span>
+                    {scenario.telemetryLabels[0]}
+                  </span>
+                  <span className="menu-card-meta-item">
+                    <span className="menu-card-meta-label">Track</span>
+                    {scenario.telemetryLabels[1]}
+                  </span>
+                  <span className="menu-card-meta-item">
+                    <span className="menu-card-meta-label">Objective</span>
+                    {scenario.telemetryLabels[2]}
+                  </span>
+                </div>
+                <div className="menu-card-actions">
+                  <button
+                    type="button"
+                    className="menu-card-cta menu-card-cta--button"
+                    onClick={() => enterGym(scenario.id)}
+                  >
+                    Train
+                  </button>
+                  <button
+                    type="button"
+                    className="menu-card-cta menu-card-cta--button"
+                    onClick={() => enterSim(scenario.id)}
+                    disabled={!simAllowedFor(scenario.id)}
+                  >
+                    Mission Sim
+                  </button>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      </section>
+      {toast ? <div className="app-toast">{toast}</div> : null}
     </main>
   )
 }
-
-export default App

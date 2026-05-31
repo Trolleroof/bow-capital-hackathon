@@ -1,7 +1,7 @@
 {
   "act_dim": 2,
-  "best_checkpoint_coverage": 0.071181,
-  "best_global_step": 800,
+  "best_checkpoint_coverage": 0.079167,
+  "best_global_step": 6000,
   "checkpoint": "checkpoints/drone-vs-drone/policy.pt",
   "config": {
     "actor_hidden": 64,
@@ -14,22 +14,22 @@
     "log_std_init": -0.5,
     "lr": 0.0003,
     "max_grad_norm": 0.5,
-    "num_minibatches": 1,
+    "num_minibatches": 4,
     "rollout_steps": 400,
-    "seed": 2,
-    "update_epochs": 1,
+    "seed": 0,
+    "update_epochs": 8,
     "vf_clip": 0.2,
     "vf_coef": 0.5
   },
   "env_id": "drone-vs-drone",
   "events": "checkpoints/drone-vs-drone/train-events.ndjson",
-  "final_coverage": 0.066493,
-  "global_step": 800,
+  "final_coverage": 0.074826,
+  "global_step": 12000,
   "losses_at_best": {
-    "approx_kl": 0.0,
-    "entropy": 1.838477,
-    "pg_loss": 0.0,
-    "v_loss": 4.187607
+    "approx_kl": 0.003441,
+    "entropy": 1.82248,
+    "pg_loss": -0.005232,
+    "v_loss": 1.962341
   },
   "obs_dim": 36,
   "onnx": {
@@ -41,7 +41,7 @@
   "profile": "combat",
   "random_coverage": 0.058507,
   "rollout_steps": 400,
-  "run_name": "mappo_drone-vs-drone_combat_1780179056",
-  "seed": 2,
-  "timesteps": 800
+  "run_name": "mappo_drone-vs-drone_combat_1780186547",
+  "seed": 0,
+  "timesteps": 12000
 }

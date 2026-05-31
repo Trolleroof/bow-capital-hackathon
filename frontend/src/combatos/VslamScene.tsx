@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { SlamPoint, SlamPose } from './useCombatState'
 
 interface Props {
@@ -26,12 +27,22 @@ function boundsFor(points: SlamPoint[], path: SlamPose[], pose: SlamPose | null)
 }
 
 export function VslamScene({ points, path, pose }: Props) {
+  const [chaseEnabled, setChaseEnabled] = useState(false)
   const hostRef = useRef<HTMLDivElement>(null)
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
+  const controlsRef = useRef<OrbitControls | null>(null)
   const pointsRef = useRef<THREE.Points | null>(null)
   const pathRef = useRef<THREE.Line | null>(null)
   const poseRef = useRef<THREE.Group | null>(null)
   const frameRef = useRef<number | null>(null)
+  const hasFramedRef = useRef(false)
+  const chaseEnabledRef = useRef(false)
+
+  useEffect(() => {
+    chaseEnabledRef.current = chaseEnabled
+    const controls = controlsRef.current
+    if (controls) controls.enabled = !chaseEnabled
+  }, [chaseEnabled])
 
   useEffect(() => {
     const host = hostRef.current
@@ -48,6 +59,16 @@ export function VslamScene({ points, path, pose }: Props) {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.outputColorSpace = THREE.SRGBColorSpace
     host.appendChild(renderer.domElement)
+
+    const controls = new OrbitControls(camera, renderer.domElement)
+    controls.enableDamping = true
+    controls.dampingFactor = 0.08
+    controls.rotateSpeed = 0.65
+    controls.panSpeed = 0.75
+    controls.zoomSpeed = 0.8
+    controls.minDistance = 0.4
+    controls.maxDistance = 220
+    controls.target.set(0, 0, 0)
 
     const grid = new THREE.GridHelper(24, 24, 0x2f5d82, 0x162638)
     grid.position.y = -0.02
@@ -82,6 +103,7 @@ export function VslamScene({ points, path, pose }: Props) {
     scene.add(poseGroup)
 
     cameraRef.current = camera
+    controlsRef.current = controls
     pointsRef.current = pointCloud
     pathRef.current = pathLine
     poseRef.current = poseGroup
@@ -95,6 +117,15 @@ export function VslamScene({ points, path, pose }: Props) {
     }
 
     const render = () => {
+      if (chaseEnabledRef.current && poseGroup.visible) {
+        const chaseOffset = new THREE.Vector3(0, 1.2, 3.4).applyQuaternion(poseGroup.quaternion)
+        const lookOffset = new THREE.Vector3(0, 0.18, -1.0).applyQuaternion(poseGroup.quaternion)
+        const targetPosition = poseGroup.position.clone().add(chaseOffset)
+        const targetLook = poseGroup.position.clone().add(lookOffset)
+        camera.position.lerp(targetPosition, 0.18)
+        controls.target.lerp(targetLook, 0.22)
+      }
+      controls.update()
       renderer.render(scene, camera)
       frameRef.current = requestAnimationFrame(render)
     }
@@ -111,6 +142,7 @@ export function VslamScene({ points, path, pose }: Props) {
       pointMaterial.dispose()
       pathGeometry.dispose()
       pathMaterial.dispose()
+      controls.dispose()
       body.geometry.dispose()
       ;(body.material as THREE.Material).dispose()
       mast.geometry.dispose()
@@ -155,12 +187,31 @@ export function VslamScene({ points, path, pose }: Props) {
     }
 
     const { center, radius } = boundsFor(points, path, pose)
-    camera.position.set(center.x + radius * 0.85, center.y + radius * 0.65, center.z + radius * 1.05)
-    camera.lookAt(center)
+    const controls = controlsRef.current
+    const shouldFrame = !hasFramedRef.current && (points.length > 0 || path.length > 0 || pose)
+    if (shouldFrame) {
+      camera.position.set(center.x + radius * 0.85, center.y + radius * 0.65, center.z + radius * 1.05)
+      controls?.target.copy(center)
+      camera.lookAt(center)
+      hasFramedRef.current = true
+    }
     camera.near = Math.max(0.01, radius / 1000)
     camera.far = Math.max(50, radius * 8)
     camera.updateProjectionMatrix()
   }, [points, path, pose])
 
-  return <div ref={hostRef} className="vslam-scene" />
+  return (
+    <div className="vslam-wrap">
+      <div ref={hostRef} className="vslam-scene" />
+      <button
+        type="button"
+        className={`vslam-chase${chaseEnabled ? ' is-on' : ''}`}
+        onClick={() => setChaseEnabled(value => !value)}
+        aria-pressed={chaseEnabled}
+        title={chaseEnabled ? 'Return to manual orbit camera' : 'Follow current SLAM camera pose'}
+      >
+        {chaseEnabled ? 'CHASE ON' : 'CHASE'}
+      </button>
+    </div>
+  )
 }

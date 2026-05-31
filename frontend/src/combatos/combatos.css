@@ -369,6 +369,7 @@
 .fig-legend .lg { width: 14px; height: 0; border-top: 2px solid var(--amber); }
 .fig-legend .lg.dot { width: 7px; height: 7px; border: 0; border-radius: 50%; background: var(--amber-br); }
 .fig-legend .lg.cloud { width: 14px; height: 8px; border: 0; background: radial-gradient(circle, var(--amber-br) 1.4px, transparent 1.6px); background-size: 5px 5px; }
+.vslam-wrap,
 .vslam-scene,
 .vslam-scene canvas {
   position: absolute;
@@ -377,6 +378,7 @@
   height: 100%;
   display: block;
 }
+.vslam-wrap { z-index: 0; }
 .vslam-scene::after {
   content: "";
   position: absolute;
@@ -386,6 +388,32 @@
     linear-gradient(rgba(90,130,170,.04) 1px, transparent 1px),
     linear-gradient(90deg, rgba(90,130,170,.04) 1px, transparent 1px);
   background-size: 34px 34px;
+}
+.vslam-chase {
+  position: absolute;
+  left: 11px;
+  top: 9px;
+  z-index: 3;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgba(63,163,230,.36);
+  background: rgba(7, 12, 19, .82);
+  color: var(--ink-dim);
+  font: 700 8.5px/1 var(--mono);
+  letter-spacing: .14em;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+.vslam-chase:hover,
+.vslam-chase:focus-visible {
+  border-color: rgba(117, 205, 255, .62);
+  color: #fff;
+  outline: none;
+}
+.vslam-chase.is-on {
+  border-color: rgba(55,184,164,.7);
+  color: var(--green);
+  box-shadow: 0 0 18px rgba(55,184,164,.12);
 }
 
 /* feed */

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { PYBULLET_DEMO_CONFIG } from '../gym/pybulletDemoConfig'
 import { getScenarioById } from '../gym/scenarios'
 import { PYBULLET_WS_URL, startPyBulletSim } from '../gym/trainApi'
 
@@ -18,6 +19,8 @@ interface SwarmMessage {
   env_id?: string
   policy?: string
   coverage?: number
+  captures?: number
+  contact?: boolean
   agents: AgentPose[]
 }
 
@@ -42,6 +45,7 @@ interface PyBulletSimPanelProps {
 type ConnectionState = 'connecting' | 'online' | 'offline'
 type CameraMode = 'observer' | 'chase' | 'fpv'
 
+
 export default function PyBulletSimPanel({
   envId,
   missionName,
@@ -53,7 +57,8 @@ export default function PyBulletSimPanel({
   const [frameTime, setFrameTime] = useState(0)
   const [agents, setAgents] = useState<AgentPose[]>([])
   const [policy, setPolicy] = useState('trained')
-  const [coverage, setCoverage] = useState(0)
+  const [captures, setCaptures] = useState(0)
+  const [contact, setContact] = useState(false)
   const [cameraMode, setCameraMode] = useState<CameraMode>('observer')
   const [selectedDrone, setSelectedDrone] = useState(0)
   const [switchingCamera, setSwitchingCamera] = useState(false)
@@ -108,8 +113,9 @@ export default function PyBulletSimPanel({
 
         if (message.topic === 'swarm') {
           setAgents(message.agents)
-          setCoverage(message.coverage ?? 0)
           setPolicy(message.policy ?? 'trained')
+          if (typeof message.captures === 'number') setCaptures(message.captures)
+          if (typeof message.contact === 'boolean') setContact(message.contact)
         }
       }
 
@@ -176,12 +182,17 @@ export default function PyBulletSimPanel({
   }, [cameraMode, selectedDrone, switchCamera])
 
   const scenario = getScenarioById(envId)
+  const simConfig = PYBULLET_DEMO_CONFIG.simulation
   const selectedAgent = agents.find((agent) => agent.id === selectedDrone)
   const speed = selectedAgent
     ? Math.hypot(Math.cos(selectedAgent.yaw), Math.sin(selectedAgent.yaw)) * 4.2
     : 0
   const modeLabel = cameraMode === 'fpv' ? 'FPV' : cameraMode.toUpperCase()
-  const visibleAgents = agents.length ? agents : [{ id: 0, alive: true } as AgentPose]
+  const configuredAgents = Array.from(
+    { length: simConfig.numDrones },
+    (_, id) => ({ id, alive: true }) as AgentPose,
+  )
+  const visibleAgents = agents.length ? agents : configuredAgents
 
   return (
     <section className="pybullet-sim" aria-label={`${missionName} PyBullet simulation`}>
@@ -215,7 +226,6 @@ export default function PyBulletSimPanel({
           <strong>{scenario.name}</strong>
         </div>
         <div className="pybullet-live-cluster" aria-label="Live simulation status">
-          <span data-state={connection}>WS {connection}</span>
           <span>{modeLabel}</span>
           <span>{frameTime.toFixed(1)}s</span>
         </div>
@@ -253,16 +263,9 @@ export default function PyBulletSimPanel({
       <div className="pybullet-sidecar" aria-label="Mission telemetry">
         <div className="pybullet-stat-grid">
           <span>Policy {policy}</span>
-          <span>Alive {alive || agents.length}</span>
-          <span>Coverage {(coverage * 100).toFixed(0)}%</span>
-          <span>Frame {frameTime.toFixed(1)}s</span>
-        </div>
-
-        <div className="pybullet-asset-strip" aria-label="Rendered scene assets">
-          <span>Terrain</span>
-          <span>Troops</span>
-          <span>Sandbags</span>
-          <span>Drone mesh</span>
+          <span>Alive {alive || agents.length}/{simConfig.numDrones}</span>
+          <span>Captures {captures}</span>
+          <span>{contact ? 'CONTACT' : 'Searching'}</span>
         </div>
 
         <div className="pybullet-map" aria-label="Coordination map">

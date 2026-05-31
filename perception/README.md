@@ -1,4 +1,4 @@
-# perception/ -- CombatOS Targeting Module
+# perception/ -- Outcast Virus Targeting Module
 
 **Owner:** Matthieu Fuller (Targeting Lead)
 

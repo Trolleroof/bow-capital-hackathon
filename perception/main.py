@@ -1,5 +1,5 @@
 """
-perception/main.py -- CombatOS Targeting Loop
+perception/main.py -- Outcast Virus Targeting Loop
 
 Operator flow (state machine):
   PROPOSED  --[F]--> FOLLOWED  --[C]--> CONFIRMED
@@ -57,7 +57,7 @@ print("[import] visualizer ok", flush=True)
 def _dbg(msg: str) -> None:
     print(f"[perception][{time.time():.3f}] {msg}", flush=True)
 
-WINDOW = "CombatOS - Targeting"
+WINDOW = "Outcast Virus - Targeting"
 
 
 def _drain_commands(

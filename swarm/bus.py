@@ -1,4 +1,4 @@
-"""WebSocket bus for the CombatOS swarm vertical (Phase 0).
+"""WebSocket bus for the Outcast Virus swarm vertical (Phase 0).
 
 A tiny broadcast server: every connected client receives JSON frames tagged with a
 topic. This Phase-0 entrypoint drives `SwarmEnv` with a RANDOM policy and streams
@@ -72,16 +72,18 @@ async def broadcast(topic: str, payload: dict) -> None:
 def swarm_message(env: SwarmEnv) -> dict:
     """Build the `swarm` bus payload from current env state (SWARM.md §4)."""
     agents = []
+    is_3d = env.pos.shape[1] >= 3
     for i in range(env.n):
         vx, vy = float(env.vel[i, 0]), float(env.vel[i, 1])
         yaw = math.atan2(vy, vx) if (vx or vy) else 0.0
         role = ROLES[env.roles[i]] if env.roles[i] < len(ROLES) else "scout"
+        z = float(env.pos[i, 2]) if is_3d else float(ALTITUDE)
         agents.append(
             {
                 "id": i,
                 "x": round(float(env.pos[i, 0]), 3),
                 "y": round(float(env.pos[i, 1]), 3),
-                "z": round(float(ALTITUDE), 3),
+                "z": round(z, 3),
                 "yaw": round(float(yaw), 3),
                 "role": role,
                 "alive": bool(env.alive[i]),
@@ -89,15 +91,29 @@ def swarm_message(env: SwarmEnv) -> dict:
         )
     msg: dict = {"t": round(float(env.t), 3), "comms": "denied", "agents": agents}
     # Expose target position so the PyBullet renderer can draw it correctly.
+    # 3D envs (hunt-and-seek) carry a z component; 2D envs draw at ALTITUDE.
     if hasattr(env, "target_pos") and env.target_pos is not None:
-        msg["target_pos"] = [round(float(env.target_pos[0]), 3), round(float(env.target_pos[1]), 3)]
+        tp = env.target_pos
+        target = [round(float(tp[0]), 3), round(float(tp[1]), 3)]
+        if len(tp) >= 3:
+            target.append(round(float(tp[2]), 3))
+        msg["target_pos"] = target
+        if hasattr(env, "contact"):
+            msg["target_visible"] = bool(env.contact)
+    # Hunt scenario success telemetry so the operator can see catches happen live.
+    if hasattr(env, "captures"):
+        msg["captures"] = int(env.captures)
+    if hasattr(env, "contact"):
+        msg["contact"] = bool(env.contact)
     return msg
 
 
 def _random_policy(env: SwarmEnv):
     """A policy_fn that ignores observations and acts randomly (Phase 0)."""
+    act_dim = getattr(env, "act_dim", 2)
+
     def act(_obs):
-        return env.rng.uniform(-1, 1, size=(env.n, 2)).astype(np.float32)
+        return env.rng.uniform(-1, 1, size=(env.n, act_dim)).astype(np.float32)
     return act
 
 
@@ -251,7 +267,6 @@ class PyBulletSwarmRuntime:
             "moving-target-track": [(-4.0, 0.0), (0.0, 2.4), (4.0, -1.6)],
             "search-and-interdict": [(-3.8, -3.2), (-1.4, 2.8), (2.8, 1.1), (4.3, -3.4)],
             "defend-asset": [(-4.4, 0.0), (4.4, 0.0), (0.0, -4.4), (0.0, 4.4)],
-            "swarm-vs-swarm-race": [(-5.0, -2.0), (-1.8, 2.0), (1.8, -2.0), (5.0, 2.0)],
         }
         for idx, (x, y) in enumerate(layouts.get(self.env_id, layouts["search-and-interdict"])):
             height = 0.45 + 0.18 * (idx % 2)
@@ -265,9 +280,6 @@ class PyBulletSwarmRuntime:
             self._cylinder(0.95, 0.2, [0.0, 0.0, 0.1], [0.28, 0.78, 0.56, 1])
         elif self.env_id == "moving-target-track":
             self._box([0.6, 0.32, 0.16], [2.5, -2.7, 0.18], [0.88, 0.34, 0.16, 1])
-        elif self.env_id == "swarm-vs-swarm-race":
-            for x in (-6.0, -2.0, 2.0, 6.0):
-                self._box([1.25, 0.25, 0.018], [x, 0, 0.03], [0.13, 0.38, 0.26, 1])
 
     def _spawn_drones(self) -> list[int]:
         bodies = []
@@ -422,7 +434,7 @@ async def run_random(host: str = HOST, port: int = PORT, hz: float = HZ) -> None
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="CombatOS swarm WebSocket bus")
+    p = argparse.ArgumentParser(description="Outcast Virus swarm WebSocket bus")
     p.add_argument(
         "--backend",
         choices=["pointmass", "pybullet"],

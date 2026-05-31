@@ -1,5 +1,5 @@
 /**
- * battlefieldParams.ts — Typed schema for CombatOS battlefield simulation parameters.
+ * battlefieldParams.ts — Typed schema for Outcast Virus battlefield simulation parameters.
  *
  * Priority tiers (see docs/battlefield-parameters.md §2):
  *   P0  — wired into sim dynamics / obs / rewards (swarm/env.py + sim.ts)
@@ -197,24 +197,6 @@ export const SCENARIO_DEFAULTS: Record<string, BattlefieldParams> = {
     roe:      { engagementAuthority: 'weapons-tight', minStandoffM: 0, civilianDensity: 0, timeLimitSec: 320 },
     logistics:{ swarmSize: 6, batteryEnvelopeSec: 320, attritionInjectRate: 0.0 },
   },
-  'moving-target-track': {
-    envId: 'moving-target-track',
-    weather:  { windSpeed: 2.0, windDirRad: Math.PI / 3, visibility: 1.0, temperatureC: 20 },
-    ew:       { gpsDenialLevel: 0.0, jamDutyCycle: 0.0, spoofingEnabled: false },
-    terrain:  { elevRoughness: 0.0, urbanDensity: 0.0 },
-    threat:   { hostileUasCount: 0, movingTargetSpeed: 0.8 },
-    roe:      { engagementAuthority: 'weapons-tight', minStandoffM: 0, civilianDensity: 0, timeLimitSec: 300 },
-    logistics:{ swarmSize: 4, batteryEnvelopeSec: 300, attritionInjectRate: 0.02 },
-  },
-  'search-and-interdict': {
-    envId: 'search-and-interdict',
-    weather:  { windSpeed: 4.0, windDirRad: Math.PI / 4, visibility: 0.6, temperatureC: 15 },
-    ew:       { gpsDenialLevel: 0.7, jamDutyCycle: 0.4, spoofingEnabled: false },
-    terrain:  { elevRoughness: 0.0, urbanDensity: 0.0 },
-    threat:   { hostileUasCount: 1, movingTargetSpeed: 0.7 },
-    roe:      { engagementAuthority: 'weapons-tight', minStandoffM: 0, civilianDensity: 0, timeLimitSec: 360 },
-    logistics:{ swarmSize: 5, batteryEnvelopeSec: 360, attritionInjectRate: 0.02 },
-  },
   'defend-asset': {
     envId: 'defend-asset',
     weather:  { windSpeed: 2.0, windDirRad: Math.PI / 2, visibility: 1.0, temperatureC: 20 },
@@ -224,14 +206,14 @@ export const SCENARIO_DEFAULTS: Record<string, BattlefieldParams> = {
     roe:      { engagementAuthority: 'weapons-tight', minStandoffM: 5, civilianDensity: 0, timeLimitSec: 280 },
     logistics:{ swarmSize: 5, batteryEnvelopeSec: 280, attritionInjectRate: 0.05 },
   },
-  'swarm-vs-swarm-race': {
-    envId: 'swarm-vs-swarm-race',
-    weather:  { windSpeed: 5.0, windDirRad: Math.PI / 4, visibility: 0.8, temperatureC: 10 },
-    ew:       { gpsDenialLevel: 0.5, jamDutyCycle: 0.4, spoofingEnabled: false },
+  'navigate-to-target': {
+    envId: 'navigate-to-target',
+    weather:  { windSpeed: 1.0, windDirRad: 0, visibility: 1.0, temperatureC: 20 },
+    ew:       { gpsDenialLevel: 0.0, jamDutyCycle: 0.0, spoofingEnabled: false },
     terrain:  { elevRoughness: 0.0, urbanDensity: 0.0 },
-    threat:   { hostileUasCount: 6, movingTargetSpeed: 0.6 },
-    roe:      { engagementAuthority: 'weapons-free', minStandoffM: 0, civilianDensity: 0, timeLimitSec: 320 },
-    logistics:{ swarmSize: 6, batteryEnvelopeSec: 320, attritionInjectRate: 0.04 },
+    threat:   { hostileUasCount: 0, movingTargetSpeed: 0.3 },
+    roe:      { engagementAuthority: 'weapons-tight', minStandoffM: 0, civilianDensity: 0, timeLimitSec: 300 },
+    logistics:{ swarmSize: 1, batteryEnvelopeSec: 300, attritionInjectRate: 0.0 },
   },
 }
 

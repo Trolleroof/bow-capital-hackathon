@@ -1,4 +1,4 @@
-"""Task-aligned policy evaluation for CombatOS swarm scenarios."""
+"""Task-aligned policy evaluation for Outcast Virus swarm scenarios."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from swarm.env import OBSTACLE_DIM
 from swarm.models import Actor
 from swarm.scenarios import make_scenario_env
 from swarm.task_profiles import get_task_profile
@@ -33,6 +34,96 @@ def _numeric_metrics(info: dict[str, Any]) -> dict[str, float]:
             if isinstance(value, (int, float, np.integer, np.floating)):
                 out[key] = float(value)
     return out
+
+
+class ScriptedPolicy:
+    """Heuristic baseline: steer straight at the scenario objective.
+
+    Reads only the local observation (decentralized, like the learned policy):
+    the first two task-block features are the normalized bearing to the nearest
+    hostile / target / asset / goal for every combat-style scenario, so a unit
+    step along that vector is a "fly toward the thing" controller. If PPO can't
+    beat this, the bug is reward/obs/curriculum, not network capacity.
+    """
+
+    def __init__(self, env):
+        self.scenario_id = env.scenario_id
+        # The 3D hunt env has a different observation layout (no coverage patch);
+        # it exposes the target block offset directly as env.target_off.
+        self.is_hunt = self.scenario_id == "hunt-and-seek"
+        if self.is_hunt:
+            self.target_off = env.target_off
+            return
+        self.patch = env.patch
+        self.patch_off = 4 + 2 * env.k
+        self.obstacle_off = 4 + 2 * env.k + env.patch * env.patch
+        self.task_off = 4 + 2 * env.k + env.patch * env.patch + OBSTACLE_DIM
+
+    def __call__(self, obs):
+        o = obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor) else np.asarray(obs)
+
+        if self.is_hunt:
+            # Fly straight at the (estimated) target: the target block's first
+            # three features are the normalized 3D relative offset. 3D action.
+            off = self.target_off
+            bearing3 = o[:, off:off + 3]
+            nrm = np.linalg.norm(bearing3, axis=1, keepdims=True)
+            action = (bearing3 / np.maximum(nrm, 1e-6)).astype(np.float32)
+            return torch.from_numpy(action)
+
+        bearing = o[:, self.task_off:self.task_off + 2]
+
+        if self.scenario_id == "defend-asset":
+            hostile = o[:, self.task_off + 2:self.task_off + 4]
+            has_hostile = o[:, self.task_off + 4:self.task_off + 5] > 0.5
+            bearing = np.where(has_hostile, hostile, bearing)
+        elif self.scenario_id == "search-and-interdict":
+            contact_known = o[:, self.task_off + 5:self.task_off + 6] > 0.5
+            target = o[:, self.task_off + 3:self.task_off + 5]
+            # The search target has a known ingress corridor. Before contact,
+            # use own normalized position to drive to the expected intercept
+            # box; after contact, collapse on the live target cue.
+            own = o[:, 0:2]
+            search_goal = np.array([0.25, 0.38], dtype=np.float32)
+            sweep = search_goal[None, :] - own
+            bearing = np.where(contact_known, target, sweep)
+        elif self.scenario_id == "navigate-to-target":
+            # Staged corridor route: stay centered through the first obstacle
+            # pair, then pass above the choke-point pillar before descending to
+            # the goal. Coordinates are normalized by world half.
+            own = o[:, 0:2]
+            waypoint = np.zeros_like(own)
+            waypoint[:, 0] = np.where(
+                own[:, 0] < -0.30,
+                -0.30,
+                np.where(own[:, 0] < 0.35, 0.35, np.where(own[:, 0] < 0.65, 0.65, 0.85)),
+            )
+            waypoint[:, 1] = np.where(own[:, 0] < -0.30, 0.0, np.where(own[:, 0] < 0.65, 0.17, 0.0))
+            bearing = waypoint - own
+
+        nrm = np.linalg.norm(bearing, axis=1, keepdims=True)
+        action = (bearing / np.maximum(nrm, 1e-6)).astype(np.float32)
+        return torch.from_numpy(action)
+
+
+def eval_scripted(
+    *,
+    env_id: str,
+    battlefield,
+    n_episodes: int = 10,
+    seed: int = 123,
+) -> EvalResult:
+    """Evaluate the scripted 'fly at the objective' baseline (see ScriptedPolicy)."""
+    probe = make_scenario_env(env_id, battlefield=battlefield, seed=seed)
+    scripted = ScriptedPolicy(probe)
+    return eval_policy(
+        scripted,  # duck-typed: deterministic path only calls actor(obs)
+        env_id=env_id,
+        battlefield=battlefield,
+        n_episodes=n_episodes,
+        seed=seed,
+        deterministic=True,
+    )
 
 
 def eval_policy(

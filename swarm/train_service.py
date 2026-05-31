@@ -1,4 +1,4 @@
-"""Persistent backend API for the CombatOS gym UI.
+"""Persistent backend API for the Outcast Virus gym UI.
 
 Starting this process does not train a policy. It only serves HTTP/WebSocket
 endpoints. Training is spawned on demand when the frontend calls
@@ -54,6 +54,7 @@ _LOCK = threading.Lock()
 _MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 _JOBS: dict[str, dict[str, Any]] = {}
 _SIM_JOB: dict[str, Any] | None = None
+_SIM_TOKEN = 0  # increments per sim start so stale driver threads can self-exit
 _NO_CLIENT_WARNED_AT = 0.0
 
 
@@ -61,7 +62,7 @@ _NO_CLIENT_WARNED_AT = 0.0
 
 
 class TrainStartRequest(BaseModel):
-    env_id: str = "search-and-interdict"
+    env_id: str = "drone-vs-drone"
     profile: str = "combat"
     timesteps: int = 100_000
 
@@ -71,14 +72,18 @@ class TrainStopRequest(BaseModel):
 
 
 class TrainExportRequest(BaseModel):
-    env_id: str = "search-and-interdict"
+    env_id: str = "drone-vs-drone"
 
 
 class SimStartRequest(BaseModel):
-    env_id: str = "search-and-interdict"
+    env_id: str = "drone-vs-drone"
     policy: str = "trained"
     camera_mode: str = "observer"
     selected_drone: int = 0
+
+
+class DecommissionRequest(BaseModel):
+    env_id: str = "hunt-and-seek"
 
 
 # ── WebSocket helpers ──────────────────────────────────────────────────────
@@ -262,8 +267,18 @@ def _tail_training(env_id: str, proc: subprocess.Popen) -> None:
             _broadcast_sync_line(json.dumps(failed))
 
 
-def _drive_sim_policy(env_id: str, policy: str, proc: subprocess.Popen) -> None:
-    assert proc.stdin is not None
+def _drive_sim_policy(
+    env_id: str, policy: str, proc: subprocess.Popen | None, token: int
+) -> None:
+    """Step the env and publish poses over the bus.
+
+    When ``proc`` is a live PyBullet renderer, poses are also written to its
+    stdin so it can render camera frames. When ``proc is None`` (headless
+    fallback — e.g. PyBullet isn't installed), we still broadcast the ``swarm``
+    topic so the dashboard shows the live 3D swarm + target on its minimap and
+    telemetry; only the photoreal camera image is absent.
+    """
+    headless = proc is None
     try:
         from swarm.bus import _random_policy, _trained_policy, swarm_message
         from swarm.scenarios import make_scenario_env
@@ -289,11 +304,20 @@ def _drive_sim_policy(env_id: str, policy: str, proc: subprocess.Popen) -> None:
         policy_fn = _random_policy(env)
         label = "random"
 
-    dt = 0.1
+    # Wall-clock pacing of the live playback (physics step is env DT internally).
+    # Larger = slower, more watchable rollout on stage.
+    dt = float(os.environ.get("SIM_PLAYBACK_DT", "0.16"))
     ckpt_mtime: float = os.path.getmtime(ckpt) if os.path.exists(ckpt) else 0.0
     reload_check_interval = 50  # frames
     frame_count = 0
-    while proc.poll() is None:
+    while True:
+        # Stop when superseded by a newer sim or when the renderer (if any) dies.
+        with _LOCK:
+            current = _SIM_JOB
+        if not current or current.get("token") != token or not current.get("running"):
+            break
+        if proc is not None and proc.poll() is not None:
+            break
         # Hot-reload checkpoint if training produced a new one since we started.
         frame_count += 1
         if frame_count % reload_check_interval == 0 and policy == "trained" and os.path.exists(ckpt):
@@ -318,11 +342,12 @@ def _drive_sim_policy(env_id: str, policy: str, proc: subprocess.Popen) -> None:
         payload["coverage"] = round(covered / total, 3) if total else 0.0
         line = json.dumps({"topic": "swarm", **payload})
         _broadcast_sim_sync_line(line)
-        try:
-            proc.stdin.write(json.dumps(payload) + "\n")
-            proc.stdin.flush()
-        except (BrokenPipeError, OSError):
-            break
+        if not headless and proc is not None and proc.stdin is not None:
+            try:
+                proc.stdin.write(json.dumps(payload) + "\n")
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                break
         time.sleep(dt)
 
 
@@ -419,10 +444,12 @@ def _tail_sim(proc: subprocess.Popen) -> None:
 
 
 def _start_sim(env_id: str, policy: str, camera_mode: str, selected_drone: int) -> dict:
-    global _SIM_JOB
+    global _SIM_JOB, _SIM_TOKEN
     with _LOCK:
         existing = _SIM_JOB
-        if existing and existing.get("proc") and existing["proc"].poll() is None:
+        proc_alive = bool(existing and existing.get("proc") and existing["proc"].poll() is None)
+        headless_alive = bool(existing and existing.get("headless") and existing.get("running"))
+        if existing and (proc_alive or headless_alive):
             same_renderer = (
                 existing.get("env_id") == env_id
                 and existing.get("policy") == policy
@@ -434,11 +461,14 @@ def _start_sim(env_id: str, policy: str, camera_mode: str, selected_drone: int) 
                     "ok": True,
                     "env_id": env_id,
                     "running": True,
+                    "renderer": "headless" if headless_alive and not proc_alive else "pybullet",
                     "ws_url": f"ws://{HOST_HTTP}:{PORT_HTTP}/sim/ws",
                 }
-            _kill_proc(existing["proc"])
+            if existing.get("proc"):
+                _kill_proc(existing["proc"])
             existing["running"] = False
 
+    token = _SIM_TOKEN = _SIM_TOKEN + 1
     renderer_python = os.environ.get("PYBULLET_PYTHON", "/opt/homebrew/bin/python3")
     cmd = [
         renderer_python,
@@ -464,23 +494,50 @@ def _start_sim(env_id: str, policy: str, camera_mode: str, selected_drone: int) 
             "selected_drone": selected_drone,
             "running": True,
             "proc": proc,
+            "headless": False,
+            "token": token,
             "started_at": time.time(),
         }
 
     threading.Thread(target=_tail_sim, args=(proc,), daemon=True).start()
-    threading.Thread(target=_drive_sim_policy, args=(env_id, policy, proc), daemon=True).start()
     time.sleep(0.35)
     code = proc.poll()
     if code is not None:
+        # Renderer failed to start (commonly: PyBullet not installed). Fall back
+        # to a headless pose-only stream so the dashboard still shows the live
+        # 3D swarm + target on its minimap/telemetry — just without the camera.
+        print(
+            f"[pybullet-sim] renderer exited at startup (code {code}); "
+            f"falling back to headless pose-only stream for {env_id}",
+            flush=True,
+        )
         with _LOCK:
-            if _SIM_JOB and _SIM_JOB.get("proc") is proc:
-                _SIM_JOB["running"] = False
-                _SIM_JOB["returncode"] = code
+            _SIM_JOB = {
+                "env_id": env_id,
+                "policy": policy,
+                "camera_mode": camera_mode,
+                "selected_drone": selected_drone,
+                "running": True,
+                "proc": None,
+                "headless": True,
+                "token": token,
+                "started_at": time.time(),
+            }
+        threading.Thread(
+            target=_drive_sim_policy, args=(env_id, policy, None, token), daemon=True
+        ).start()
         return {
-            "ok": False,
+            "ok": True,
             "env_id": env_id,
-            "error": f"PyBullet sim exited during startup with code {code}",
+            "running": True,
+            "renderer": "headless",
+            "note": "PyBullet unavailable — streaming poses only (no camera frames).",
+            "ws_url": f"ws://{HOST_HTTP}:{PORT_HTTP}/sim/ws",
         }
+
+    threading.Thread(
+        target=_drive_sim_policy, args=(env_id, policy, proc, token), daemon=True
+    ).start()
 
     return {
         "ok": True,
@@ -496,11 +553,48 @@ def _stop_sim() -> dict:
     global _SIM_JOB
     with _LOCK:
         job = _SIM_JOB
-        if not job or not job.get("proc") or job["proc"].poll() is not None:
+        if not job or not job.get("running"):
             return {"ok": True, "stopped": False}
-        _kill_proc(job["proc"])
+        # Headless pose-only job has no subprocess — just flip the running flag
+        # so the driver thread self-exits on its next tick (token/running check).
+        if job.get("proc") is not None and job["proc"].poll() is None:
+            _kill_proc(job["proc"])
         job["running"] = False
         return {"ok": True, "stopped": True, "env_id": job.get("env_id")}
+
+
+def _policy_deployed(env_id: str) -> bool:
+    """A policy is 'deployed' when its trained checkpoint exists on disk."""
+    return os.path.exists(checkpoint_paths(env_id)["policy"])
+
+
+def _decommission(env_id: str) -> dict:
+    """KILL SWITCH: stop the sim and take the policy OUT of deployment.
+
+    Renames the trained checkpoint + exported ONNX aside (recoverable, but no
+    longer found by the sim driver or the browser deploy path), so the only way
+    to run again is to RETRAIN and RE-DEPLOY. Scoped to one env_id.
+    """
+    _stop_sim()
+    moved: list[str] = []
+    paths = checkpoint_paths(env_id)
+    # checkpoint .pt + sibling .onnx, plus the browser-deployed onnx
+    onnx_ckpt = os.path.join(paths["dir"], "policy.onnx")
+    frontend_onnx = os.path.join(
+        REPO, "frontend", "public", "policies", env_id, "policy.onnx"
+    )
+    for target in (paths["policy"], onnx_ckpt, frontend_onnx):
+        if os.path.exists(target):
+            graveyard = target + ".killed"
+            try:
+                if os.path.exists(graveyard):
+                    os.remove(graveyard)
+                os.replace(target, graveyard)
+                moved.append(target)
+            except OSError as exc:
+                print(f"[decommission] could not move {target}: {exc}", flush=True)
+    print(f"[decommission] {env_id}: removed {len(moved)} deployed artifact(s)", flush=True)
+    return {"ok": True, "env_id": env_id, "deployed": False, "removed": len(moved)}
 
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
@@ -540,7 +634,7 @@ async def lifespan(app: FastAPI):
     print("[train-service] stopped", flush=True)
 
 
-app = FastAPI(title="CombatOS Train Service", lifespan=lifespan)
+app = FastAPI(title="Outcast Virus Train Service", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -645,6 +739,18 @@ async def post_sim_start(req: SimStartRequest) -> dict:
 async def post_sim_stop() -> dict:
     """Stop PyBullet sim."""
     return _stop_sim()
+
+
+@app.get("/api/sim/policy")
+async def get_sim_policy(env_id: str = "hunt-and-seek") -> dict:
+    """Report whether a trained policy is currently deployed for env_id."""
+    return {"env_id": env_id, "deployed": _policy_deployed(env_id)}
+
+
+@app.post("/api/sim/decommission")
+async def post_sim_decommission(req: DecommissionRequest) -> dict:
+    """KILL SWITCH — stop the sim and undeploy the policy (forces retrain+deploy)."""
+    return _decommission(req.env_id)
 
 
 @app.websocket("/ws")

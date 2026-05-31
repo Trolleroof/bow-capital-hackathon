@@ -1,12 +1,12 @@
 # PyBullet Swarm Video Prototype
 
-This directory is a standalone PyBullet prototype for drone-swarm surveillance and FPV routing through CombatOS.
+This directory is a standalone PyBullet prototype for drone-swarm surveillance and FPV routing through Outcast Virus.
 
 ## Rules
 
 These are the working rules for this prototype:
 
-1. Raw drone FPV may be sent to the CombatOS orchestrator.
+1. Raw drone FPV may be sent to the Outcast Virus orchestrator.
 2. Perception may return annotated video for operator display, but autonomy should consume structured detections or tracks, not decoded video frames.
 3. The correct round-trip is:
    raw FPV up, detections and optional annotated FPV down.
@@ -30,7 +30,7 @@ These are the working rules for this prototype:
 - each drone renders its own first-person camera feed
 - the feeds are tiled into one output video
 - each drone also gets its own MP4 output by default
-- a second demo mode sends each FPV frame through the CombatOS orchestrator, lets
+- a second demo mode sends each FPV frame through the Outcast Virus orchestrator, lets
   a perception worker annotate targets, and records the returned HUD frames
 
 The current implementation is intentionally simple:
@@ -142,7 +142,7 @@ uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_demo \
 If they also want the orchestrated round-trip on another machine:
 
 ```bash
-uv run --project combatos python -m combatos
+uv run --project outcast_virus python -m outcast_virus
 uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_orchestrated_demo --gui
 ```
 
@@ -220,10 +220,10 @@ uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_demo \
 
 ## Orchestrated FPV round-trip
 
-Start the CombatOS orchestrator first:
+Start the Outcast Virus orchestrator first:
 
 ```bash
-uv run --project combatos python -m combatos
+uv run --project outcast_virus python -m outcast_virus
 ```
 
 Then run the PyBullet round-trip demo:

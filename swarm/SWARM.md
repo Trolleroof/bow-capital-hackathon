@@ -273,7 +273,6 @@ shape so we can fork into dedicated env subclasses later without changing ids.
 | `moving-target-track` | Maintain visual custody on evasive ground movers | target-relative bearings, occlusion bins, wingman offsets | continuous 2D velocity | reward uninterrupted custody and multi-angle coverage; penalize lost track |
 | `search-and-interdict` | Sweep cluttered space, find hidden mover, collapse once contact is made | coverage patch, jammer pockets, obstacle slices, last-seen cue | continuous 2D velocity | reward new search coverage pre-contact, then rapid intercept post-contact |
 | `defend-asset` | Keep inbound agents outside a protected ring | asset-relative bearings, defended sectors, inbound velocity cues | continuous 2D velocity | reward perimeter integrity and early intercepts; penalize breaches |
-| `swarm-vs-swarm-race` | Win contested coverage first under jamming | coverage patch, contested cells, rival offsets, jammer corridors | continuous 2D velocity | reward first-touch coverage and zone control; penalize collisions |
 
 Frontend mapping:
 - `frontend/src/gym/scenarios.ts` is the card registry and operator copy.

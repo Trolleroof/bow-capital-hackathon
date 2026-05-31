@@ -341,10 +341,9 @@ export class SwarmEnv {
     this.taskPhase =
       this.scenarioId === 'drone-vs-drone' ? 'engage'
         : this.scenarioId === 'search-and-interdict' ? 'search'
-          : this.scenarioId === 'swarm-vs-swarm-race' ? 'contest'
-            : this.scenarioId === 'defend-asset' ? 'defend'
-              : this.scenarioId === 'moving-target-track' ? 'track'
-                : 'coverage'
+          : this.scenarioId === 'defend-asset' ? 'defend'
+            : this.scenarioId === 'moving-target-track' ? 'track'
+              : 'coverage'
     this.hostilePos = new Float32Array(0)
     this.hostileVel = new Float32Array(0)
     this.hostileAlive = []
@@ -402,21 +401,11 @@ export class SwarmEnv {
         this.hostileVel[i * 2] = (-x / d) * 0.55
         this.hostileVel[i * 2 + 1] = (-y / d) * 0.55
       }
-    } else if (this.scenarioId === 'swarm-vs-swarm-race') {
-      this.rivalPos = new Float32Array(this.n * 2)
-      this.rivalVel = new Float32Array(this.n * 2)
-      for (let i = 0; i < this.n; i++) {
-        this.rivalPos[i * 2] = (0.15 + this.rand() * 0.75) * h
-        this.rivalPos[i * 2 + 1] = (this.rand() * 1.6 - 0.8) * h
-      }
-      const cells: number[] = []
-      for (let gx = Math.floor(this.grid / 2) - 2; gx < this.grid - 2; gx += 3) {
-        for (let gy = 3; gy < this.grid - 3; gy += 4) {
-          cells.push(gx, gy)
-        }
-      }
-      this.contestedCells = new Int32Array(cells)
-      this.contestedOwner = new Int8Array(cells.length / 2)
+    } else if (this.scenarioId === 'navigate-to-target') {
+      this.targetPos[0] = 0.85 * h
+      this.targetPos[1] = 0
+      this.targetVel[0] = 0
+      this.targetVel[1] = 0
     }
   }
 
@@ -434,9 +423,9 @@ export class SwarmEnv {
         const r = (0.42 + this.rand() * 0.13) * h
         this.pos[i * 2] = Math.cos(a) * r
         this.pos[i * 2 + 1] = Math.sin(a) * r
-      } else if (this.scenarioId === 'swarm-vs-swarm-race') {
-        this.pos[i * 2] = -(0.15 + this.rand() * 0.75) * h
-        this.pos[i * 2 + 1] = (this.rand() * 1.6 - 0.8) * h
+      } else if (this.scenarioId === 'navigate-to-target') {
+        this.pos[i * 2] = -(0.75 + this.rand() * 0.17) * h
+        this.pos[i * 2 + 1] = (this.rand() * 0.6 - 0.3) * h
       } else {
         this.pos[i * 2] = (this.rand() * 1.6 - 0.8) * h
         this.pos[i * 2 + 1] = (this.rand() * 1.6 - 0.8) * h
@@ -561,19 +550,6 @@ export class SwarmEnv {
         this.hostilePos[i * 2] += this.hostileVel[i * 2] * DT
         this.hostilePos[i * 2 + 1] += this.hostileVel[i * 2 + 1] * DT
       }
-    } else if (this.scenarioId === 'swarm-vs-swarm-race') {
-      const tx = -0.05 * h
-      for (let i = 0; i < this.rivalPos.length / 2; i++) {
-        const dx = tx - this.rivalPos[i * 2]
-        const dy = -this.rivalPos[i * 2 + 1]
-        const d = Math.max(1e-6, Math.hypot(dx, dy))
-        const vx = (dx / d) * 0.65
-        const vy = (dy / d) * 0.65
-        this.rivalVel[i * 2] = vx
-        this.rivalVel[i * 2 + 1] = vy
-        this.rivalPos[i * 2] = Math.max(-h, Math.min(h, this.rivalPos[i * 2] + vx * DT))
-        this.rivalPos[i * 2 + 1] = Math.max(-h, Math.min(h, this.rivalPos[i * 2 + 1] + vy * DT))
-      }
     }
   }
 
@@ -629,25 +605,15 @@ export class SwarmEnv {
           this.breaches++
         }
       }
-    } else if (this.scenarioId === 'swarm-vs-swarm-race') {
-      for (let c = 0; c < this.contestedOwner.length; c++) {
-        if (this.contestedOwner[c] !== 0) continue
-        const wx = (this.contestedCells[c * 2] + 0.5) * this.cell - this.worldHalf
-        const wy = (this.contestedCells[c * 2 + 1] + 0.5) * this.cell - this.worldHalf
-        let blueHit = false
+    } else if (this.scenarioId === 'navigate-to-target') {
+      if (this.interceptStep === null) {
+        let nearest = Infinity
         for (const i of live) {
-          if (Math.hypot(this.pos[i * 2] - wx, this.pos[i * 2 + 1] - wy) < 1.2) blueHit = true
+          nearest = Math.min(nearest, Math.hypot(this.pos[i * 2] - this.targetPos[0], this.pos[i * 2 + 1] - this.targetPos[1]))
         }
-        let rivalHit = false
-        for (let i = 0; i < this.rivalPos.length / 2; i++) {
-          if (Math.hypot(this.rivalPos[i * 2] - wx, this.rivalPos[i * 2 + 1] - wy) < 1.2) rivalHit = true
-        }
-        if (blueHit && !rivalHit) {
-          this.contestedOwner[c] = 1
-          this.contestedScore++
-        } else if (rivalHit && !blueHit) {
-          this.contestedOwner[c] = -1
-          this.rivalScore++
+        if (nearest < 1.5) {
+          this.interceptStep = this.steps
+          this.taskPhase = 'reached'
         }
       }
     }
@@ -674,6 +640,11 @@ export class SwarmEnv {
         feats[base] = (this.hostilePos[idx * 2] - ox) / h
         feats[base + 1] = (this.hostilePos[idx * 2 + 1] - oy) / h
         feats[base + 2] = 1
+        // Hostile velocity for the two nearest threats (slots 12-15). Must match
+        // env.py _task_obs so the ONNX policy sees the obs it was trained on.
+        const vbase = 12 + (base / 3) * 2
+        feats[vbase] = Math.max(-1, Math.min(1, this.hostileVel[idx * 2] / MAX_SPEED))
+        feats[vbase + 1] = Math.max(-1, Math.min(1, this.hostileVel[idx * 2 + 1] / MAX_SPEED))
       }
       const total = Math.max(1, this.hostileAlive.length)
       feats[6] = this.hostileAlive.filter(Boolean).length / total
@@ -741,52 +712,15 @@ export class SwarmEnv {
       feats[9] = Math.hypot(ox, oy) / h - 0.48
       feats[10] = Math.sin(Math.atan2(oy, ox) - (agentIdx / Math.max(1, this.n)) * Math.PI * 2)
       feats[11] = this.breaches / Math.max(1, this.hostileCount())
-    } else if (this.scenarioId === 'swarm-vs-swarm-race') {
-      if (this.rivalPos.length > 0) {
-        let nearest = 0
-        let nearestDist = Infinity
-        for (let i = 0; i < this.rivalPos.length / 2; i++) {
-          const d = Math.hypot(this.rivalPos[i * 2] - ox, this.rivalPos[i * 2 + 1] - oy)
-          if (d < nearestDist) {
-            nearest = i
-            nearestDist = d
-          }
-        }
-        feats[0] = (this.rivalPos[nearest * 2] - ox) / h
-        feats[1] = (this.rivalPos[nearest * 2 + 1] - oy) / h
-        feats[10] = 1 - Math.max(0, Math.min(1, nearestDist / h))
-      }
-      const total = Math.max(1, this.contestedOwner.length)
-      feats[4] = this.contestedScore / total
-      feats[5] = this.rivalScore / total
-      let best = -1
-      let bestDist = Infinity
-      for (let c = 0; c < this.contestedOwner.length; c++) {
-        if (this.contestedOwner[c] !== 0 && best !== -1) continue
-        const wx = (this.contestedCells[c * 2] + 0.5) * this.cell - h
-        const wy = (this.contestedCells[c * 2 + 1] + 0.5) * this.cell - h
-        const d = Math.hypot(wx - ox, wy - oy)
-        if (d < bestDist) {
-          best = c
-          bestDist = d
-        }
-      }
-      if (best >= 0) {
-        const wx = (this.contestedCells[best * 2] + 0.5) * this.cell - h
-        const wy = (this.contestedCells[best * 2 + 1] + 0.5) * this.cell - h
-        feats[2] = (wx - ox) / h
-        feats[3] = (wy - oy) / h
-      }
-      const [cx, cy] = this.worldToCell(ox, oy)
-      for (let c = 0; c < this.contestedOwner.length; c++) {
-        if (this.contestedCells[c * 2] === cx && this.contestedCells[c * 2 + 1] === cy) {
-          feats[6] = 1
-          feats[7] = this.contestedOwner[c] === 1 ? 1 : 0
-          feats[8] = this.contestedOwner[c] === -1 ? 1 : 0
-          break
-        }
-      }
-      feats[9] = ox > 0 ? 1 : -1
+    } else if (this.scenarioId === 'navigate-to-target') {
+      const dx = this.targetPos[0] - ox
+      const dy = this.targetPos[1] - oy
+      const dist = Math.hypot(dx, dy)
+      feats[0] = dx / h
+      feats[1] = dy / h
+      feats[2] = Math.max(0, Math.min(1, dist / (2 * h)))
+      feats[3] = this.interceptStep !== null ? 1 : 0
+      feats[4] = Math.atan2(dy, dx) / Math.PI
     }
     for (let i = 0; i < feats.length; i++) {
       feats[i] = Math.max(-1, Math.min(1, feats[i]))

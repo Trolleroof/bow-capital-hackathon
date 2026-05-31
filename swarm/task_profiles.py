@@ -1,4 +1,4 @@
-"""Task profiles for CombatOS swarm gym scenarios.
+"""Task profiles for Outcast Virus swarm gym scenarios.
 
 Profiles keep scenario-specific reward weights, phases, and checkpoint metrics out
 of the shared environment implementation. Runtime entity state still lives in
@@ -31,12 +31,19 @@ PROFILES: dict[str, TaskProfile] = {
         env_id="drone-vs-drone",
         primary_metric="task_score",
         primary_mode="max",
-        coverage_weight=0.03,
+        # Coverage is a competing objective for a pure combat task (it pays the
+        # agent to patrol instead of chasing hostiles), so zero it out — the only
+        # gradient should be engagement.
+        coverage_weight=0.0,
         phase_names=("engage", "orbit"),
         metric_label="Kill + orbit score",
         reward_weights={
             "approach": 0.18,
             "closing": 0.22,
+            # Potential-based Δdistance-to-nearest-hostile shaping (mirrors the
+            # navigate-to-target progress term): a clean monotone gradient toward
+            # contact. Fixes the flat "kind of near a hostile" plateau.
+            "progress": 0.6,
             "kill": 6.0,
             "orbit": 0.35,
             "pressure": 0.45,
@@ -85,18 +92,14 @@ PROFILES: dict[str, TaskProfile] = {
             "breach": 4.0,
         },
     ),
-    "swarm-vs-swarm-race": TaskProfile(
-        env_id="swarm-vs-swarm-race",
-        primary_metric="contested_margin",
+    "hunt-and-seek": TaskProfile(
+        env_id="hunt-and-seek",
+        primary_metric="captures",
         primary_mode="max",
-        coverage_weight=0.2,
-        phase_names=("contest",),
-        metric_label="Contested margin",
-        reward_weights={
-            "claim": 1.0,
-            "margin": 0.45,
-            "rival": 0.25,
-        },
+        coverage_weight=0.0,  # 3D hunt env owns its own search/coverage shaping
+        phase_names=("search", "pursue", "capture"),
+        metric_label="Captures",
+        reward_weights={},  # reward shaping lives in swarm/hunt_env.py
     ),
     "navigate-to-target": TaskProfile(
         env_id="navigate-to-target",

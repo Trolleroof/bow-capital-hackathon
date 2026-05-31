@@ -64,7 +64,6 @@ export const SCENARIO_OBSTACLES: Record<string, Obstacle[]> = {
     box(0.0, 4.6, 2.0, 0.6, 0.5, 0.5),
     box(0.0, -4.6, 2.0, 0.6, 0.5, 0.5),
   ],
-  'swarm-vs-swarm-race': [],
   'navigate-to-target': [
     box(-4.0, 2.5, 0.5, 1.2, 0.6, 1.2),
     box(-4.0, -2.5, 0.5, 1.2, 0.6, 1.2),

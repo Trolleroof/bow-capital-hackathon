@@ -1,4 +1,4 @@
-"""env_config.py — Battlefield parameter schema for the CombatOS swarm sim.
+"""env_config.py — Battlefield parameter schema for the Outcast Virus swarm sim.
 
 This is the Python mirror of frontend/src/gym/battlefieldParams.ts.
 Field names, ranges, and defaults are kept in sync across both files.
@@ -147,22 +147,6 @@ SCENARIO_DEFAULTS: dict[str, BattlefieldConfig] = {
         roe=ROEConfig(engagement_authority="weapons-tight", time_limit_sec=320),
         logistics=LogisticsConfig(swarm_size=6, battery_envelope_sec=320, attrition_inject_rate=0.0),
     ),
-    "moving-target-track": BattlefieldConfig(
-        env_id="moving-target-track",
-        weather=WeatherConfig(wind_speed=2.0, wind_dir_rad=_pi(1/3)),
-        ew=EWConfig(gps_denial_level=0.0, jam_duty_cycle=0.0),
-        threat=ThreatConfig(moving_target_speed=0.8),
-        roe=ROEConfig(engagement_authority="weapons-tight", time_limit_sec=300),
-        logistics=LogisticsConfig(swarm_size=4, battery_envelope_sec=300, attrition_inject_rate=0.02),
-    ),
-    "search-and-interdict": BattlefieldConfig(
-        env_id="search-and-interdict",
-        weather=WeatherConfig(wind_speed=4.0, wind_dir_rad=_pi(1/4), visibility=0.6, temperature_c=15),
-        ew=EWConfig(gps_denial_level=0.7, jam_duty_cycle=0.4),
-        threat=ThreatConfig(hostile_uas_count=1, moving_target_speed=0.7),
-        roe=ROEConfig(engagement_authority="weapons-tight", time_limit_sec=360),
-        logistics=LogisticsConfig(swarm_size=5, battery_envelope_sec=360, attrition_inject_rate=0.02),
-    ),
     "defend-asset": BattlefieldConfig(
         env_id="defend-asset",
         weather=WeatherConfig(wind_speed=2.0, wind_dir_rad=_pi(1/2)),
@@ -170,14 +154,6 @@ SCENARIO_DEFAULTS: dict[str, BattlefieldConfig] = {
         threat=ThreatConfig(hostile_uas_count=4, moving_target_speed=0.5),
         roe=ROEConfig(engagement_authority="weapons-tight", min_standoff_m=5, time_limit_sec=280),
         logistics=LogisticsConfig(swarm_size=5, battery_envelope_sec=280, attrition_inject_rate=0.05),
-    ),
-    "swarm-vs-swarm-race": BattlefieldConfig(
-        env_id="swarm-vs-swarm-race",
-        weather=WeatherConfig(wind_speed=5.0, wind_dir_rad=_pi(1/4), visibility=0.8, temperature_c=10),
-        ew=EWConfig(gps_denial_level=0.5, jam_duty_cycle=0.4),
-        threat=ThreatConfig(hostile_uas_count=6, moving_target_speed=0.6),
-        roe=ROEConfig(engagement_authority="weapons-free", time_limit_sec=320),
-        logistics=LogisticsConfig(swarm_size=6, battery_envelope_sec=320, attrition_inject_rate=0.04),
     ),
     "navigate-to-target": BattlefieldConfig(
         env_id="navigate-to-target",
@@ -223,7 +199,18 @@ def make_profile_config(scenario_id: str, profile: str) -> BattlefieldConfig:
             spoofing_enabled=combat.ew.spoofing_enabled,
         ),
         terrain=combat.terrain,
-        threat=combat.threat,
+        # Curriculum stage 1: besides zeroing the P0 stressors, thin/slow the
+        # threats so the policy first learns "approach + kill" before facing the
+        # full multi-target combat profile (warm-start combat from this with
+        # --init-from). Other scenarios keep their combat threat block.
+        threat=ThreatConfig(
+            hostile_uas_count=(
+                1 if scenario_id == "drone-vs-drone"
+                else 3 if scenario_id == "defend-asset"
+                else combat.threat.hostile_uas_count
+            ),
+            moving_target_speed=min(combat.threat.moving_target_speed, 0.3),
+        ),
         roe=ROEConfig(
             engagement_authority=combat.roe.engagement_authority,
             min_standoff_m=combat.roe.min_standoff_m,

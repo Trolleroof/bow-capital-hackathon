@@ -42,6 +42,8 @@ _TOPIC_MODULE: dict[str, str] = {
     "camera_right_frame": "nav",
     "slam_frame": "nav",
     "detections": "perception",
+    "perception_frame": "perception",
+    "perception_diagnostics": "perception",
     "swarm": "swarm",
     "recon": "recon",
 }

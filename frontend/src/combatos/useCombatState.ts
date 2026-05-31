@@ -18,6 +18,13 @@ export interface SlamDiagnostics {
   queueDepth: number
 }
 
+export interface PerceptionDiagnostics {
+  detections: number
+  frames: number
+  droppedFrames: number
+  queueDepth: number
+}
+
 export interface Detection {
   id: string
   numericId: number
@@ -59,7 +66,9 @@ export interface TelemetryState {
   slamStatus: string
   cameraFrame: SlamFrame | null
   slamFrame: SlamFrame | null
+  perceptionFrame: SlamFrame | null
   slamDiagnostics: SlamDiagnostics
+  perceptionDiagnostics: PerceptionDiagnostics
 }
 
 function j(v: number, a: number) { return +(v + (Math.random() - 0.5) * a) }
@@ -78,14 +87,6 @@ function makeTraj(n = 24) {
 function fmtSec(s: number) {
   return 'T+' + String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0')
 }
-
-const MOCK_DETS: Detection[] = [
-  { id: 'TGT-01', numericId: 1, cls: 'SUBJECT', conf: 0.94, rng: 42.1, brg: 14,  bbox: null, st: 'TRACK',   tone: 'amber', confirmed: false },
-  { id: 'E-2207', numericId: 2, cls: 'PERSON',  conf: 0.71, rng: 58.3, brg: 331, bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'E-2208', numericId: 3, cls: 'PERSON',  conf: 0.66, rng: 61.0, brg: 337, bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'V-0714', numericId: 4, cls: 'VEHICLE', conf: 0.82, rng: 88.4, brg: 48,  bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'E-2209', numericId: 5, cls: 'PERSON',  conf: 0.58, rng: 73.9, brg: 9,   bbox: null, st: 'LOST',    tone: 'mute',  confirmed: false },
-]
 
 function initState(): TelemetryState {
   return {
@@ -109,10 +110,17 @@ function initState(): TelemetryState {
     slamStatus: 'NO_LOCK',
     cameraFrame: null,
     slamFrame: null,
+    perceptionFrame: null,
     slamDiagnostics: {
       droppedFrames: 0,
       cameraFrames: 0,
       annotatedFrames: 0,
+      queueDepth: 0,
+    },
+    perceptionDiagnostics: {
+      detections: 0,
+      frames: 0,
+      droppedFrames: 0,
       queueDepth: 0,
     },
   }
@@ -265,7 +273,11 @@ export function useCombatState() {
                 tone: o.is_primary ? 'amber' : o.is_candidate ? 'candidate' : '',
                 confirmed: o.confirmed,
               }))
-              setT(p => ({ ...p, dets: mapped }))
+              setT(p => ({
+                ...p,
+                yolo: typeof msg.latency_ms === 'number' ? Math.round(msg.latency_ms) : p.yolo,
+                dets: mapped,
+              }))
             } else if (msg.topic === 'recon') {
               setT(p => ({
                 ...p,
@@ -288,12 +300,26 @@ export function useCombatState() {
                   queueDepth: msg.queue_depth ?? p.slamDiagnostics.queueDepth,
                 },
               }))
+            } else if (msg.topic === 'perception_diagnostics') {
+              setT(p => ({
+                ...p,
+                yolo: typeof msg.latency_ms === 'number' ? Math.round(msg.latency_ms) : p.yolo,
+                perceptionDiagnostics: {
+                  detections: msg.detections ?? p.perceptionDiagnostics.detections,
+                  frames: msg.frames ?? p.perceptionDiagnostics.frames,
+                  droppedFrames: msg.dropped_frames ?? p.perceptionDiagnostics.droppedFrames,
+                  queueDepth: msg.queue_depth ?? p.perceptionDiagnostics.queueDepth,
+                },
+              }))
             } else if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
               const frame = toFrame(msg)
               if (frame) setT(p => ({ ...p, cameraFrame: frame }))
             } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
               const frame = toFrame(msg)
               if (frame) setT(p => ({ ...p, slamFrame: frame }))
+            } else if (msg.topic === 'perception_frame') {
+              const frame = toFrame(msg)
+              if (frame) setT(p => ({ ...p, perceptionFrame: frame }))
             }
           } catch {
             // ignore parse errors

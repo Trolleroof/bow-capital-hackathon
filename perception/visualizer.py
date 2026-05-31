@@ -2,11 +2,23 @@
 from __future__ import annotations
 
 import time
+from typing import Protocol, TYPE_CHECKING
 
 import cv2
 import numpy as np
 
-from tracker import TrackedObject
+if TYPE_CHECKING:
+    from tracker import TrackedObject
+
+
+class _OverlayObject(Protocol):
+    id: int
+    cls: str
+    conf: float
+    bbox: list[int]
+    has_face: bool
+    confirmed: bool
+    is_primary: bool
 
 _C = {
     "troop":     (0,   220, 255),
@@ -25,8 +37,8 @@ _FONT = cv2.FONT_HERSHEY_PLAIN
 
 def draw(
     frame: np.ndarray,
-    objects: list[TrackedObject],
-    candidate: TrackedObject | None,
+    objects: list[_OverlayObject],
+    candidate: _OverlayObject | None,
 ) -> np.ndarray:
     for obj in objects:
         color = _pick_color(obj, candidate)

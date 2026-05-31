@@ -42,6 +42,8 @@ _TOPIC_MODULE: dict[str, str] = {
     "camera_right_frame": "nav",
     "slam_frame": "nav",
     "detections": "perception",
+    "drone_detections": "perception",
+    "drone_fpv_state": "swarm",
     "swarm": "swarm",
     "recon": "recon",
 }

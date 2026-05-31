@@ -41,7 +41,7 @@
   "profile": "combat",
   "random_coverage": 0.058507,
   "rollout_steps": 400,
-  "run_name": "mappo_drone-vs-drone_combat_1780186547",
+  "run_name": "mappo_drone-vs-drone_combat_1780200051",
   "seed": 0,
   "timesteps": 12000
 }

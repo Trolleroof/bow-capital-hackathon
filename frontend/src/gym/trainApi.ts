@@ -6,8 +6,11 @@ export const TRAIN_API_BASE =
 export const TRAIN_WS_URL =
   import.meta.env.VITE_TRAIN_WS_URL ?? 'ws://127.0.0.1:8766'
 
+export const PYBULLET_WS_URL =
+  import.meta.env.VITE_PYBULLET_WS_URL ?? 'ws://127.0.0.1:8765'
+
 export const DEFAULT_TRAIN_TIMESTEPS = Number(
-  import.meta.env.VITE_TRAIN_TIMESTEPS ?? 12_000,
+  import.meta.env.VITE_TRAIN_TIMESTEPS ?? 200_000,
 )
 
 export interface TrainEvent {
@@ -48,4 +51,24 @@ export async function stopTraining(envId: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ env_id: envId }),
   })
+}
+
+export async function startPyBulletSim(
+  envId: string,
+): Promise<{ ok: boolean; wsUrl: string; error?: string }> {
+  const res = await fetch(`${TRAIN_API_BASE}/api/sim/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ env_id: envId, policy: 'trained' }),
+  })
+  const data = (await res.json()) as {
+    ok?: boolean
+    ws_url?: string
+    error?: string
+  }
+  return {
+    ok: Boolean(data.ok),
+    wsUrl: data.ws_url ?? PYBULLET_WS_URL,
+    error: data.error,
+  }
 }

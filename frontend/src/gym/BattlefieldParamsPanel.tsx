@@ -38,6 +38,8 @@ export interface BattlefieldParamsPanelProps {
   params: BattlefieldParams
   onChange: (next: BattlefieldParams) => void
   isTraining: boolean
+  canLaunchSim: boolean
+  onLaunchSim: () => void
   onTrain: () => void
   onStop: () => void
   open: boolean
@@ -48,6 +50,8 @@ export default function BattlefieldParamsPanel({
   params,
   onChange,
   isTraining,
+  canLaunchSim,
+  onLaunchSim,
   onTrain,
   onStop,
   open,
@@ -93,6 +97,16 @@ export default function BattlefieldParamsPanel({
           aria-label={isTraining ? 'Stop training' : 'Start training policy'}
         >
           {isTraining ? '■ Stop Training' : '▶ Train Policy'}
+        </button>
+
+        <button
+          type="button"
+          className="gym-train-btn gym-train-btn--launch"
+          onClick={onLaunchSim}
+          disabled={!canLaunchSim || isTraining}
+          aria-label="Launch PyBullet simulation"
+        >
+          ⎋ Launch PyBullet Sim
         </button>
       </div>
 

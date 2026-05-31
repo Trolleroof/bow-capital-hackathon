@@ -9,7 +9,9 @@ from .config import DroneCameraConfig, OrchestratorConfig, RecordingConfig, Simu
 from .messages import bgr_to_rgb, decode_jpeg_to_bgr, make_frame_id
 from .perception_node import GroundTruthPerceptionNode
 from .record import MultiVideoRecorder, TiledVideoRecorder, tile_frames
-from .simulation import DroneSurveillanceSimulation
+from .simulation import DroneSurveillanceSimulation, SimulationDisconnectedError
+
+GUI_MIN_SECONDS = 600.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,7 +49,7 @@ async def main_async() -> None:
     sim_cfg = SimulationConfig(
         num_drones=args.drones,
         num_troops=args.troops,
-        duration_sec=args.seconds,
+        duration_sec=max(args.seconds, GUI_MIN_SECONDS) if args.gui else args.seconds,
         time_step=args.time_step,
         camera=DroneCameraConfig(width=args.width, height=args.height),
     )
@@ -77,35 +79,17 @@ async def main_async() -> None:
             with DroneSurveillanceSimulation(sim_cfg, gui=args.gui) as sim:
                 with TiledVideoRecorder(rec_cfg.output_path, rec_cfg.fps) as recorder:
                     with MultiVideoRecorder(rec_cfg.per_drone_dir, rec_cfg.fps) as per_drone:
-                        for seq in range(total_frames):
-                            for _ in range(steps_per_frame):
-                                sim.step()
+                        try:
+                            for seq in range(total_frames):
+                                for _ in range(steps_per_frame):
+                                    sim.step()
 
-                            raw_frames = sim.render_all_drone_cameras()
-                            for drone_id, raw_frame in enumerate(raw_frames):
-                                frame_id = make_frame_id(drone_id, seq)
-                                camera = sim.camera_pose(drone_id)
-                                source = f"drone:{drone_id}"
-                                frame_payload = {
-                                    "t": round(sim.sim_time, 3),
-                                    "seq": seq,
-                                    "frame_id": frame_id,
-                                    "drone_id": drone_id,
-                                    "source": source,
-                                    "width": camera.width,
-                                    "height": camera.height,
-                                    "encoding": "jpeg",
-                                }
-                                await bus.publish_rgb_frame(orch_cfg.raw_topic, frame_payload, raw_frame)
-                                if drone_id == orch_cfg.dashboard_drone_id:
-                                    await bus.publish_rgb_frame(
-                                        orch_cfg.dashboard_raw_topic,
-                                        frame_payload,
-                                        raw_frame,
-                                    )
-                                await bus.publish_control(
-                                    orch_cfg.state_topic,
-                                    {
+                                raw_frames = sim.render_all_drone_cameras()
+                                for drone_id, raw_frame in enumerate(raw_frames):
+                                    frame_id = make_frame_id(drone_id, seq)
+                                    camera = sim.camera_pose(drone_id)
+                                    source = f"drone:{drone_id}"
+                                    frame_payload = {
                                         "t": round(sim.sim_time, 3),
                                         "seq": seq,
                                         "frame_id": frame_id,
@@ -113,35 +97,56 @@ async def main_async() -> None:
                                         "source": source,
                                         "width": camera.width,
                                         "height": camera.height,
-                                        "fov_deg": camera.fov_deg,
-                                        "eye": [round(float(v), 4) for v in camera.eye],
-                                        "forward": [round(float(v), 5) for v in camera.forward],
-                                        "up": [round(float(v), 5) for v in camera.up],
-                                        "targets": sim.troop_targets(),
-                                    },
-                                )
+                                        "encoding": "jpeg",
+                                    }
+                                    await bus.publish_rgb_frame(orch_cfg.raw_topic, frame_payload, raw_frame)
+                                    if drone_id == orch_cfg.dashboard_drone_id:
+                                        await bus.publish_rgb_frame(
+                                            orch_cfg.dashboard_raw_topic,
+                                            frame_payload,
+                                            raw_frame,
+                                        )
+                                    await bus.publish_control(
+                                        orch_cfg.state_topic,
+                                        {
+                                            "t": round(sim.sim_time, 3),
+                                            "seq": seq,
+                                            "frame_id": frame_id,
+                                            "drone_id": drone_id,
+                                            "source": source,
+                                            "width": camera.width,
+                                            "height": camera.height,
+                                            "fov_deg": camera.fov_deg,
+                                            "eye": [round(float(v), 4) for v in camera.eye],
+                                            "forward": [round(float(v), 5) for v in camera.forward],
+                                            "up": [round(float(v), 5) for v in camera.up],
+                                            "targets": sim.troop_targets(),
+                                        },
+                                    )
 
-                            hud_frames = await _collect_hud_frames(
-                                bus,
-                                seq=seq,
-                                num_drones=sim_cfg.num_drones,
-                                timeout=max(0.35, frame_dt * 2.5),
-                            )
-                            ordered = []
-                            for drone_id, raw_frame in enumerate(raw_frames):
-                                hud = hud_frames.get(drone_id)
-                                ordered.append(hud if hud is not None else raw_frame)
-                            per_drone.append(ordered)
-                            recorder.append(
-                                tile_frames(
-                                    ordered,
-                                    tile_columns=rec_cfg.tile_columns,
-                                    gap_px=rec_cfg.tile_gap_px,
-                                    background_rgb=rec_cfg.background_rgb,
+                                hud_frames = await _collect_hud_frames(
+                                    bus,
+                                    seq=seq,
+                                    num_drones=sim_cfg.num_drones,
+                                    timeout=max(0.35, frame_dt * 2.5),
                                 )
-                            )
-                            if seq % max(1, rec_cfg.fps) == 0:
-                                print(f"frame {seq + 1}/{total_frames}")
+                                ordered = []
+                                for drone_id, raw_frame in enumerate(raw_frames):
+                                    hud = hud_frames.get(drone_id)
+                                    ordered.append(hud if hud is not None else raw_frame)
+                                per_drone.append(ordered)
+                                recorder.append(
+                                    tile_frames(
+                                        ordered,
+                                        tile_columns=rec_cfg.tile_columns,
+                                        gap_px=rec_cfg.tile_gap_px,
+                                        background_rgb=rec_cfg.background_rgb,
+                                    )
+                                )
+                                if seq % max(1, rec_cfg.fps) == 0:
+                                    print(f"frame {seq + 1}/{total_frames}")
+                        except SimulationDisconnectedError:
+                            print("[sim] PyBullet connection closed; ending run cleanly")
         finally:
             await bus.close()
     finally:

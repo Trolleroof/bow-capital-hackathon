@@ -23,7 +23,8 @@ These are the working rules for this prototype:
 ## What This Prototype Does
 
 - a swarm of drones flies over a patrol area
-- a group of ground troops moves in formation below
+- a group of ground troops moves in scattered pockets below
+- the ground scene is dressed with berms, blast marks, concrete ruins, wrecks, and perimeter walls so it reads more like a battlefield than a test pad
 - each drone renders its own first-person camera feed
 - the feeds are tiled into one output video
 - each drone also gets its own MP4 output by default
@@ -35,6 +36,9 @@ The current implementation is intentionally simple:
 - drone motion is scripted, not learned
 - the simulation is headless by default (`DIRECT`), but `--gui` enables direct observation
 - GUI mode actively tracks the swarm/troop scene so you can watch behavior live
+- in GUI mode you can switch from the observer camera into a selected drone's chase or FPV view
+- in GUI mode you can also take manual control of one drone while the rest continue flying policy-driven behavior
+- GUI runs are automatically stretched to a much longer duration so the window does not close almost immediately while you are flying or inspecting
 - the code is structured so a future policy adapter can replace the scripted controller
 - the current perception round-trip uses simulation ground truth for target projection
 
@@ -46,6 +50,25 @@ The current implementation is intentionally simple:
   pass `--gui` to open the PyBullet spectator view and watch the swarm behavior while recording.
 - FPV review mode:
   inspect the tiled composite MP4 or the individual per-drone MP4s after the run.
+
+## GUI Controls
+
+When the simulation is launched with `--gui`:
+
+- `C`: cycle camera mode between observer, chase, and FPV
+- `B`: jump to observer view
+- `H`: jump to chase view
+- `F`: jump to FPV view
+- `1`..`9`: select the active drone
+- `M`: toggle manual control for the selected drone
+- `R`: return the selected drone to scripted mode
+- `I` / `K`: move forward / backward
+- `J` / `L`: strafe left / right
+- `U` / `O`: move up / down
+- `Z` / `X`: yaw left / right
+
+Only one drone is manually controlled at a time. The others continue following the scripted surveillance behavior.
+The manual keys intentionally avoid `WASD`, and the camera-mode toggle intentionally avoids `V`, because PyBullet already uses parts of those keys for viewer/debug interactions.
 
 ## Outputs
 
@@ -77,6 +100,8 @@ uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_demo \
   --fps 12 \
   --output output/drone_spy_demo.mp4
 ```
+
+In GUI mode the run duration is automatically extended to at least 600 seconds unless you already requested a longer run.
 
 Write the individual drone feeds into an explicit directory:
 
@@ -116,6 +141,8 @@ uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_orchest
   --output output/drone_spy_roundtrip.mp4
 ```
 
+In GUI mode the orchestrated run is also automatically extended to at least 600 seconds.
+
 What happens in that mode:
 
 - each drone publishes a raw FPV frame on the orchestrator image bus
@@ -142,6 +169,8 @@ What happens in that mode:
 - The FPV transport and recording paths are now separated from the controller, which is the right setup for replacing the controller later.
 - The orchestrated perception node in this directory is a prototype bridge, not a real detector.
 - The frontend currently mirrors the dashboard FPV topics for one drone; per-drone topic selection is still a later step.
+- Manual control in GUI mode does not break the bus contract. The drone still publishes FPV and state through the same topics.
+- More complex drone behavior is compatible with the protocol as long as the controller consumes local observations or structured detections/tracks, not returned video frames as its primary control input.
 
 ## Next likely steps
 

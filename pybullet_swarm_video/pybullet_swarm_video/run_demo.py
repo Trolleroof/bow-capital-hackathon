@@ -6,7 +6,9 @@ from pathlib import Path
 from .config import DroneCameraConfig, RecordingConfig, SimulationConfig
 from .policies import policy_note
 from .record import MultiVideoRecorder, TiledVideoRecorder, tile_frames
-from .simulation import DroneSurveillanceSimulation
+from .simulation import DroneSurveillanceSimulation, SimulationDisconnectedError
+
+GUI_MIN_SECONDS = 600.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,7 +38,7 @@ def main() -> None:
     sim_cfg = SimulationConfig(
         num_drones=args.drones,
         num_troops=args.troops,
-        duration_sec=args.seconds,
+        duration_sec=max(args.seconds, GUI_MIN_SECONDS) if args.gui else args.seconds,
         time_step=args.time_step,
         camera=DroneCameraConfig(width=args.width, height=args.height),
     )
@@ -61,20 +63,23 @@ def main() -> None:
     with DroneSurveillanceSimulation(sim_cfg, gui=args.gui) as sim:
         with TiledVideoRecorder(rec_cfg.output_path, rec_cfg.fps) as recorder:
             with MultiVideoRecorder(rec_cfg.per_drone_dir, rec_cfg.fps) as per_drone:
-                for frame_idx in range(total_frames):
-                    for _ in range(steps_per_frame):
-                        sim.step()
-                    frames = sim.render_all_drone_cameras()
-                    per_drone.append(frames)
-                    tiled = tile_frames(
-                        frames,
-                        tile_columns=rec_cfg.tile_columns,
-                        gap_px=rec_cfg.tile_gap_px,
-                        background_rgb=rec_cfg.background_rgb,
-                    )
-                    recorder.append(tiled)
-                    if frame_idx % max(1, rec_cfg.fps) == 0:
-                        print(f"frame {frame_idx + 1}/{total_frames}")
+                try:
+                    for frame_idx in range(total_frames):
+                        for _ in range(steps_per_frame):
+                            sim.step()
+                        frames = sim.render_all_drone_cameras()
+                        per_drone.append(frames)
+                        tiled = tile_frames(
+                            frames,
+                            tile_columns=rec_cfg.tile_columns,
+                            gap_px=rec_cfg.tile_gap_px,
+                            background_rgb=rec_cfg.background_rgb,
+                        )
+                        recorder.append(tiled)
+                        if frame_idx % max(1, rec_cfg.fps) == 0:
+                            print(f"frame {frame_idx + 1}/{total_frames}")
+                except SimulationDisconnectedError:
+                    print("[sim] PyBullet connection closed; ending run cleanly")
 
     print(f"wrote {rec_cfg.output_path}")
 

@@ -89,6 +89,8 @@ class DroneSurveillanceSimulation:
         self._texture_ids: dict[Path, int] = {}
         self._obj_bounds_cache: dict[Path, tuple[np.ndarray, np.ndarray]] = {}
         self._split_obj_cache: dict[Path, list[tuple[str, Path]]] = {}
+        self._vignette_mask_cache: dict[tuple[int, int], np.ndarray] = {}
+        self._frame_history: dict[int, np.ndarray] = {}
         self._keyboard_events: dict[int, int] = {}
         self._drone_rgba = [1.0, 1.0, 1.0, 1.0]
         self._drone_mesh_asset_ref: MeshAsset | None = None
@@ -458,6 +460,45 @@ class DroneSurveillanceSimulation:
         self._texture_ids[texture_path] = texture_id
         return texture_id
 
+    def _vignette_mask(self, width: int, height: int) -> np.ndarray:
+        key = (width, height)
+        cached = self._vignette_mask_cache.get(key)
+        if cached is not None:
+            return cached
+        xs = np.linspace(-1.0, 1.0, width, dtype=np.float32)
+        ys = np.linspace(-1.0, 1.0, height, dtype=np.float32)
+        xx, yy = np.meshgrid(xs, ys)
+        radius = np.sqrt(xx * xx + yy * yy)
+        mask = np.clip(1.06 - 0.38 * radius**1.7, 0.62, 1.0).astype(np.float32)
+        self._vignette_mask_cache[key] = mask
+        return mask
+
+    def _postprocess_frame(self, drone_idx: int, frame: np.ndarray) -> np.ndarray:
+        image = frame.astype(np.float32) / 255.0
+        mask = self._vignette_mask(frame.shape[1], frame.shape[0])
+        image *= mask[:, :, None]
+
+        # Mild surveillance-camera grade: less saturation, slightly harder contrast.
+        luma = image @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+        image = image * 0.88 + luma[:, :, None] * 0.12
+        image = np.clip((image - 0.5) * 1.08 + 0.5, 0.0, 1.0)
+
+        speed = float(np.linalg.norm(self.drone_velocities[drone_idx]))
+        noise_sigma = 0.006 + 0.006 * min(speed, 8.0) / 8.0
+        if noise_sigma > 0.0:
+            image = np.clip(
+                image + self.rng.normal(0.0, noise_sigma, size=image.shape).astype(np.float32),
+                0.0,
+                1.0,
+            )
+
+        previous = self._frame_history.get(drone_idx)
+        if previous is not None:
+            blur_mix = 0.05 + 0.06 * min(speed, 8.0) / 8.0
+            image = np.clip(image * (1.0 - blur_mix) + previous * blur_mix, 0.0, 1.0)
+        self._frame_history[drone_idx] = image.copy()
+        return (image * 255.0).astype(np.uint8)
+
     def _create_mesh_visual(self, asset: MeshAsset | None) -> int | None:
         if asset is None or not asset.path.exists():
             return None
@@ -765,6 +806,83 @@ class DroneSurveillanceSimulation:
                 baseMass=0.0,
                 baseVisualShapeIndex=berm_visual,
                 basePosition=[x, y, 0.42],
+                baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
+                physicsClientId=self.client_id,
+            )
+
+        road_visual = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=[size * 0.88, 1.8, 0.02],
+            rgbaColor=[0.23, 0.22, 0.21, 1.0],
+            physicsClientId=self.client_id,
+        )
+        road_body = p.createMultiBody(
+            baseMass=0.0,
+            baseVisualShapeIndex=road_visual,
+            basePosition=[0.0, -1.2, 0.02],
+            baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, 0.08]),
+            physicsClientId=self.client_id,
+        )
+        if self._plane_id is not None:
+            texture_id = self._load_texture_if_present(self._ground_texture_path())
+            if texture_id is not None:
+                try:
+                    p.changeVisualShape(
+                        road_body,
+                        -1,
+                        textureUniqueId=texture_id,
+                        rgbaColor=[0.42, 0.42, 0.42, 1.0],
+                        physicsClientId=self.client_id,
+                    )
+                except Exception:
+                    pass
+
+        crate_visual = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=[0.48, 0.32, 0.28],
+            rgbaColor=[0.39, 0.32, 0.21, 1.0],
+            physicsClientId=self.client_id,
+        )
+        drum_visual = p.createVisualShape(
+            p.GEOM_CYLINDER,
+            radius=0.24,
+            length=0.62,
+            rgbaColor=[0.27, 0.31, 0.33, 1.0],
+            physicsClientId=self.client_id,
+        )
+        tarp_visual = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=[0.95, 0.6, 0.08],
+            rgbaColor=[0.22, 0.28, 0.24, 1.0],
+            physicsClientId=self.client_id,
+        )
+        for x, y, yaw in [
+            (-10.8, 6.0, 0.22),
+            (-6.4, 6.8, -0.18),
+            (5.0, -7.2, 0.33),
+            (11.5, -2.8, -0.41),
+            (15.2, 8.4, 0.12),
+        ]:
+            p.createMultiBody(
+                baseMass=0.0,
+                baseVisualShapeIndex=crate_visual,
+                basePosition=[x, y, 0.28],
+                baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
+                physicsClientId=self.client_id,
+            )
+        for x, y in [(-9.2, 4.7), (6.4, -8.9), (12.7, 3.8)]:
+            p.createMultiBody(
+                baseMass=0.0,
+                baseVisualShapeIndex=drum_visual,
+                basePosition=[x, y, 0.32],
+                baseOrientation=p.getQuaternionFromEuler([math.pi / 2.0, 0.0, self.rng.uniform(-0.6, 0.6)]),
+                physicsClientId=self.client_id,
+            )
+        for x, y, yaw in [(-14.2, 7.5, 0.1), (2.2, 11.0, -0.32), (9.8, -10.6, 0.26)]:
+            p.createMultiBody(
+                baseMass=0.0,
+                baseVisualShapeIndex=tarp_visual,
+                basePosition=[x, y, 0.08],
                 baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
                 physicsClientId=self.client_id,
             )
@@ -1256,7 +1374,7 @@ class DroneSurveillanceSimulation:
         cam_cfg = self.config.camera
         pos = self.drone_positions[drone_idx]
         yaw = float(self.drone_yaws[drone_idx])
-        tilt_rad = math.radians(cam_cfg.tilt_deg)
+        velocity = self.drone_velocities[drone_idx]
         eye = pos + np.array(
             [
                 cam_cfg.forward_offset_m * math.cos(yaw),
@@ -1264,6 +1382,15 @@ class DroneSurveillanceSimulation:
                 -0.08,
             ],
             dtype=np.float32,
+        )
+        forward_heading = np.array([math.cos(yaw), math.sin(yaw)], dtype=np.float32)
+        right_heading = np.array([-math.sin(yaw), math.cos(yaw)], dtype=np.float32)
+        forward_speed = float(np.dot(velocity[0:2], forward_heading))
+        lateral_speed = float(np.dot(velocity[0:2], right_heading))
+        tilt_rad = math.radians(
+            cam_cfg.tilt_deg
+            + np.clip(0.9 * forward_speed, -3.0, 5.0)
+            + 0.8 * math.sin(self.sim_time * 2.7 + drone_idx * 0.7)
         )
         forward = np.array(
             [
@@ -1282,6 +1409,13 @@ class DroneSurveillanceSimulation:
             right /= right_norm
         up = np.cross(right, forward)
         up /= max(float(np.linalg.norm(up)), 1e-6)
+        bank_rad = np.clip(-0.045 * lateral_speed, -0.16, 0.16)
+        up = up * math.cos(bank_rad) + right * math.sin(bank_rad)
+        up /= max(float(np.linalg.norm(up)), 1e-6)
+        eye += (
+            up * (0.018 * math.sin(self.sim_time * 13.0 + drone_idx))
+            + right * (0.012 * math.sin(self.sim_time * 9.0 + drone_idx * 1.9))
+        )
         return CameraPose(
             eye=eye,
             forward=forward,
@@ -1320,22 +1454,32 @@ class DroneSurveillanceSimulation:
             nearVal=self.config.camera.near,
             farVal=self.config.camera.far,
         )
+        renderer = (
+            p.ER_BULLET_HARDWARE_OPENGL
+            if self.gui and hasattr(p, "ER_BULLET_HARDWARE_OPENGL")
+            else p.ER_TINY_RENDERER
+        )
         try:
             _, _, rgba, _, _ = p.getCameraImage(
                 width=camera.width,
                 height=camera.height,
                 viewMatrix=view_matrix,
                 projectionMatrix=projection_matrix,
-                renderer=p.ER_TINY_RENDERER,
+                lightDirection=[0.42, 0.18, 1.0],
+                lightColor=[1.0, 0.96, 0.9],
+                lightAmbientCoeff=0.55,
+                lightDiffuseCoeff=0.68,
+                lightSpecularCoeff=0.08,
+                shadow=1 if renderer != p.ER_TINY_RENDERER else 0,
+                renderer=renderer,
                 physicsClientId=client_id,
             )
         except Exception as exc:
             raise SimulationDisconnectedError(
                 "PyBullet client disconnected during camera render"
             ) from exc
-        return np.asarray(rgba, dtype=np.uint8).reshape(camera.height, camera.width, 4)[
-            :, :, :3
-        ]
+        frame = np.asarray(rgba, dtype=np.uint8).reshape(camera.height, camera.width, 4)[:, :, :3]
+        return self._postprocess_frame(drone_idx, frame)
 
     def render_all_drone_cameras(self) -> list[np.ndarray]:
         return [self.render_drone_camera(idx) for idx in range(self.config.num_drones)]

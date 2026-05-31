@@ -6,16 +6,6 @@ const AMBER_BR = 0x74c8ff
 const GREEN = 0x37b8a4
 const METAL = 0x121a26
 
-const BOOT_SEQ: [string, string][] = [
-  ['STEREO POD',  'EUROC-07 online · 1280×720'],
-  ['VSLAM CORE',  'feature tracker armed · 6-DoF'],
-  ['IMU',         'pre-integration calibrated'],
-  ['YOLO v8',     'detector weights loaded'],
-  ['3DGS RECON',  '220 frames cached'],
-  ['GNSS',        'DENIED — inertial fallback'],
-  ['DATALINK',    'NONE — autonomous mode'],
-]
-
 function buildScene(canvas: HTMLCanvasElement) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
   renderer.setClearColor(0x000000, 0)
@@ -155,7 +145,6 @@ export function BootView({ onLaunch }: { onLaunch: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<ReturnType<typeof buildScene> | null>(null)
   const [launching, setLaunching] = useState(false)
-  const [lines, setLines] = useState<[string, string][]>([])
 
   useEffect(() => {
     if (!canvasRef.current) return
@@ -174,15 +163,6 @@ export function BootView({ onLaunch }: { onLaunch: () => void }) {
       window.removeEventListener('mousemove', onMove)
       inst.dispose()
     }
-  }, [])
-
-  useEffect(() => {
-    let i = 0
-    const id = setInterval(() => {
-      setLines(l => l.length >= BOOT_SEQ.length ? l : [...l, BOOT_SEQ[l.length]])
-      i++; if (i >= BOOT_SEQ.length) clearInterval(id)
-    }, 280)
-    return () => clearInterval(id)
   }, [])
 
   const launch = () => {
@@ -210,40 +190,13 @@ export function BootView({ onLaunch }: { onLaunch: () => void }) {
       <div className="bfr tl" /><div className="bfr tr" />
       <div className="bfr bl" /><div className="bfr br" />
 
-      <div className="boot-top">
-        <span className="bt-id">GCS · EUROC-MAV</span>
-        <span className="bt-sep">//</span>
-        <span className="bt-st deny">GPS DENIED</span>
-        <span className="bt-sep">//</span>
-        <span className="bt-st deny">LINK NONE</span>
-        <span className="bt-sep">//</span>
-        <span className="bt-st ok">INERTIAL LOCK</span>
-      </div>
-
       <div className="boot-title">
-        <div className="bt-kicker">AUTONOMOUS · GPS-DENIED · STEREO VSLAM</div>
         <h1>COMBAT<span>OS</span></h1>
         <div className="bt-sub">GROUND CONTROL STATION — EDGE AUTONOMY STACK</div>
       </div>
 
-      <div className="boot-log">
-        <div className="bl-h">SYSTEM CHECK</div>
-        {lines.map((l, i) => (
-          <div className="bl-row" key={i}>
-            <span className="bl-ok">[ OK ]</span>
-            <span className="bl-src">{l[0]}</span>
-            <span className="bl-msg">{l[1]}</span>
-          </div>
-        ))}
-        {lines.length < BOOT_SEQ.length && (
-          <div className="bl-row pend">
-            <span style={{ animation: 'blink 1.05s steps(1) infinite' }}>▋</span>
-          </div>
-        )}
-      </div>
-
       <button className="boot-enter" onClick={launch} disabled={launching}>
-        <span className="be-lbl">{launching ? 'SPOOLING ROTORS' : 'INITIALIZE COMMAND'}</span>
+        <span className="be-lbl">{launching ? 'Starting…' : 'Enter'}</span>
         <span className="be-arrow">{launching ? '◢◤' : '▸'}</span>
       </button>
       <div className="boot-hint">CLICK TO ENTER · DRAG TO ORBIT</div>

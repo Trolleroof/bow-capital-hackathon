@@ -19,8 +19,8 @@ class OrchestratorConfig:
 
 @dataclass(frozen=True)
 class DroneCameraConfig:
-    width: int = 240
-    height: int = 135
+    width: int = 640
+    height: int = 360
     fov_deg: float = 78.0
     near: float = 0.05
     far: float = 120.0

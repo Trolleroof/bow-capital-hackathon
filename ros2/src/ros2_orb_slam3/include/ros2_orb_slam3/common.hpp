@@ -7,6 +7,7 @@
 #include <algorithm> // The header <algorithm> defines a collection of functions especially designed to be used on ranges of elements.
 #include <fstream> // Input/output stream class to operate on files.
 #include <chrono> // c++ timekeeper library
+#include <cmath>
 #include <vector> // vectors are sequence containers representing arrays that can change in size.
 #include <queue>
 #include <thread> // class to represent individual threads of execution.
@@ -28,6 +29,8 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "sensor_msgs/msg/point_field.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
@@ -50,6 +53,7 @@ using std::placeholders::_1; //* TODO why this is suggested in official tutorial
 
 //* ORB SLAM 3 includes
 #include "System.h" //* Also imports the ORB_SLAM3 namespace
+#include "MapPoint.h"
 
 //* Gobal defs
 #define pass (void)0 // Python's equivalent of "pass" i.e. no operation
@@ -101,7 +105,11 @@ class MonocularMode : public rclcpp::Node
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr posePub_;
         rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odomPub_;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pathPub_;
+        rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointCloudPub_;
         std::vector<geometry_msgs::msg::PoseStamped> poseHistory_;
+        size_t pointCloudMaxPoints_ = 2500;
+        size_t pointCloudPublishStride_ = 3;
+        size_t pointCloudPublishCounter_ = 0;
 
         //* ORB_SLAM3 related variables
         ORB_SLAM3::System* pAgent; // pointer to a ORB SLAM3 object
@@ -119,6 +127,7 @@ class MonocularMode : public rclcpp::Node
         // ORB_SLAM3::eigenMatXf convertToEigenMat(const std_msgs::msg::Float32MultiArray& msg); // Helper method, converts semantic matrix eigenMatXf, a Eigen 4x4 float matrix
         void initializeVSLAM(std::string& configString); //* Method to bind an initialized VSLAM framework to this node
         void publishSLAMOutput(const Sophus::SE3f& Tcw, const rclcpp::Time& stamp);
+        void publishPointCloud(const rclcpp::Time& stamp);
 
 
 };

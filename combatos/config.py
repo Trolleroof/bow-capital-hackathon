@@ -7,6 +7,9 @@ BUS_HOST = os.getenv("COMBATOS_HOST", "0.0.0.0")
 BUS_PORT = int(os.getenv("COMBATOS_PORT", "8000"))
 IMAGE_BUS_HOST = os.getenv("COMBATOS_IMAGE_HOST", BUS_HOST)
 IMAGE_BUS_PORT = int(os.getenv("COMBATOS_IMAGE_PORT", "8001"))
+WS_MAX_SIZE = int(os.getenv("COMBATOS_WS_MAX_SIZE", str(16 * 1024 * 1024)))
+WS_PING_INTERVAL = float(os.getenv("COMBATOS_WS_PING_INTERVAL", "20.0"))
+WS_PING_TIMEOUT = float(os.getenv("COMBATOS_WS_PING_TIMEOUT", "20.0"))
 
 # ── Module health ─────────────────────────────────────────────────────────────
 # A module that hasn't published in this many seconds is marked "degraded".

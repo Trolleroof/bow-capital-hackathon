@@ -30,8 +30,13 @@ function detColor(d: Detection): string {
   return COLOR[d.cls.toLowerCase()] ?? COLOR.default
 }
 
-export function makeDetectionOverlay(displayDets: Detection[]) {
+interface DetectionOverlayOptions {
+  lineScale?: number
+}
+
+export function makeDetectionOverlay(displayDets: Detection[], options: DetectionOverlayOptions = {}) {
   return (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    const lineScale = options.lineScale ?? 1
     for (const d of displayDets) {
       if (!d.bbox) continue
       const [nx, ny, nw, nh] = d.bbox
@@ -40,7 +45,7 @@ export function makeDetectionOverlay(displayDets: Detection[]) {
       const w = nw * width
       const h = nh * height
       const color = detColor(d)
-      const thick = d.confirmed || d.tone === 'amber' ? 8 : 6
+      const thick = (d.confirmed || d.tone === 'amber' ? 8 : 6) * lineScale
       const frac = d.confirmed ? 0.3 : 0.24
 
       drawCorners(ctx, x, y, w, h, color, thick, frac)

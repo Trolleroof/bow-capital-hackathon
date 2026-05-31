@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { LiveFrameCanvas } from './LiveFrameCanvas'
 import type { TelemetryState, LogEntry } from './useCombatState'
-import { TrajPlot, Gauge } from './atoms'
+import { Gauge } from './atoms'
+import { VslamScene } from './VslamScene'
 
 const MODULES = ['NAVIGATION', 'TARGETS', 'RECON', 'SYSTEM']
 
@@ -20,6 +21,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
   const tracked = t.dets.filter(d => d.st !== 'LOST').length
   const liveFeed = t.cameraFrame
   const annotatedFeed = t.slamFrame
+  const vslamPose = t.slamOdometry ?? { ...t.pose, qz: Math.sin(t.yaw * Math.PI / 360), qw: Math.cos(t.yaw * Math.PI / 360) }
 
   return (
     <div className="cmd">
@@ -136,15 +138,15 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
         <div className="pnl nav-col">
           <h4>NAVIGATION · STEREO VSLAM <em>6-DoF</em></h4>
           <div className="fig map" style={{ flex: 1 }}>
-            <div className="grid-bg" />
-            <TrajPlot points={t.traj} w={420} h={620} />
+            <VslamScene points={t.slamPointCloud} path={t.slamPath} pose={vslamPose} />
             <div className="corner tl" /><div className="corner tr" />
             <div className="corner bl" /><div className="corner br" />
-            <div className="fig-val">● LIVE · NO GPS FIX</div>
-            <div className="fig-cap">TRAJECTORY · TOP-DOWN · {t.loops} LOOP CLOSURES</div>
+            <div className="fig-val">● LIVE · {t.slamPointCloud.length} MAP PTS</div>
+            <div className="fig-cap">VSLAM MAP · /slam/odometry · /slam/path · /slam/point_cloud</div>
             <div className="fig-legend">
-              <span><i className="lg" />FLOWN PATH</span>
+              <span><i className="lg" />SLAM PATH</span>
               <span><i className="lg dot" />EGO POSE</span>
+              <span><i className="lg cloud" />MAP POINTS</span>
             </div>
           </div>
         </div>
@@ -287,6 +289,9 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
               <div><span>DROPPED</span><b>{t.slamDiagnostics.droppedFrames}</b></div>
               <div><span>QUEUE</span><b>{t.slamDiagnostics.queueDepth}</b></div>
               <div><span>POSE</span><b>{t.pose.x.toFixed(1)}, {t.pose.y.toFixed(1)}, {t.pose.z.toFixed(1)}</b></div>
+              <div><span>ODOM SPEED</span><b>{t.vel.toFixed(2)} m/s</b></div>
+              <div><span>PATH POSES</span><b>{t.slamPath.length}</b></div>
+              <div><span>MAP POINTS</span><b>{t.slamPointCloudTotal || t.slamPointCloud.length}</b></div>
             </div>
           )}
         </div>

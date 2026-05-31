@@ -34,6 +34,48 @@ class SlamStatusMessage(BaseModel):
     dropped_frames: int = 0
 
 
+class SlamPoint(BaseModel):
+    x: float
+    y: float
+    z: float
+
+
+class SlamPose(SlamPoint):
+    t: float = 0.0
+
+
+class SlamOdometryMessage(SlamPose):
+    """topic: 'slam_odometry' — normalized nav_msgs/Odometry from ORB-SLAM3."""
+    frame_id: str = "map"
+    child_frame_id: str = "camera"
+    qx: float = 0.0
+    qy: float = 0.0
+    qz: float = 0.0
+    qw: float = 1.0
+    vx: float = 0.0
+    vy: float = 0.0
+    vz: float = 0.0
+    wx: float = 0.0
+    wy: float = 0.0
+    wz: float = 0.0
+    tracking: str = "NO_LOCK"
+
+
+class SlamPathMessage(BaseModel):
+    """topic: 'slam_path' — compact nav_msgs/Path for browser rendering."""
+    t: float
+    frame_id: str = "map"
+    poses: list[SlamPose] = []
+
+
+class SlamPointCloudMessage(BaseModel):
+    """topic: 'slam_point_cloud' — downsampled /slam/point_cloud map points."""
+    t: float
+    frame_id: str = "map"
+    points: list[SlamPoint] = []
+    total_points: int = 0
+
+
 class SlamFrameMessage(BaseModel):
     """topic: 'camera_frame' | 'slam_frame' — base64 JPEG test stream."""
     t: float

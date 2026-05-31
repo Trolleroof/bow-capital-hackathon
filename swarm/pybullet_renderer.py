@@ -4,6 +4,13 @@ This process intentionally depends only on system Python + pybullet. The trainin
 service owns policy execution and sends pose frames over stdin; this process
 renders those poses in a real PyBullet world and writes RGBA camera frames to
 stdout as JSON lines.
+
+The swarm drones ("us", blue) are driven by the policy poses arriving on stdin.
+Each scenario also dresses the world with semantically-correct 3D props and
+SCRIPTED adversaries/targets (red enemy drones, a green moving target, inbound
+attackers, ...) so the sim visually matches the scenario description even though
+the underlying ``SwarmEnv`` only models the blue coverage team. Scripted entities
+are animated purely from the frame time ``t`` carried on each pose message.
 """
 
 from __future__ import annotations
@@ -13,6 +20,20 @@ import base64
 import json
 import math
 import sys
+from typing import Literal
+
+# ── team / prop colours ─────────────────────────────────────────────────────
+BLUE = [0.22, 0.78, 1.0, 1.0]    # the swarm — "us"
+RED = [1.0, 0.30, 0.34, 1.0]     # hostile drones / movers
+GREEN = [0.30, 0.85, 0.50, 1.0]  # tracked target / defended asset
+GREEN_SOFT = [0.28, 0.78, 0.56, 0.35]  # translucent zone discs
+GROUND = [0.36, 0.30, 0.21, 1.0]
+SOIL = [0.33, 0.24, 0.17, 0.78]
+CONCRETE = [0.31, 0.31, 0.33, 1.0]
+WRECKAGE = [0.20, 0.21, 0.22, 1.0]
+BERM = [0.42, 0.34, 0.22, 1.0]
+TROOP = [0.32, 0.42, 0.24, 1.0]
+CameraMode = Literal["observer", "chase", "fpv"]
 
 
 def _box(p, half_extents, position, color, mass=0.0):
@@ -26,7 +47,7 @@ def _box(p, half_extents, position, color, mass=0.0):
     )
 
 
-def _cylinder(p, radius, height, position, color):
+def _cylinder(p, radius, height, position, color, mass=0.0):
     visual = p.createVisualShape(
         p.GEOM_CYLINDER,
         radius=radius,
@@ -35,6 +56,36 @@ def _cylinder(p, radius, height, position, color):
     )
     collision = p.createCollisionShape(p.GEOM_CYLINDER, radius=radius, height=height)
     return p.createMultiBody(
+        baseMass=mass,
+        baseCollisionShapeIndex=collision,
+        baseVisualShapeIndex=visual,
+        basePosition=position,
+    )
+
+
+def _capsule(p, radius, height, position, color, mass=0.0):
+    visual = p.createVisualShape(
+        p.GEOM_CAPSULE,
+        radius=radius,
+        length=height,
+        rgbaColor=color,
+        specularColor=[0.1, 0.1, 0.1],
+    )
+    collision = p.createCollisionShape(p.GEOM_CAPSULE, radius=radius, height=height)
+    return p.createMultiBody(
+        baseMass=mass,
+        baseCollisionShapeIndex=collision,
+        baseVisualShapeIndex=visual,
+        basePosition=position,
+    )
+
+
+def _drone_body(p, position, color, scale=1.0):
+    """Spawn a quad-ish drone (flat box) in the given team colour."""
+    half = [0.28 * scale, 0.18 * scale, 0.06 * scale]
+    visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half, rgbaColor=color)
+    collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half)
+    return p.createMultiBody(
         baseMass=0.0,
         baseCollisionShapeIndex=collision,
         baseVisualShapeIndex=visual,
@@ -42,47 +93,208 @@ def _cylinder(p, radius, height, position, color):
     )
 
 
-def _build_world(p, env_id: str) -> None:
-    _box(p, [12.0, 12.0, 0.015], [0, 0, -0.015], [0.025, 0.038, 0.035, 1])
-    _box(p, [10.5, 0.04, 0.018], [0, -10.5, 0.02], [0.18, 0.54, 0.4, 1])
-    _box(p, [10.5, 0.04, 0.018], [0, 10.5, 0.02], [0.18, 0.54, 0.4, 1])
-    _box(p, [0.04, 10.5, 0.018], [-10.5, 0, 0.02], [0.18, 0.54, 0.4, 1])
-    _box(p, [0.04, 10.5, 0.018], [10.5, 0, 0.02], [0.18, 0.54, 0.4, 1])
+def _orbit(cx, cy, r, ang, squash=1.0):
+    return cx + math.cos(ang) * r, cy + (math.sin(ang) * r * squash)
 
-    for x in range(-8, 9, 4):
-        _box(p, [0.02, 10.0, 0.01], [x, 0, 0.015], [0.08, 0.18, 0.16, 1])
-        _box(p, [10.0, 0.02, 0.01], [0, x, 0.016], [0.08, 0.18, 0.16, 1])
 
-    layouts = {
-        "drone-vs-drone": [(-3.0, -1.8), (3.0, 1.8), (0.0, 3.2)],
-        "moving-target-track": [(-4.0, 0.0), (0.0, 2.4), (4.0, -1.6)],
-        "search-and-interdict": [(-3.8, -3.2), (-1.4, 2.8), (2.8, 1.1), (4.3, -3.4)],
-        "defend-asset": [(-4.4, 0.0), (4.4, 0.0), (0.0, -4.4), (0.0, 4.4)],
-        "swarm-vs-swarm-race": [(-5.0, -2.0), (-1.8, 2.0), (1.8, -2.0), (5.0, 2.0)],
-    }
-    for idx, (x, y) in enumerate(layouts.get(env_id, layouts["search-and-interdict"])):
-        height = 0.45 + 0.18 * (idx % 2)
-        _box(p, [0.7, 0.45, height], [x, y, height], [0.11, 0.24, 0.22, 1])
+# ── per-scenario world + scripted adversaries ───────────────────────────────
 
-    if env_id == "defend-asset":
-        _cylinder(p, 0.95, 0.2, [0.0, 0.0, 0.1], [0.28, 0.78, 0.56, 1])
+
+def _arena(p) -> None:
+    """Shared battlefield floor, perimeter walls, grid, and cover props."""
+    size = 22.0
+    _box(p, [size, size, 0.015], [0, 0, -0.015], GROUND)
+    _box(p, [size * 0.68, size * 0.42, 0.05], [0, 0, 0.05], SOIL)
+    _box(p, [size, 0.15, 0.7], [0, -size, 0.7], [0.17, 0.18, 0.20, 1.0])
+    _box(p, [size, 0.15, 0.7], [0, size, 0.7], [0.17, 0.18, 0.20, 1.0])
+    _box(p, [0.15, size, 0.7], [-size, 0, 0.7], [0.17, 0.18, 0.20, 1.0])
+    _box(p, [0.15, size, 0.7], [size, 0, 0.7], [0.17, 0.18, 0.20, 1.0])
+    for x in range(-16, 17, 4):
+        _box(p, [0.02, 19.0, 0.01], [x, 0, 0.02], [0.08, 0.18, 0.16, 1])
+        _box(p, [19.0, 0.02, 0.01], [0, x, 0.022], [0.08, 0.18, 0.16, 1])
+
+    for x, y in [
+        (-11.5, -7.5),
+        (-4.0, 8.5),
+        (6.5, -4.5),
+        (12.0, 6.0),
+        (16.5, -9.0),
+        (-15.5, 3.0),
+    ]:
+        _cylinder(p, 1.5, 0.04, [x, y, 0.03], [0.15, 0.12, 0.11, 0.95])
+
+    for x, y, yaw in [
+        (-8.5, -1.5, 0.35),
+        (-2.0, 5.5, -0.2),
+        (7.0, 1.2, 0.7),
+        (13.5, -5.0, -0.55),
+        (4.0, -10.0, 0.15),
+    ]:
+        body = _box(p, [2.2, 0.45, 0.45], [x, y, 0.42], BERM)
+        p.resetBasePositionAndOrientation(
+            body,
+            [x, y, 0.42],
+            p.getQuaternionFromEuler([0.0, 0.0, yaw]),
+        )
+
+    for x, y, half_extents, color, yaw in [
+        (-13.0, 10.0, [1.3, 1.3, 1.5], CONCRETE, 0.15),
+        (10.5, 10.5, [1.3, 1.3, 1.5], CONCRETE, -0.32),
+        (2.5, -13.0, [1.3, 1.3, 1.5], CONCRETE, 0.4),
+        (-16.0, -11.0, [0.9, 0.45, 0.35], WRECKAGE, -0.6),
+        (15.0, 1.0, [0.9, 0.45, 0.35], WRECKAGE, 0.22),
+    ]:
+        z = 0.8 if half_extents[2] > 1.0 else 0.38
+        body = _box(p, half_extents, [x, y, z], color)
+        p.resetBasePositionAndOrientation(
+            body,
+            [x, y, z],
+            p.getQuaternionFromEuler([0.0, 0.0, yaw]),
+        )
+
+
+def _add_troop_patrols(p) -> list[dict]:
+    """Add the moving ground units from the updated PyBullet demo."""
+    scripted: list[dict] = []
+    anchor_bases = [(-12.0, -6.0), (-4.0, 8.0), (8.5, -2.0), (14.0, 7.5)]
+    for idx in range(20):
+        anchor = idx % len(anchor_bases)
+        radial = 1.4 + (idx % 5) * 0.82
+        theta = idx * 1.618
+        offset = (math.cos(theta) * radial, math.sin(theta) * radial)
+        phase = idx * 0.73
+        x = anchor_bases[anchor][0] + offset[0]
+        y = anchor_bases[anchor][1] + offset[1]
+        body = _capsule(p, 0.18, 1.0, [x, y, 1.0], TROOP)
+
+        def fn(t, anchor=anchor, offset=offset, phase=phase):
+            anchor_positions = [list(base) for base in anchor_bases]
+            anchor_positions[0][0] += t * 0.45
+            anchor_positions[0][1] += 1.2 * math.sin(t * 0.22)
+            anchor_positions[1][0] += 0.8 * math.sin(t * 0.18)
+            anchor_positions[1][1] -= 0.7 * t * 0.18
+            anchor_positions[2][0] += 0.95 * t * 0.2
+            anchor_positions[2][1] += 1.0 * math.sin(t * 0.31)
+            anchor_positions[3][0] -= 0.65 * math.sin(t * 0.21)
+            anchor_positions[3][1] -= 0.55 * t * 0.16
+            drift_x = 0.55 * math.sin(t * 0.75 + phase)
+            drift_y = 0.55 * math.cos(t * 0.63 + phase * 0.7)
+            x = anchor_positions[anchor][0] + offset[0] + drift_x
+            y = anchor_positions[anchor][1] + offset[1] + drift_y
+            yaw = math.atan2(anchor_positions[anchor][1] - y, anchor_positions[anchor][0] - x)
+            return [x, y, 1.0], yaw
+
+        scripted.append({"body": body, "fn": fn})
+    return scripted
+
+
+def _build_world(p, env_id: str) -> list[dict]:
+    """Build static props for ``env_id`` and return the SCRIPTED entities.
+
+    Each scripted entity is ``{"body": <id>, "fn": fn}`` where ``fn(t)`` returns
+    ``([x, y, z], yaw)`` for that body at frame time ``t`` (seconds).
+    """
+    _arena(p)
+    scripted: list[dict] = _add_troop_patrols(p)
+
+    if env_id == "drone-vs-drone":
+        # contested center lane: control disc + blast walls + radar mast
+        _cylinder(p, 4.2, 0.02, [0, 0, 0.02], GREEN_SOFT)
+        _box(p, [0.5, 3.0, 0.9], [-3.0, 0, 0.9], [0.16, 0.3, 0.28, 1])
+        _box(p, [0.5, 3.0, 0.9], [3.0, 0, 0.9], [0.16, 0.3, 0.28, 1])
+        _cylinder(p, 0.35, 2.2, [0, 5.2, 1.1], [0.2, 0.42, 0.4, 1])
+        # 3 RED enemy drones patrolling the right half, contesting the lane
+        for i in range(3):
+            body = _drone_body(p, [4.5, 0, 1.0], RED)
+            r = 2.4 + i * 0.8
+
+            def fn(t, i=i, r=r):
+                ang = t * 0.5 + i * 2.1
+                x, y = _orbit(4.8, 0.0, r, ang, 0.85)
+                return [x, y, 1.0 + 0.15 * math.sin(t * 0.8 + i)], ang + math.pi / 2
+
+            scripted.append({"body": body, "fn": fn})
+
     elif env_id == "moving-target-track":
-        _box(p, [0.6, 0.32, 0.16], [2.5, -2.7, 0.18], [0.88, 0.34, 0.16, 1])
+        # warehouses create blind spots; one big GREEN ground target weaves through
+        _box(p, [1.4, 2.6, 1.3], [-4.2, 3.2, 1.3], [0.16, 0.3, 0.28, 1])
+        _box(p, [1.6, 2.4, 1.3], [3.6, -3.4, 1.3], [0.16, 0.3, 0.28, 1])
+        _box(p, [1.6, 0.7, 0.5], [4.4, 3.0, 0.5], [0.2, 0.36, 0.34, 1])
+        target = _box(p, [0.8, 0.5, 0.3], [0, 0, 0.3], GREEN)
+
+        def target_fn(t):
+            x = 6.0 * math.sin(t * 0.22)
+            y = 4.5 * math.sin(t * 0.41 + 0.6)
+            yaw = math.atan2(
+                4.5 * 0.41 * math.cos(t * 0.41 + 0.6),
+                6.0 * 0.22 * math.cos(t * 0.22),
+            )
+            return [x, y, 0.3], yaw
+
+        scripted.append({"body": target, "fn": target_fn})
+
+    elif env_id == "search-and-interdict":
+        # cluttered floor of crates + a jammer node, hiding one RED ground mover
+        for (cx, cy) in ((-4.5, -3.6), (-1.6, 3.1), (3.1, 1.2), (4.7, -3.7)):
+            _box(p, [0.9, 0.9, 0.7], [cx, cy, 0.7], [0.18, 0.32, 0.3, 1])
+        _cylinder(p, 1.1, 1.6, [1.0, -0.4, 0.8], [0.5, 0.32, 0.16, 1])
+        mover = _drone_body(p, [0, 0, 0.35], RED, scale=1.1)
+
+        def mover_fn(t):
+            x = 5.0 * math.sin(t * 0.18) + 1.5
+            y = 5.0 * math.cos(t * 0.27)
+            yaw = t * 0.27 + math.pi
+            return [x, y, 0.35], yaw
+
+        scripted.append({"body": mover, "fn": mover_fn})
+
+    elif env_id == "defend-asset":
+        # central GREEN asset inside a standoff ring; RED attackers spiral inward
+        _cylinder(p, 6.5, 0.02, [0, 0, 0.02], GREEN_SOFT)
+        _cylinder(p, 1.0, 0.4, [0, 0, 0.2], GREEN)
+        _box(p, [2.0, 0.6, 0.5], [0, 4.6, 0.5], [0.16, 0.3, 0.28, 1])
+        _box(p, [2.0, 0.6, 0.5], [0, -4.6, 0.5], [0.16, 0.3, 0.28, 1])
+        for i in range(3):
+            body = _drone_body(p, [9.0, 0, 1.0], RED)
+
+            def fn(t, i=i):
+                period = 13.0
+                phase = ((t + i * 4.3) % period) / period
+                radius = 9.2 - 7.2 * phase
+                ang = i * 2.1 + t * 0.35
+                x, y = _orbit(0.0, 0.0, radius, ang)
+                return [x, y, 1.0], ang + math.pi / 2
+
+            scripted.append({"body": body, "fn": fn})
+
     elif env_id == "swarm-vs-swarm-race":
+        # blue vs red territories with score gates; RED rival swarm sweeps the right
         for x in (-6.0, -2.0, 2.0, 6.0):
             _box(p, [1.25, 0.25, 0.018], [x, 0, 0.03], [0.13, 0.38, 0.26, 1])
+        _box(p, [0.04, 9.5, 0.02], [0, 0, 0.04], [0.45, 0.45, 0.5, 1])
+        for i in range(3):
+            body = _drone_body(p, [5.0, 0, 1.0], RED)
+
+            def fn(t, i=i):
+                ang = -t * 0.45 + i * 2.1
+                x, y = _orbit(5.0, 0.0, 2.0 + i * 1.4, ang, 0.9)
+                return [x, y, 1.0 + 0.12 * math.sin(t + i)], ang + math.pi / 2
+
+            scripted.append({"body": body, "fn": fn})
+
+    return scripted
 
 
-def _spawn_drone(p, agent_id: int, position) -> int:
-    color = [0.22, 0.78, 1.0, 1.0] if agent_id % 2 == 0 else [1.0, 0.54, 0.22, 1.0]
-    visual = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.28, 0.18, 0.06], rgbaColor=color)
-    collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.28, 0.18, 0.06])
-    return p.createMultiBody(
-        baseMass=0.85,
-        baseCollisionShapeIndex=collision,
-        baseVisualShapeIndex=visual,
-        basePosition=position,
-    )
+def _update_scripted(p, scripted: list[dict], t: float) -> None:
+    for entity in scripted:
+        pos, yaw = entity["fn"](t)
+        quat = p.getQuaternionFromEuler([0.0, 0.0, yaw])
+        p.resetBasePositionAndOrientation(entity["body"], pos, quat)
+
+
+def _spawn_drone(p, position) -> int:
+    """Spawn a blue swarm drone ("us"). Colour is team-consistent, not per-id."""
+    return _drone_body(p, position, BLUE)
 
 
 def _update_bodies(p, bodies: dict[int, int], agents: list[dict]) -> None:
@@ -91,21 +303,88 @@ def _update_bodies(p, bodies: dict[int, int], agents: list[dict]) -> None:
         pos = [float(agent["x"]), float(agent["y"]), float(agent["z"])]
         yaw = float(agent.get("yaw", 0.0))
         if agent_id not in bodies:
-            bodies[agent_id] = _spawn_drone(p, agent_id, pos)
+            bodies[agent_id] = _spawn_drone(p, pos)
         quat = p.getQuaternionFromEuler([0.0, 0.0, yaw])
         p.resetBasePositionAndOrientation(bodies[agent_id], pos, quat)
 
 
-def _render_frame(p, agents: list[dict], width: int, height: int) -> dict:
-    if agents:
-        cx = sum(float(agent["x"]) for agent in agents) / len(agents)
-        cy = sum(float(agent["y"]) for agent in agents) / len(agents)
-    else:
-        cx = cy = 0.0
-    target = [cx, cy, 1.1]
-    eye = [cx + 7.2, cy - 8.8, 5.2]
+def _mean_agent_position(agents: list[dict]) -> list[float]:
+    live_agents = [agent for agent in agents if agent.get("alive", True)]
+    if not live_agents:
+        return [0.0, 0.0, 1.0]
+    n = len(live_agents)
+    return [
+        sum(float(agent.get("x", 0.0)) for agent in live_agents) / n,
+        sum(float(agent.get("y", 0.0)) for agent in live_agents) / n,
+        sum(float(agent.get("z", 1.0)) for agent in live_agents) / n,
+    ]
+
+
+def _selected_agent(agents: list[dict], selected_drone: int) -> dict | None:
+    if not agents:
+        return None
+    for agent in agents:
+        if int(agent.get("id", -1)) == selected_drone:
+            return agent
+    return agents[max(0, min(selected_drone, len(agents) - 1))]
+
+
+def _camera_vectors(
+    agents: list[dict],
+    t: float,
+    mode: CameraMode,
+    selected_drone: int,
+) -> tuple[list[float], list[float], float]:
+    if mode in {"chase", "fpv"}:
+        agent = _selected_agent(agents, selected_drone)
+        if agent is not None:
+            yaw = float(agent.get("yaw", 0.0))
+            x = float(agent.get("x", 0.0))
+            y = float(agent.get("y", 0.0))
+            z = float(agent.get("z", 2.0))
+            forward = [math.cos(yaw), math.sin(yaw), 0.0]
+            if mode == "fpv":
+                tilt = math.radians(58.0)
+                eye = [
+                    x + 0.18 * forward[0],
+                    y + 0.18 * forward[1],
+                    z - 0.08,
+                ]
+                target = [
+                    eye[0] + math.cos(yaw) * math.cos(tilt) * 18.0,
+                    eye[1] + math.sin(yaw) * math.cos(tilt) * 18.0,
+                    eye[2] - math.sin(tilt) * 18.0,
+                ]
+                return eye, target, 78.0
+            eye = [x - forward[0] * 8.0, y - forward[1] * 8.0, z + 3.4]
+            target = [x + forward[0] * 5.5, y + forward[1] * 5.5, z - 1.2]
+            return eye, target, 62.0
+
+    focus = _mean_agent_position(agents)
+    yaw = math.radians(38.0 + 18.0 * math.sin(t * 0.08))
+    distance = 24.0
+    pitch = math.radians(36.0)
+    eye = [
+        focus[0] + math.cos(yaw) * math.cos(pitch) * distance,
+        focus[1] + math.sin(yaw) * math.cos(pitch) * distance,
+        focus[2] + math.sin(pitch) * distance + 2.0,
+    ]
+    target = [focus[0] * 0.45, focus[1] * 0.45, max(1.4, focus[2] + 0.6)]
+    return eye, target, 58.0
+
+
+def _render_frame(
+    p,
+    width: int,
+    height: int,
+    agents: list[dict],
+    t: float,
+    camera_mode: CameraMode,
+    selected_drone: int,
+) -> dict:
+    eye, target, fov = _camera_vectors(agents, t, camera_mode, selected_drone)
     view = p.computeViewMatrix(eye, target, [0.0, 0.0, 1.0])
-    proj = p.computeProjectionMatrixFOV(58, width / height, 0.1, 80)
+    proj = p.computeProjectionMatrixFOV(fov, width / height, 0.05, 120)
     _, _, rgba, _, _ = p.getCameraImage(
         width,
         height,
@@ -122,6 +401,8 @@ def _render_frame(p, agents: list[dict], width: int, height: int) -> dict:
         "width": width,
         "height": height,
         "encoding": "rgba",
+        "camera_mode": camera_mode,
+        "selected_drone": selected_drone,
         "data": base64.b64encode(raw).decode("ascii"),
     }
 
@@ -131,13 +412,19 @@ def main() -> None:
     parser.add_argument("--env-id", default="search-and-interdict")
     parser.add_argument("--width", type=int, default=960)
     parser.add_argument("--height", type=int, default=540)
+    parser.add_argument(
+        "--camera-mode",
+        choices=["observer", "chase", "fpv"],
+        default="observer",
+    )
+    parser.add_argument("--selected-drone", type=int, default=0)
     args = parser.parse_args()
 
     import pybullet as p
     client = p.connect(p.DIRECT)
     p.setGravity(0, 0, -9.81)
     p.setTimeStep(1.0 / 240.0)
-    _build_world(p, args.env_id)
+    scripted = _build_world(p, args.env_id)
     bodies: dict[int, int] = {}
 
     try:
@@ -146,9 +433,19 @@ def main() -> None:
                 continue
             message = json.loads(raw)
             agents = message.get("agents", [])
+            t = float(message.get("t", 0.0))
             _update_bodies(p, bodies, agents)
+            _update_scripted(p, scripted, t)
             p.stepSimulation()
-            frame = _render_frame(p, agents, args.width, args.height)
+            frame = _render_frame(
+                p,
+                args.width,
+                args.height,
+                agents,
+                t,
+                args.camera_mode,
+                args.selected_drone,
+            )
             frame["t"] = message.get("t", 0)
             frame["env_id"] = message.get("env_id", args.env_id)
             print(json.dumps(frame), flush=True)

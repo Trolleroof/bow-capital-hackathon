@@ -736,6 +736,22 @@
   transform: translate(-50%, -50%);
 }
 
+.pybullet-map__target {
+  position: absolute;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  border: 2px solid #ff5c5c;
+  background: rgba(255, 92, 92, 0.9);
+  box-shadow: 0 0 16px rgba(255, 92, 92, 0.9);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.pybullet-map__target.is-visible {
+  border-color: #ffd166;
+  box-shadow: 0 0 18px rgba(255, 209, 102, 0.9);
+}
+
 .pybullet-fpv-overlay {
   position: absolute;
   inset: 0;

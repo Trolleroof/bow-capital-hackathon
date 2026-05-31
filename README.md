@@ -52,15 +52,29 @@ bun run preview  # preview production build
 bun run lint
 ```
 
-## Gym training (MAPPO → ONNX)
+---
 
-Run the backend as a persistent FastAPI process, then run the frontend. Starting
-the backend does **not** train anything; clicking **Train Policy** starts training
-only for the selected gym environment.
+## Backend (Swarm API)
+
+From the repo root, start the FastAPI training/sim server on port **8787**:
 
 ```bash
 uv run --project swarm uvicorn swarm.backend:app --host 127.0.0.1 --port 8787
 ```
+
+The process stays idle until the frontend calls `POST /api/train/start` or sim endpoints. Requires [uv](https://docs.astral.sh/uv/) and deps in `swarm/` (`uv sync --project swarm` if imports fail).
+
+If port 8787 is already in use:
+
+```bash
+lsof -ti :8787 | xargs kill
+```
+
+---
+
+## Gym training (MAPPO → ONNX)
+
+Run the **backend** (above), then the frontend. Clicking **Train Policy** starts training only for the selected gym environment.
 
 In a second terminal:
 
@@ -76,12 +90,6 @@ Optional one-terminal dev mode:
 
 ```bash
 VITE_AUTO_TRAIN_SERVICE=1 bun dev
-```
-
-If you see `Address already in use` on port 8787, a previous backend is still running. To stop it:
-
-```bash
-lsof -ti :8787 | xargs kill
 ```
 
 Optional env overrides:

@@ -304,9 +304,11 @@ def _drive_sim_policy(
         policy_fn = _random_policy(env)
         label = "random"
 
-    # Wall-clock pacing of the live playback (physics step is env DT internally).
-    # Larger = slower, more watchable rollout on stage.
-    dt = float(os.environ.get("SIM_PLAYBACK_DT", "0.16"))
+    # Wall-clock pacing of the live playback. The env's internal step is 0.1s, so
+    # 0.1 ≈ real-time motion. The PyBullet renderer drains to the freshest pose,
+    # so its frame rate is independent of this — smaller just means faster on-
+    # screen motion, not more fps. Override with SIM_PLAYBACK_DT.
+    dt = float(os.environ.get("SIM_PLAYBACK_DT", "0.1"))
     ckpt_mtime: float = os.path.getmtime(ckpt) if os.path.exists(ckpt) else 0.0
     reload_check_interval = 50  # frames
     frame_count = 0
@@ -360,17 +362,28 @@ def _start_training(env_id: str, profile: str, timesteps: int) -> dict:
         if existing.get("proc") is not None:
             existing["running"] = False
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "swarm.train",
-        "--env-id",
-        env_id,
-        "--profile",
-        profile,
-        "--timesteps",
-        str(timesteps),
-    ]
+    if env_id == "hunt-and-seek":
+        cmd = [
+            sys.executable,
+            "-m",
+            "swarm.train_hunt_curriculum",
+            "--profile",
+            profile,
+            "--timesteps",
+            str(timesteps),
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            "-m",
+            "swarm.train",
+            "--env-id",
+            env_id,
+            "--profile",
+            profile,
+            "--timesteps",
+            str(timesteps),
+        ]
     proc = _popen(
         cmd,
         cwd=REPO,

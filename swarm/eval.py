@@ -52,6 +52,7 @@ class ScriptedPolicy:
         # it exposes the target block offset directly as env.target_off.
         self.is_hunt = self.scenario_id == "hunt-and-seek"
         if self.is_hunt:
+            self.env = env
             self.target_off = env.target_off
             return
         self.patch = env.patch
@@ -63,8 +64,10 @@ class ScriptedPolicy:
         o = obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor) else np.asarray(obs)
 
         if self.is_hunt:
-            # Fly straight at the (estimated) target: the target block's first
-            # three features are the normalized 3D relative offset. 3D action.
+            if hasattr(self, "env") and hasattr(self.env, "expert_action"):
+                return torch.from_numpy(self.env.expert_action())
+            # Fall back to flying straight at the estimated target if this
+            # policy was created without a live hunt env reference.
             off = self.target_off
             bearing3 = o[:, off:off + 3]
             nrm = np.linalg.norm(bearing3, axis=1, keepdims=True)
@@ -112,9 +115,11 @@ def eval_scripted(
     battlefield,
     n_episodes: int = 10,
     seed: int = 123,
+    env_overrides: dict[str, Any] | None = None,
 ) -> EvalResult:
     """Evaluate the scripted 'fly at the objective' baseline (see ScriptedPolicy)."""
-    probe = make_scenario_env(env_id, battlefield=battlefield, seed=seed)
+    env_overrides = dict(env_overrides or {})
+    probe = make_scenario_env(env_id, battlefield=battlefield, seed=seed, **env_overrides)
     scripted = ScriptedPolicy(probe)
     return eval_policy(
         scripted,  # duck-typed: deterministic path only calls actor(obs)
@@ -123,6 +128,7 @@ def eval_scripted(
         n_episodes=n_episodes,
         seed=seed,
         deterministic=True,
+        env_overrides=env_overrides,
     )
 
 
@@ -134,6 +140,7 @@ def eval_policy(
     n_episodes: int = 5,
     seed: int = 1234,
     deterministic: bool = True,
+    env_overrides: dict[str, Any] | None = None,
 ) -> EvalResult:
     """Run deterministic evaluation and aggregate task KPIs.
 
@@ -141,9 +148,12 @@ def eval_policy(
     """
     profile = get_task_profile(env_id)
     episode_metrics: list[dict[str, float]] = []
+    env_overrides = dict(env_overrides or {})
 
     for ep in range(n_episodes):
-        env = make_scenario_env(env_id, battlefield=battlefield, seed=seed + ep)
+        env = make_scenario_env(env_id, battlefield=battlefield, seed=seed + ep, **env_overrides)
+        if isinstance(actor, ScriptedPolicy) and actor.is_hunt:
+            actor.env = env
         obs = env.reset(seed=seed + ep)
         done = False
         info: dict[str, Any] = {"coverage": 0.0, "task_score": 0.0}

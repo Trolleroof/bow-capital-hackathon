@@ -30,6 +30,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from swarm.env_config import config_to_json_dict, make_profile_config
 from swarm.eval import EvalResult, ScriptedPolicy, eval_policy, eval_scripted, is_better
+from swarm.hunt_env import HUNT_CURRICULUM_STAGES
 from swarm.mappo import MAPPO, MAPPOConfig
 from swarm.scenarios import make_scenario_env
 
@@ -105,11 +106,12 @@ def behavior_clone_scripted(
     steps: int,
     batch_size: int,
     seed: int,
+    env_overrides: dict | None = None,
 ) -> None:
     if steps <= 0:
         return
 
-    env = make_scenario_env(env_id, battlefield=battlefield, seed=seed)
+    env = make_scenario_env(env_id, battlefield=battlefield, seed=seed, **dict(env_overrides or {}))
     scripted = ScriptedPolicy(env)
     obs = env.reset(seed=seed)
     rng = np.random.default_rng(seed)
@@ -156,6 +158,18 @@ def main():
     p.add_argument("--profile", choices=["garrison", "combat"], default="combat")
     p.add_argument("--run-name", type=str, default=None)
     p.add_argument(
+        "--hunt-stage",
+        choices=HUNT_CURRICULUM_STAGES,
+        default="standard",
+        help="hunt-and-seek curriculum stage; ignored by other envs",
+    )
+    p.add_argument(
+        "--pursuit-assist",
+        type=float,
+        default=0.0,
+        help="blend PPO action with hunt expert action during training env steps",
+    )
+    p.add_argument(
         "--init-from", type=str, default=None,
         help="warm-start actor+critic from a policy.pt checkpoint (curriculum). "
         "Obs/act dims must match the new env.",
@@ -173,7 +187,13 @@ def main():
     os.makedirs(paths["dir"], exist_ok=True)
 
     battlefield = make_profile_config(args.env_id, args.profile)
-    env = make_scenario_env(args.env_id, battlefield=battlefield, seed=args.seed)
+    env_overrides = {}
+    if args.env_id == "hunt-and-seek":
+        env_overrides = {
+            "curriculum_stage": args.hunt_stage,
+            "pursuit_assist": args.pursuit_assist,
+        }
+    env = make_scenario_env(args.env_id, battlefield=battlefield, seed=args.seed, **env_overrides)
     params_hash = env.battlefield_hash()
     save_json(paths["params"], config_to_json_dict(battlefield))
     open(paths["events"], "w", encoding="utf-8").close()
@@ -204,7 +224,7 @@ def main():
     # Distinct seeds per parallel env so the rollout samples decorrelated worlds.
     def _env_fn(idx: int):
         return make_scenario_env(
-            args.env_id, battlefield=battlefield, seed=args.seed + 1000 * idx
+            args.env_id, battlefield=battlefield, seed=args.seed + 1000 * idx, **env_overrides
         )
 
     algo = MAPPO(env, cfg, env_fn=_env_fn if args.num_envs > 1 else None)
@@ -248,6 +268,7 @@ def main():
         env_id=args.env_id,
         battlefield=battlefield,
         n_episodes=10,
+        env_overrides=env_overrides,
     )
     print(
         f"[baseline] random policy {random_eval.primary_metric} = "
@@ -256,7 +277,12 @@ def main():
     writer.add_scalar("eval/random_coverage", random_eval.coverage, 0)
     writer.add_scalar(f"eval/random_{random_eval.primary_metric}", random_eval.primary_value, 0)
 
-    scripted_eval = eval_scripted(env_id=args.env_id, battlefield=battlefield, n_episodes=10)
+    scripted_eval = eval_scripted(
+        env_id=args.env_id,
+        battlefield=battlefield,
+        n_episodes=10,
+        env_overrides=env_overrides,
+    )
     print(
         f"[baseline] scripted (fly-at-objective) {scripted_eval.primary_metric} = "
         f"{scripted_eval.primary_value:.3f} | coverage = {scripted_eval.coverage:.3f}"
@@ -270,6 +296,7 @@ def main():
         steps=args.bc_steps,
         batch_size=args.bc_batch_size,
         seed=args.seed + 17,
+        env_overrides=env_overrides,
     )
     emit_train_event(
         paths["events"],
@@ -363,6 +390,7 @@ def main():
                 env_id=args.env_id,
                 battlefield=battlefield,
                 n_episodes=5,
+                env_overrides=env_overrides,
             )
             writer.add_scalar("eval/coverage", det_eval.coverage, global_step)
             writer.add_scalar("eval/task_score", det_eval.task_score, global_step)
@@ -432,6 +460,7 @@ def main():
         env_id=args.env_id,
         battlefield=battlefield,
         n_episodes=10,
+        env_overrides=env_overrides,
     )
     if best_eval is None:
         best_eval = final_eval
@@ -456,6 +485,8 @@ def main():
         "rollout_steps": cfg.rollout_steps,
         "bc_steps": args.bc_steps,
         "bc_batch_size": args.bc_batch_size,
+        "hunt_stage": args.hunt_stage if args.env_id == "hunt-and-seek" else None,
+        "pursuit_assist": args.pursuit_assist if args.env_id == "hunt-and-seek" else None,
         "global_step": global_step,
         "best_global_step": best_global_step,
         "primary_metric": best_eval.primary_metric,

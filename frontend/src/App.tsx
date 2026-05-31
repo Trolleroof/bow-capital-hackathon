@@ -272,12 +272,8 @@ export default function App() {
       <section className="menu-viewport">
         <div className="menu-header">
           <div className="menu-header-left">
-            <span className="menu-subtitle">Select training environment</span>
             <h1 className="menu-title">Training Gym</h1>
-            <p className="menu-kicker">
-              Pick a scenario, train the controller, then open the PyBullet sim
-              with the same policy context.
-            </p>
+
           </div>
           <button
             type="button"
@@ -289,14 +285,10 @@ export default function App() {
         </div>
 
         <div className="menu-grid">
-          {scenarios.map((scenario) => {
-            const status = policyStore[scenario.id] ?? 'not-trained'
-            const ready = status === 'ready'
-
-            return (
+          {scenarios.map((scenario) => (
               <article
                 key={scenario.id}
-                className={`menu-card ${ready ? 'menu-card--ready' : ''}`}
+                className="menu-card"
                 role="button"
                 tabIndex={0}
                 onClick={() => activateScenarioCard(scenario.id)}
@@ -311,60 +303,12 @@ export default function App() {
                   <ScenarioMiniPreview scenarioId={scenario.id} />
                 </div>
                 <div className="menu-card-topline">
-                  <div>
-                    <span className="menu-card-meta-label">
-                      {scenario.label}
-                    </span>
-                    <h2 className="menu-card-name">{scenario.name}</h2>
-                  </div>
-                  <span
-                    className="menu-card-badge"
-                    data-status={ready ? 'Ready' : 'Not trained'}
-                  >
-                    {ready ? 'Policy ready' : status}
-                  </span>
+                  <span className="menu-card-meta-label">{scenario.label}</span>
+                  <h2 className="menu-card-name">{scenario.name}</h2>
                 </div>
                 <p className="menu-card-summary">{scenario.summary}</p>
-                <div className="menu-card-meta">
-                  <span className="menu-card-meta-item">
-                    <span className="menu-card-meta-label">Reward</span>
-                    {scenario.telemetryLabels[0]}
-                  </span>
-                  <span className="menu-card-meta-item">
-                    <span className="menu-card-meta-label">Track</span>
-                    {scenario.telemetryLabels[1]}
-                  </span>
-                  <span className="menu-card-meta-item">
-                    <span className="menu-card-meta-label">Objective</span>
-                    {scenario.telemetryLabels[2]}
-                  </span>
-                </div>
-                <div className="menu-card-actions">
-                  <button
-                    type="button"
-                    className="menu-card-cta menu-card-cta--button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      enterGym(scenario.id)
-                    }}
-                  >
-                    Train
-                  </button>
-                  <button
-                    type="button"
-                    className="menu-card-cta menu-card-cta--button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      void enterSim(scenario.id)
-                    }}
-                    disabled={!simAllowedFor(scenario.id) || launchingSim === scenario.id}
-                  >
-                    {launchingSim === scenario.id ? 'Launching' : 'PyBullet Sim'}
-                  </button>
-                </div>
               </article>
-            )
-          })}
+          ))}
         </div>
       </section>
       {toast ? <div className="app-toast">{toast}</div> : null}

@@ -110,4 +110,4 @@ def make_scenario_env(
     if battlefield is None:
         battlefield = get_scenario_defaults(scenario_id)
     env_kwargs = {**scenario.env_kwargs, **overrides}
-    return SwarmEnv(**env_kwargs, battlefield=battlefield)
+    return SwarmEnv(**env_kwargs, battlefield=battlefield, scenario_id=scenario_id)

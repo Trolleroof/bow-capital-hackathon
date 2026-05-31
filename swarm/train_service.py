@@ -297,12 +297,18 @@ def _drive_sim_policy(env_id: str, policy: str, proc: subprocess.Popen) -> None:
     assert proc.stdin is not None
     try:
         from swarm.bus import _random_policy, _trained_policy, swarm_message
-        from swarm.env import SwarmEnv
+        from swarm.scenarios import make_scenario_env
     except Exception as exc:
         print(f"[pybullet-sim] policy driver import failed: {exc}", flush=True)
         return
 
-    env = SwarmEnv(seed=0)
+    # Use the scenario env so spawn areas / agent count match how the policy was
+    # trained, instead of the generic point-mass defaults.
+    try:
+        env = make_scenario_env(env_id, seed=0)
+    except KeyError:
+        from swarm.env import SwarmEnv
+        env = SwarmEnv(seed=0)
     obs = env.reset()
     ckpt = checkpoint_paths(env_id)["policy"]
     if policy == "trained" and os.path.exists(ckpt):
@@ -336,15 +342,27 @@ def _drive_sim_policy(env_id: str, policy: str, proc: subprocess.Popen) -> None:
         time.sleep(dt)
 
 
-def _start_sim(env_id: str, policy: str = "trained") -> dict:
+def _start_sim(
+    env_id: str,
+    policy: str = "trained",
+    camera_mode: str = "observer",
+    selected_drone: int = 0,
+) -> dict:
     global _SIM_JOB
     with _LOCK:
         existing = _SIM_JOB
         if existing and existing.get("proc") and existing["proc"].poll() is None:
-            if existing.get("env_id") == env_id and existing.get("policy") == policy:
+            if (
+                existing.get("env_id") == env_id
+                and existing.get("policy") == policy
+                and existing.get("camera_mode") == camera_mode
+                and existing.get("selected_drone") == selected_drone
+            ):
                 return {
                     "ok": True,
                     "env_id": env_id,
+                    "camera_mode": camera_mode,
+                    "selected_drone": selected_drone,
                     "running": True,
                     "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
                 }
@@ -358,6 +376,10 @@ def _start_sim(env_id: str, policy: str = "trained") -> dict:
         "swarm.pybullet_renderer",
         "--env-id",
         env_id,
+        "--camera-mode",
+        camera_mode,
+        "--selected-drone",
+        str(selected_drone),
     ]
     proc = subprocess.Popen(
         cmd,
@@ -372,6 +394,8 @@ def _start_sim(env_id: str, policy: str = "trained") -> dict:
         _SIM_JOB = {
             "env_id": env_id,
             "policy": policy,
+            "camera_mode": camera_mode,
+            "selected_drone": selected_drone,
             "running": True,
             "proc": proc,
             "started_at": time.time(),
@@ -395,6 +419,8 @@ def _start_sim(env_id: str, policy: str = "trained") -> dict:
     return {
         "ok": True,
         "env_id": env_id,
+        "camera_mode": camera_mode,
+        "selected_drone": selected_drone,
         "running": True,
         "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
     }
@@ -452,6 +478,8 @@ class TrainAPIHandler(BaseHTTPRequestHandler):
                 {
                     "env_id": job.get("env_id"),
                     "policy": job.get("policy"),
+                    "camera_mode": job.get("camera_mode", "observer"),
+                    "selected_drone": job.get("selected_drone", 0),
                     "running": running,
                     "returncode": job.get("returncode"),
                     "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
@@ -494,10 +522,15 @@ class TrainAPIHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/sim/start":
             env_id = body.get("env_id", "search-and-interdict")
             policy = body.get("policy", "trained")
+            camera_mode = body.get("camera_mode", "observer")
+            selected_drone = int(body.get("selected_drone", 0))
             if policy not in {"trained", "random"}:
                 _json_response(self, 400, {"ok": False, "error": "invalid policy"})
                 return
-            result = _start_sim(env_id, policy)
+            if camera_mode not in {"observer", "chase", "fpv"}:
+                _json_response(self, 400, {"ok": False, "error": "invalid camera_mode"})
+                return
+            result = _start_sim(env_id, policy, camera_mode, selected_drone)
             _json_response(self, 200 if result.get("ok") else 500, result)
             return
 

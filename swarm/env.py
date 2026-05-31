@@ -57,7 +57,14 @@ REWARD (shared / team reward, identical for every live agent)
 ================================================================================
     + COVERAGE_REWARD  per newly-covered grid cell this step (summed over agents)
     - CROWD_PENALTY    per agent pair closer than CROWD_RADIUS (discourage clumping)
-    - BOUNDS_PENALTY   per agent pushing into / sitting on a world edge
+    - EDGE penalty     smooth, distance-from-center term that GROWS as agents push
+                       past EDGE_SOFT_FRAC of the world toward the wall. Replaces
+                       the old binary "sitting on the edge" penalty so there is a
+                       real gradient pulling agents back in before they clip.
+    + OBJECTIVE shaping scenario-specific task pull (hold the contested center,
+                       shadow the moving target, hold the defend ring, stay in own
+                       territory). Gives a non-flat reward landscape once coverage
+                       saturates, so agents do the task instead of parking at a wall.
 Dead agents contribute nothing and receive 0 reward.
 
 ================================================================================
@@ -108,7 +115,23 @@ MAX_SPEED = 6.0      # world-units / second at full throttle
 COVERAGE_REWARD = 1.0
 CROWD_PENALTY = 0.05
 CROWD_RADIUS = 1.5
-BOUNDS_PENALTY = 0.02
+
+# ── boundary handling (issue: agents drift out and park at the wall) ─────────
+# Old behaviour penalized only agents *already sitting on* the edge with a tiny
+# weight (0.02), ~50x smaller than a single covered cell, and gave no gradient
+# as agents approached the wall. We instead apply a smooth penalty that grows
+# quadratically once an agent passes EDGE_SOFT_FRAC of the world radius, so the
+# policy feels increasing drag the closer it gets to the boundary.
+EDGE_SOFT_FRAC = 0.8          # soft boundary at 80% of world_half
+EDGE_GRADIENT_PENALTY = 0.4   # weight on (distance-beyond-soft)^2, summed over live
+
+# ── scenario objective shaping (issue: no per-scenario task / objects) ───────
+# Every scenario shares the coverage env, so without this all policies collapse
+# to the same wall-hugging coverage behaviour. This adds a small per-step pull
+# toward each scenario's objective so behaviour differs and survives coverage
+# saturation. Kept well below the coverage scale so exploration still dominates
+# early in the episode.
+OBJECTIVE_REWARD = 0.06       # weight on normalized distance-to-objective
 
 ROLES = ("scout", "scout", "scout", "scout", "scout")  # all scouts for Phase 0
 
@@ -140,6 +163,7 @@ class SwarmEnv:
         max_steps: int = 400,
         seed: int | None = None,
         battlefield: BattlefieldConfig | None = None,
+        scenario_id: str | None = None,
     ) -> None:
         # ------------------------------------------------------------------
         # Battlefield config — P0 parameters (wind, EW, attrition, limits).
@@ -152,6 +176,9 @@ class SwarmEnv:
             n_agents = battlefield.n_agents
             max_steps = battlefield.max_steps
 
+        # Scenario id drives spawn regions + objective shaping (purely affects
+        # spawn positions and reward; obs/act dims are unchanged for portability).
+        self.scenario_id = scenario_id
         self.n = n_agents
         self.k = k_neighbors
         self.patch = patch
@@ -196,14 +223,99 @@ class SwarmEnv:
             self.covered[cx, cy] = True
         return int(self.covered.sum()) - before
 
+    # ------------------------------------------------------ scenario shaping ---
+    def _spawn_positions(self) -> np.ndarray:
+        """Scenario-specific spawn areas (world units), not a center cluster.
+
+        Each scenario stages the swarm from a plausible starting posture for its
+        task so they begin spread out and oriented toward the objective.
+        """
+        h = self.world_half
+        n = self.n
+        rng = self.rng
+        sid = self.scenario_id
+
+        if sid == "drone-vs-drone":
+            # blue team pushes in from the left flank, spread along that edge
+            x = rng.uniform(-0.92 * h, -0.6 * h, n)
+            y = rng.uniform(-0.7 * h, 0.7 * h, n)
+        elif sid == "moving-target-track":
+            # trackers fan out across the field to pick up the weaving mover
+            x = rng.uniform(-0.8 * h, 0.8 * h, n)
+            y = rng.uniform(-0.8 * h, 0.8 * h, n)
+        elif sid == "search-and-interdict":
+            # sweep team enters along the bottom edge and works upward
+            x = rng.uniform(-0.85 * h, 0.85 * h, n)
+            y = rng.uniform(-0.92 * h, -0.6 * h, n)
+        elif sid == "defend-asset":
+            # defenders start on a ring around the central asset
+            ang = rng.uniform(0.0, 2.0 * math.pi, n)
+            r = rng.uniform(0.42 * h, 0.55 * h, n)
+            x = r * np.cos(ang)
+            y = r * np.sin(ang)
+        elif sid == "swarm-vs-swarm-race":
+            # blue holds and works the left territory
+            x = rng.uniform(-0.9 * h, -0.15 * h, n)
+            y = rng.uniform(-0.8 * h, 0.8 * h, n)
+        else:
+            # default: spread across the arena (no tiny center cluster)
+            x = rng.uniform(-0.75 * h, 0.75 * h, n)
+            y = rng.uniform(-0.75 * h, 0.75 * h, n)
+
+        return np.stack([x, y], axis=1).astype(np.float32)
+
+    def _objective_point(self) -> np.ndarray | None:
+        """Current objective location (world units) for point/track scenarios.
+
+        Moving scenarios derive the point analytically from ``self.t`` using the
+        same formulas the PyBullet renderer scripts, so the trained behaviour and
+        the rendered target/mover stay visually consistent.
+        """
+        h = self.world_half
+        sid = self.scenario_id
+        if sid == "drone-vs-drone":
+            return np.array([0.0, 0.0], dtype=np.float32)  # contested center lane
+        if sid == "moving-target-track":
+            t = self.t
+            return np.array(
+                [0.6 * h * math.sin(t * 0.22), 0.45 * h * math.sin(t * 0.41 + 0.6)],
+                dtype=np.float32,
+            )
+        if sid == "search-and-interdict":
+            t = self.t
+            return np.array(
+                [0.5 * h * math.sin(t * 0.18) + 0.15 * h, 0.5 * h * math.cos(t * 0.27)],
+                dtype=np.float32,
+            )
+        if sid == "swarm-vs-swarm-race":
+            return np.array([-0.5 * h, 0.0], dtype=np.float32)  # own territory
+        return None
+
+    def _objective_reward(self, live_pos: np.ndarray) -> float:
+        """Per-step scenario task pull (already restricted to live agents)."""
+        if live_pos.shape[0] == 0:
+            return 0.0
+        h = self.world_half
+        if self.scenario_id == "defend-asset":
+            # reward holding a standoff ring around the asset (peak on the ring)
+            ring = 0.6 * h
+            dist = np.linalg.norm(live_pos, axis=1)
+            band = np.abs(dist - ring) / h
+            return -OBJECTIVE_REWARD * float(band.mean())
+        pt = self._objective_point()
+        if pt is None:
+            return 0.0
+        dist = np.linalg.norm(live_pos - pt, axis=1) / (2.0 * h)  # ~[0, 0.7]
+        return -OBJECTIVE_REWARD * float(dist.mean())
+
     # ------------------------------------------------------------------ reset ---
     def reset(self, seed: int | None = None) -> np.ndarray:
         """Reset world and return per-agent local obs, shape (n, obs_dim)."""
         if seed is not None:
             self.rng = np.random.default_rng(seed)
-        # spawn agents in a small cluster near center so they must spread out
-        spawn = self.world_half * 0.25
-        self.pos = self.rng.uniform(-spawn, spawn, size=(self.n, 2)).astype(np.float32)
+        # Spawn from a scenario-specific staging area (a flank, an edge, a ring,
+        # or spread across the field) instead of one tiny cluster at the center.
+        self.pos = self._spawn_positions()
         self.vel = np.zeros((self.n, 2), dtype=np.float32)
         self.alive = np.ones(self.n, dtype=bool)
         self.covered = np.zeros((self.grid, self.grid), dtype=bool)
@@ -246,7 +358,6 @@ class SwarmEnv:
             self.pos[live] += self._wind * DT
 
         bound = self.world_half
-        at_edge = (np.abs(self.pos) >= bound - 1e-6)
         self.pos = np.clip(self.pos, -bound, bound)
 
         new_cells = self._mark_covered()
@@ -254,15 +365,23 @@ class SwarmEnv:
         # --- team reward ---
         reward = COVERAGE_REWARD * new_cells
 
+        live_pos = self.pos[live]
+
         # crowding: penalize close live pairs
         if live.sum() > 1:
-            lp = self.pos[live]
-            d = np.linalg.norm(lp[:, None, :] - lp[None, :, :], axis=-1)
-            iu = np.triu_indices(lp.shape[0], k=1)
+            d = np.linalg.norm(live_pos[:, None, :] - live_pos[None, :, :], axis=-1)
+            iu = np.triu_indices(live_pos.shape[0], k=1)
             reward -= CROWD_PENALTY * int((d[iu] < CROWD_RADIUS).sum())
 
-        # bounds: penalize live agents sitting on an edge
-        reward -= BOUNDS_PENALTY * int((at_edge[live].any(axis=1)).sum())
+        if live_pos.shape[0] > 0:
+            # smooth boundary penalty: grows as agents push past the soft radius,
+            # so there is a real gradient pulling them back before they clip.
+            dist_c = np.linalg.norm(live_pos, axis=1) / bound        # ~[0, 1.41]
+            excess = np.clip(dist_c - EDGE_SOFT_FRAC, 0.0, None)
+            reward -= EDGE_GRADIENT_PENALTY * float((excess ** 2).sum())
+
+            # scenario objective pull (keeps a gradient after coverage saturates)
+            reward += self._objective_reward(live_pos)
 
         self.steps += 1
         self.t += DT

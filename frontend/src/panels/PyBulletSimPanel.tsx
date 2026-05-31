@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { PYBULLET_WS_URL } from '../gym/trainApi'
+import { PYBULLET_WS_URL, startPyBulletSim } from '../gym/trainApi'
 
 interface AgentPose {
   id: number
@@ -27,6 +27,8 @@ interface PyBulletFrameMessage {
   width: number
   height: number
   encoding: 'jpeg' | 'rgba'
+  camera_mode?: CameraMode
+  selected_drone?: number
   data: string
 }
 
@@ -37,6 +39,7 @@ interface PyBulletSimPanelProps {
 }
 
 type ConnectionState = 'connecting' | 'online' | 'offline'
+type CameraMode = 'observer' | 'chase' | 'fpv'
 
 export default function PyBulletSimPanel({
   envId,
@@ -50,6 +53,9 @@ export default function PyBulletSimPanel({
   const [agents, setAgents] = useState<AgentPose[]>([])
   const [policy, setPolicy] = useState('trained')
   const [coverage, setCoverage] = useState(0)
+  const [cameraMode, setCameraMode] = useState<CameraMode>('observer')
+  const [selectedDrone, setSelectedDrone] = useState(0)
+  const [switchingCamera, setSwitchingCamera] = useState(false)
   const reconnectTimer = useRef<number | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
@@ -91,6 +97,10 @@ export default function PyBulletSimPanel({
             setFrameSrc(`data:image/jpeg;base64,${message.data}`)
             setHasCanvasFrame(false)
           }
+          if (message.camera_mode) setCameraMode(message.camera_mode)
+          if (typeof message.selected_drone === 'number') {
+            setSelectedDrone(message.selected_drone)
+          }
           setFrameTime(message.t)
           return
         }
@@ -130,6 +140,18 @@ export default function PyBulletSimPanel({
     [agents],
   )
 
+  const switchCamera = async (nextMode: CameraMode, nextDrone = selectedDrone) => {
+    setSwitchingCamera(true)
+    setCameraMode(nextMode)
+    setSelectedDrone(nextDrone)
+    try {
+      const result = await startPyBulletSim(envId, nextMode, nextDrone)
+      if (!result.ok) setConnection('offline')
+    } finally {
+      setSwitchingCamera(false)
+    }
+  }
+
   return (
     <section className="pybullet-sim" aria-label={`${missionName} PyBullet simulation`}>
       <div className="pybullet-sim__viewport">
@@ -163,6 +185,35 @@ export default function PyBulletSimPanel({
           <span>Alive {alive || agents.length}</span>
           <span>Frame {frameTime.toFixed(1)}s</span>
         </div>
+      </div>
+
+      <div className="pybullet-camera-controls" aria-label="Camera controls">
+        {(['observer', 'chase', 'fpv'] as CameraMode[]).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            className={cameraMode === mode ? 'is-active' : ''}
+            disabled={switchingCamera}
+            onClick={() => void switchCamera(mode)}
+          >
+            {mode === 'fpv' ? 'FPV' : mode}
+          </button>
+        ))}
+        <select
+          aria-label="Selected drone camera"
+          value={selectedDrone}
+          disabled={switchingCamera || agents.length === 0}
+          onChange={(event) => {
+            const nextDrone = Number(event.target.value)
+            void switchCamera(cameraMode === 'observer' ? 'chase' : cameraMode, nextDrone)
+          }}
+        >
+          {(agents.length ? agents : [{ id: 0 } as AgentPose]).map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              UAV {agent.id + 1}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="pybullet-hud pybullet-hud--right">

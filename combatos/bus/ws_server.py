@@ -44,6 +44,8 @@ _TOPIC_MODULE: dict[str, str] = {
     "detections": "perception",
     "perception_frame": "perception",
     "perception_diagnostics": "perception",
+    "drone_detections": "perception",
+    "drone_fpv_state": "swarm",
     "swarm": "swarm",
     "recon": "recon",
 }

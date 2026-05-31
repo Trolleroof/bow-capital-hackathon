@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.error import URLError
@@ -42,10 +43,14 @@ HOST_HTTP = "127.0.0.1"
 PORT_HTTP = 8787
 HOST_WS = "0.0.0.0"
 PORT_WS = 8766
+HOST_SIM_WS = "127.0.0.1"
+PORT_SIM_WS = 8765
 
 _WS_CLIENTS: set[Any] = set()
+_SIM_WS_CLIENTS: set[Any] = set()
 _LOCK = threading.Lock()
 _JOBS: dict[str, dict[str, Any]] = {}
+_SIM_JOB: dict[str, Any] | None = None
 _WS_LOOP: asyncio.AbstractEventLoop | None = None
 _WS_THREAD: threading.Thread | None = None
 
@@ -95,6 +100,14 @@ async def _ws_register(ws):
         _WS_CLIENTS.discard(ws)
 
 
+async def _sim_ws_register(ws):
+    _SIM_WS_CLIENTS.add(ws)
+    try:
+        await ws.wait_closed()
+    finally:
+        _SIM_WS_CLIENTS.discard(ws)
+
+
 async def _ws_broadcast_line(line: str) -> None:
     if not _WS_CLIENTS:
         return
@@ -108,9 +121,27 @@ async def _ws_broadcast_line(line: str) -> None:
         _WS_CLIENTS.discard(ws)
 
 
+async def _sim_ws_broadcast_line(line: str) -> None:
+    if not _SIM_WS_CLIENTS:
+        return
+    dead = []
+    for ws in list(_SIM_WS_CLIENTS):
+        try:
+            await ws.send(line)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _SIM_WS_CLIENTS.discard(ws)
+
+
 def _broadcast_sync_line(line: str) -> None:
     loop = _ensure_ws_loop()
     asyncio.run_coroutine_threadsafe(_ws_broadcast_line(line), loop)
+
+
+def _broadcast_sim_sync_line(line: str) -> None:
+    loop = _ensure_ws_loop()
+    asyncio.run_coroutine_threadsafe(_sim_ws_broadcast_line(line), loop)
 
 
 def _tail_training(env_id: str, proc: subprocess.Popen) -> None:
@@ -238,6 +269,174 @@ def _stop_training(env_id: str | None) -> dict:
     return {"ok": True, "stopped": stopped}
 
 
+def _tail_sim(proc: subprocess.Popen) -> None:
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        line = raw.rstrip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            print(f"[pybullet-sim] {line}", flush=True)
+            continue
+        if event.get("topic") == "pybullet_frame":
+            _broadcast_sim_sync_line(line)
+        else:
+            print(f"[pybullet-sim] {line}", flush=True)
+
+    code = proc.wait()
+    with _LOCK:
+        global _SIM_JOB
+        if _SIM_JOB and _SIM_JOB.get("proc") is proc:
+            _SIM_JOB["running"] = False
+            _SIM_JOB["returncode"] = code
+
+
+def _drive_sim_policy(env_id: str, policy: str, proc: subprocess.Popen) -> None:
+    assert proc.stdin is not None
+    try:
+        from swarm.bus import _random_policy, _trained_policy, swarm_message
+        from swarm.scenarios import make_scenario_env
+    except Exception as exc:
+        print(f"[pybullet-sim] policy driver import failed: {exc}", flush=True)
+        return
+
+    # Use the scenario env so spawn areas / agent count match how the policy was
+    # trained, instead of the generic point-mass defaults.
+    try:
+        env = make_scenario_env(env_id, seed=0)
+    except KeyError:
+        from swarm.env import SwarmEnv
+        env = SwarmEnv(seed=0)
+    obs = env.reset()
+    ckpt = checkpoint_paths(env_id)["policy"]
+    if policy == "trained" and os.path.exists(ckpt):
+        policy_fn = _trained_policy(ckpt)
+        label = "trained"
+    else:
+        if policy == "trained":
+            print(f"[pybullet-sim] no checkpoint at {ckpt}; using random controller", flush=True)
+        policy_fn = _random_policy(env)
+        label = "random"
+
+    dt = 0.1
+    while proc.poll() is None:
+        actions = policy_fn(obs)
+        obs, _, dones, _ = env.step(actions)
+        if dones.all():
+            obs = env.reset()
+        payload = swarm_message(env)
+        payload["env_id"] = env_id
+        payload["policy"] = label
+        covered = int(env.covered.sum())
+        total = int(env.covered.size)
+        payload["coverage"] = round(covered / total, 3) if total else 0.0
+        line = json.dumps({"topic": "swarm", **payload})
+        _broadcast_sim_sync_line(line)
+        try:
+            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            break
+        time.sleep(dt)
+
+
+def _start_sim(
+    env_id: str,
+    policy: str = "trained",
+    camera_mode: str = "observer",
+    selected_drone: int = 0,
+) -> dict:
+    global _SIM_JOB
+    with _LOCK:
+        existing = _SIM_JOB
+        if existing and existing.get("proc") and existing["proc"].poll() is None:
+            if (
+                existing.get("env_id") == env_id
+                and existing.get("policy") == policy
+                and existing.get("camera_mode") == camera_mode
+                and existing.get("selected_drone") == selected_drone
+            ):
+                return {
+                    "ok": True,
+                    "env_id": env_id,
+                    "camera_mode": camera_mode,
+                    "selected_drone": selected_drone,
+                    "running": True,
+                    "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
+                }
+            existing["proc"].terminate()
+            existing["running"] = False
+
+    renderer_python = os.environ.get("PYBULLET_PYTHON", "/opt/homebrew/bin/python3")
+    cmd = [
+        renderer_python,
+        "-m",
+        "swarm.pybullet_renderer",
+        "--env-id",
+        env_id,
+        "--camera-mode",
+        camera_mode,
+        "--selected-drone",
+        str(selected_drone),
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        cwd=REPO,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    with _LOCK:
+        _SIM_JOB = {
+            "env_id": env_id,
+            "policy": policy,
+            "camera_mode": camera_mode,
+            "selected_drone": selected_drone,
+            "running": True,
+            "proc": proc,
+            "started_at": time.time(),
+        }
+
+    threading.Thread(target=_tail_sim, args=(proc,), daemon=True).start()
+    threading.Thread(target=_drive_sim_policy, args=(env_id, policy, proc), daemon=True).start()
+    time.sleep(0.35)
+    code = proc.poll()
+    if code is not None:
+        with _LOCK:
+            if _SIM_JOB and _SIM_JOB.get("proc") is proc:
+                _SIM_JOB["running"] = False
+                _SIM_JOB["returncode"] = code
+        return {
+            "ok": False,
+            "env_id": env_id,
+            "error": f"PyBullet sim exited during startup with code {code}",
+        }
+
+    return {
+        "ok": True,
+        "env_id": env_id,
+        "camera_mode": camera_mode,
+        "selected_drone": selected_drone,
+        "running": True,
+        "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
+    }
+
+
+def _stop_sim() -> dict:
+    global _SIM_JOB
+    with _LOCK:
+        job = _SIM_JOB
+        if not job or not job.get("proc") or job["proc"].poll() is not None:
+            return {"ok": True, "stopped": False}
+        job["proc"].terminate()
+        job["running"] = False
+        return {"ok": True, "stopped": True, "env_id": job.get("env_id")}
+
+
 class TrainAPIHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # noqa: D102
         return
@@ -251,23 +450,44 @@ class TrainAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         parsed = urlparse(self.path)
-        if parsed.path != "/api/train/status":
-            _json_response(self, 404, {"error": "not found"})
+        if parsed.path == "/api/train/status":
+            qs = parse_qs(parsed.query)
+            env_id = (qs.get("env_id") or [""])[0]
+            with _LOCK:
+                job = _JOBS.get(env_id, {})
+            _json_response(
+                self,
+                200,
+                {
+                    "env_id": env_id,
+                    "running": bool(job.get("running")),
+                    "status": job.get("status", "idle"),
+                    "last": job.get("last"),
+                },
+            )
             return
-        qs = parse_qs(parsed.query)
-        env_id = (qs.get("env_id") or [""])[0]
-        with _LOCK:
-            job = _JOBS.get(env_id, {})
-        _json_response(
-            self,
-            200,
-            {
-                "env_id": env_id,
-                "running": bool(job.get("running")),
-                "status": job.get("status", "idle"),
-                "last": job.get("last"),
-            },
-        )
+
+        if parsed.path == "/api/sim/status":
+            with _LOCK:
+                job = dict(_SIM_JOB or {})
+                proc = job.get("proc")
+                running = bool(proc and proc.poll() is None)
+            _json_response(
+                self,
+                200,
+                {
+                    "env_id": job.get("env_id"),
+                    "policy": job.get("policy"),
+                    "camera_mode": job.get("camera_mode", "observer"),
+                    "selected_drone": job.get("selected_drone", 0),
+                    "running": running,
+                    "returncode": job.get("returncode"),
+                    "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
+                },
+            )
+            return
+
+        _json_response(self, 404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
         parsed = urlparse(self.path)
@@ -299,12 +519,36 @@ class TrainAPIHandler(BaseHTTPRequestHandler):
                 _json_response(self, 500, {"ok": False, "error": str(exc)})
             return
 
+        if parsed.path == "/api/sim/start":
+            env_id = body.get("env_id", "search-and-interdict")
+            policy = body.get("policy", "trained")
+            camera_mode = body.get("camera_mode", "observer")
+            selected_drone = int(body.get("selected_drone", 0))
+            if policy not in {"trained", "random"}:
+                _json_response(self, 400, {"ok": False, "error": "invalid policy"})
+                return
+            if camera_mode not in {"observer", "chase", "fpv"}:
+                _json_response(self, 400, {"ok": False, "error": "invalid camera_mode"})
+                return
+            result = _start_sim(env_id, policy, camera_mode, selected_drone)
+            _json_response(self, 200 if result.get("ok") else 500, result)
+            return
+
+        if parsed.path == "/api/sim/stop":
+            result = _stop_sim()
+            _json_response(self, 200, result)
+            return
+
         _json_response(self, 404, {"error": "not found"})
 
 
 async def _ws_main(host: str, port: int) -> None:
-    async with websockets.serve(_ws_register, host, port):
+    async with (
+        websockets.serve(_ws_register, host, port),
+        websockets.serve(_sim_ws_register, HOST_SIM_WS, PORT_SIM_WS, max_size=6 * 1024 * 1024),
+    ):
         print(f"[train-service] WebSocket ws://{host}:{port}  topic=train")
+        print(f"[train-service] PyBullet WebSocket ws://{HOST_SIM_WS}:{PORT_SIM_WS}  topic=swarm/pybullet_frame")
         await asyncio.Future()
 
 

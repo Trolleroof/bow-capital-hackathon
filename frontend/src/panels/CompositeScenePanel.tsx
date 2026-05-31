@@ -22,13 +22,6 @@ interface CompositeScenePanelProps {
   trajectoryUrl?: string
   missionName?: string
   policyEnabled?: boolean
-  /**
-   * Mock 3DGS point cloud by default. Swap-in seam for the REAL Gaussian splat
-   * reconstructed from drone footage: point this at a JSON of {x,y,z,r,g,b}
-   * (or replace `loadSplatPoints` with a true splat loader) and nothing else in
-   * this scene — swarm, trajectory, coverage, controls — needs to change.
-   */
-  splatPointsUrl?: string
 }
 
 const FRAME_MS = 100
@@ -36,8 +29,6 @@ const CELL = (2 * WORLD_HALF) / GRID
 const WORLD_Y_MIN = 0.35
 const WORLD_Y_MAX = 11
 const WORLD_XZ_LIMIT = WORLD_HALF
-const TRAINED_COVERAGE = 0.9965
-const RANDOM_COVERAGE = 0.4725
 
 interface Waypoint {
   x: number
@@ -83,16 +74,6 @@ function hashString(value: string) {
     hash = Math.imul(hash, 16777619)
   }
   return hash >>> 0
-}
-
-function seededRandom(seed: number) {
-  let state = seed >>> 0
-  return () => {
-    state = (state + 0x6d2b79f5) | 0
-    let t = Math.imul(state ^ (state >>> 15), 1 | state)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
 }
 
 function missionRoutes(envId: string): Waypoint[][] {
@@ -274,38 +255,6 @@ function fakeTrajectory(): PoseSample[] {
   return samples
 }
 
-// ----------------------------------------------------------------- splat ---
-// (swap-in seam — see splatPointsUrl above)
-function makeMockSplat(envId: string) {
-  const rand = seededRandom(hashString(`splat:${envId}`))
-  const count = 2400
-  const positions = new Float32Array(count * 3)
-  const colors = new Float32Array(count * 3)
-  for (let i = 0; i < count; i++) {
-    const r = Math.sqrt(rand()) * WORLD_HALF * 0.82
-    const theta = rand() * Math.PI * 2
-    const x = Math.cos(theta) * r
-    const y = Math.sin(theta) * r
-    const ridge = Math.sin(x * 0.8) * Math.cos(y * 0.55) * 0.45
-    const z = -0.08 + ridge + rand() * 0.16
-    const p = scenePoint(x, y, z)
-    positions.set([p.x, p.y, p.z], i * 3)
-    const soil = 0.3 + rand() * 0.18
-    colors.set([soil, 0.44 + rand() * 0.22, 0.24 + rand() * 0.08], i * 3)
-  }
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-  const material = new THREE.PointsMaterial({
-    size: 0.095,
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.88,
-    depthWrite: false,
-  })
-  return new THREE.Points(geometry, material)
-}
-
 async function loadTrajectory(url?: string): Promise<PoseSample[]> {
   if (!url) return fakeTrajectory()
   try {
@@ -320,42 +269,12 @@ async function loadTrajectory(url?: string): Promise<PoseSample[]> {
   return fakeTrajectory()
 }
 
-async function loadSplatPoints(url: string | undefined, envId: string): Promise<THREE.Points> {
-  if (!url) return makeMockSplat(envId)
-  try {
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`${res.status}`)
-    const data = await res.json()
-    const points = Array.isArray(data) ? data : data.points
-    if (!Array.isArray(points)) return makeMockSplat(envId)
-    const positions = new Float32Array(points.length * 3)
-    const colors = new Float32Array(points.length * 3)
-    for (let i = 0; i < points.length; i++) {
-      const p = points[i]
-      const v = scenePoint(Number(p.x) || 0, Number(p.y) || 0, Number(p.z) || 0)
-      positions.set([v.x, v.y, v.z], i * 3)
-      colors.set([Number(p.r) || 0.34, Number(p.g) || 0.54, Number(p.b) || 0.42], i * 3)
-    }
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-    return new THREE.Points(
-      geometry,
-      new THREE.PointsMaterial({ size: 0.09, vertexColors: true, transparent: true, opacity: 0.9 }),
-    )
-  } catch {
-    return makeMockSplat(envId)
-  }
-}
-
-
-const NOMINAL = 'mission controller active · task behavior executing'
+const NOMINAL = 'pybullet environment active · trained policy context loaded'
 const POLICY_REQUIRED = 'train and export policy before mission launch'
 
 export default function CompositeScenePanel({
   envId,
   trajectoryUrl,
-  splatPointsUrl,
   missionName = 'Land Coverage Survey',
   policyEnabled = false,
 }: CompositeScenePanelProps) {
@@ -629,20 +548,11 @@ export default function CompositeScenePanel({
     })
 
     let frameTimer = 0
-    let disposed = false
     let stepping = false
-    let splatObject: THREE.Points | null = null
     void loadTrajectory(trajectoryUrl).then((loaded) => {
       const vertices = loaded.map((p) => scenePoint(p.x, p.y, p.z))
       trajectoryLine.geometry.dispose()
       trajectoryLine.geometry = new THREE.BufferGeometry().setFromPoints(vertices)
-    })
-    void loadSplatPoints(splatPointsUrl, envId).then((points) => {
-      if (!disposed) {
-        points.visible = missionActiveRef.current
-        splatObject = points
-        scene.add(points)
-      }
     })
 
     let raf = 0
@@ -661,7 +571,6 @@ export default function CompositeScenePanel({
 
       coverMesh.visible = missionLaunched
       trajectoryLine.visible = missionLaunched
-      if (splatObject) splatObject.visible = missionLaunched
       drones.forEach((drone, i) => {
         drone.group.visible = missionLaunched
         trails[i].line.visible = missionLaunched
@@ -850,7 +759,6 @@ export default function CompositeScenePanel({
     window.addEventListener('resize', onResize)
 
     return () => {
-      disposed = true
       cancelAnimationFrame(raf)
        // Clean up resize listener
        window.removeEventListener('resize', onResize)
@@ -872,7 +780,7 @@ export default function CompositeScenePanel({
       })
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
     }
-  }, [envId, splatPointsUrl, trajectoryUrl])
+  }, [envId, trajectoryUrl])
 
   const selectedDroneState = droneStates[selectedDroneIndex]
   const controlLegend = getControlLegend(cameraMode)
@@ -1023,12 +931,8 @@ export default function CompositeScenePanel({
           </div>
 
           <div className="mission-metrics" aria-label="Mission telemetry">
-            <span>POLICY: {provider.toUpperCase()}</span>
-            {provider !== 'loading' && provider !== 'required' && (
-              <span>
-                EVAL: {Math.round(TRAINED_COVERAGE * 100)}% / RANDOM {Math.round(RANDOM_COVERAGE * 100)}%
-              </span>
-            )}
+            <span>ENV: PYBULLET SIM</span>
+            <span>CTRL: {provider.toUpperCase()}</span>
             <span>CMD: {Math.round(meanAction * 100)}%</span>
             <span>ALIVE: {alive}</span>
             <span>COVERAGE: {Math.round(coverage * 100)}%</span>

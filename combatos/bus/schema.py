@@ -58,6 +58,8 @@ class Detection(BaseModel):
 class DetectionsMessage(BaseModel):
     """topic: 'detections' — emitted by perception (⓶) per-frame from the Jetson."""
     t: float
+    source: str = ""
+    drone_id: int | None = None
     objects: list[Detection] = []
 
 
@@ -83,6 +85,32 @@ class SwarmMessage(BaseModel):
     t: float
     comms: Literal["denied"] = "denied"
     agents: list[AgentState] = []
+
+
+class DroneCameraTarget(BaseModel):
+    id: int
+    cls: str = "troop"
+    x: float
+    y: float
+    z: float
+    width_m: float = 0.55
+    height_m: float = 1.75
+
+
+class DroneFpvStateMessage(BaseModel):
+    """topic: 'drone_fpv_state' — camera pose + target world state for FPV round-trip."""
+    t: float
+    seq: int
+    frame_id: str
+    drone_id: int
+    source: str
+    width: int
+    height: int
+    fov_deg: float
+    eye: list[float]
+    forward: list[float]
+    up: list[float]
+    targets: list[DroneCameraTarget] = []
 
 
 class ModuleHealth(BaseModel):

@@ -189,16 +189,6 @@ function App() {
     </nav>
   )
 
-  // ── Render: fullscreen gym environment ───────────────────────────────────
-  if (route.view === 'combatos') {
-    return (
-      <main className="app-shell app-shell--combatos">
-        <CombatOS />
-        <div className="combatos-nav">{nav}</div>
-      </main>
-    )
-  }
-
   // ── Render: fullscreen gym environment (#18) ─────────────────────────────
   if (route.view === 'gym-env') {
     return (

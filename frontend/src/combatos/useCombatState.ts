@@ -92,11 +92,7 @@ export interface TelemetryState {
   pose: { x: number; y: number; z: number }
   yaw: number
   vel: number
-  drift: number
-  slam: number
-  yolo: number
-  gpu: number
-  temp: number
+  hasNavFix: boolean
   heading: number
   loops: number
   traj: Array<{ x: number; y: number }>
@@ -134,11 +130,7 @@ function initState(): TelemetryState {
     pose: { x: 0, y: 0, z: 0 },
     yaw: 0,
     vel: 0,
-    drift: 0,
-    slam: 0,
-    yolo: 0,
-    gpu: 0,
-    temp: 0,
+    hasNavFix: false,
     heading: 0,
     loops: 0,
     traj: [],
@@ -283,6 +275,7 @@ export function useCombatState() {
                   pose: { x, y, z },
                   yaw: (yaw + 360) % 360,
                   heading: (yaw + 360) % 360,
+                  hasNavFix: true,
                   tracking: typeof tracking === 'string' ? tracking : p.tracking,
                   gps,
                   traj,
@@ -321,7 +314,17 @@ export function useCombatState() {
             } else if (msg.topic === 'slam_status') {
               setT(p => {
                 const tracking = typeof msg.tracking === 'string' ? msg.tracking : p.slamStatus
-                return { ...p, tracking, slamStatus: tracking }
+                return {
+                  ...p,
+                  tracking,
+                  slamStatus: tracking,
+                  slamDiagnostics: {
+                    droppedFrames: msg.dropped_frames ?? p.slamDiagnostics.droppedFrames,
+                    cameraFrames: msg.camera_frames ?? p.slamDiagnostics.cameraFrames,
+                    annotatedFrames: msg.annotated_frames ?? p.slamDiagnostics.annotatedFrames,
+                    queueDepth: p.slamDiagnostics.queueDepth,
+                  },
+                }
               })
             } else if (msg.topic === 'slam_odometry') {
               const odomPose = toSlamPose(msg)
@@ -332,10 +335,15 @@ export function useCombatState() {
                 const wx = toNumber(msg.wx)
                 const wy = toNumber(msg.wy)
                 const wz = toNumber(msg.wz)
+                const yaw = odomPose.qw != null && odomPose.qz != null
+                  ? Math.atan2(2 * odomPose.qw * odomPose.qz, 1 - 2 * odomPose.qz * odomPose.qz) * (180 / Math.PI)
+                  : p.yaw
                 setT(p => ({
                   ...p,
                   pose: { x: odomPose.x, y: odomPose.y, z: odomPose.z },
+                  yaw: (yaw + 360) % 360,
                   vel: Math.hypot(vx, vy, vz),
+                  hasNavFix: true,
                   slamOdometry: { ...odomPose, vx, vy, vz, wx, wy, wz },
                 }))
               }

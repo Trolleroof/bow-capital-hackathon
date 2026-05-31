@@ -97,9 +97,16 @@ export function tilesForViewport(
   return tiles
 }
 
-export function osmTileUrl(z: number, x: number, y: number) {
-  return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`
+const CARTO_SUBDOMAINS = ['a', 'b', 'c', 'd'] as const
+
+/** CARTO Dark Matter (no labels) — same provider as worldhacks.xyz, dark variant for CombatOS. */
+export function mapTileUrl(z: number, x: number, y: number, retina = false) {
+  const sub = CARTO_SUBDOMAINS[(x + y) % CARTO_SUBDOMAINS.length]
+  const suffix = retina ? '@2x' : ''
+  return `https://${sub}.basemaps.cartocdn.com/dark_nolabels/${z}/${x}/${y}${suffix}.png`
 }
+
+export const MAP_ATTRIBUTION = '© OpenStreetMap © CARTO'
 
 export function pathToLocalPx(
   path: SlamPose[],

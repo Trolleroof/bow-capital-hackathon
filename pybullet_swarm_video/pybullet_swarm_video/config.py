@@ -41,7 +41,7 @@ class RecordingConfig:
 @dataclass(frozen=True)
 class SimulationConfig:
     num_drones: int = 5
-    num_troops: int = 20
+    num_troops: int = 6
     duration_sec: float = 12.0
     time_step: float = 1.0 / 30.0
     world_half_extent_m: float = 30.0
@@ -51,4 +51,7 @@ class SimulationConfig:
     drone_separation_gain: float = 2.4
     troop_spacing_m: float = 1.6
     troop_stride_mps: float = 1.0
+    resources_dir: Path = field(
+        default_factory=lambda: Path(__file__).resolve().parents[1] / "resources"
+    )
     camera: DroneCameraConfig = field(default_factory=DroneCameraConfig)

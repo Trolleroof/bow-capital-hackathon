@@ -23,8 +23,9 @@ These are the working rules for this prototype:
 ## What This Prototype Does
 
 - a swarm of drones flies over a patrol area
-- a group of ground troops moves in scattered pockets below
-- the ground scene is dressed with berms, blast marks, concrete ruins, wrecks, and perimeter walls so it reads more like a battlefield than a test pad
+- a small group of ground troops moves in scattered pockets below
+- the ground scene is dressed with berms, blast marks, concrete ruins, wrecks, perimeter walls, and sandbag emplacements so it reads more like a battlefield than a test pad
+- the sim will automatically use staged assets from `pybullet_swarm_video/resources/` when it can
 - each drone renders its own first-person camera feed
 - the feeds are tiled into one output video
 - each drone also gets its own MP4 output by default
@@ -34,6 +35,7 @@ These are the working rules for this prototype:
 The current implementation is intentionally simple:
 
 - drone motion is scripted, not learned
+- troop count is intentionally lower by default so the scene focuses on drone behavior and target visibility instead of crowd density
 - the simulation is headless by default (`DIRECT`), but `--gui` enables direct observation
 - GUI mode actively tracks the swarm/troop scene so you can watch behavior live
 - in GUI mode you can switch from the observer camera into a selected drone's chase or FPV view
@@ -41,6 +43,34 @@ The current implementation is intentionally simple:
 - GUI runs are automatically stretched to a much longer duration so the window does not close almost immediately while you are flying or inspecting
 - the code is structured so a future policy adapter can replace the scripted controller
 - the current perception round-trip uses simulation ground truth for target projection
+
+## Resource Loading
+
+The prototype now looks for these files in `pybullet_swarm_video/resources/`:
+
+- `damaged_concrete_floor_4k.blend.zip`
+- `free_military_soldier_rigged.zip`
+- `low-poly-soldiers-rigged-free.zip`
+- `single_sandbag.zip`
+- `drone_design.zip`
+
+Current behavior:
+
+- the concrete-floor archive is used immediately:
+  the diffuse texture is extracted into `pybullet_swarm_video/resources/.cache/` and applied to the battlefield ground
+- the military-soldier archive is extracted into `pybullet_swarm_video/resources/.cache/free_military_soldier_rigged/`
+  and used as the primary 3D troop mesh
+- the low-poly soldier archive is used immediately:
+  the packaged `texture.png` is extracted into `pybullet_swarm_video/resources/.cache/` and applied to the secondary troop visuals
+- the sandbag archive is extracted into `pybullet_swarm_video/resources/.cache/single_sandbag/`
+  and used for the emplacements
+- the drone archive is extracted into `pybullet_swarm_video/resources/.cache/drone_design/`
+  and used as the drone mesh, with the drone texture applied from the extracted files
+- troops now mix:
+  the extracted 3D soldier mesh and the low-poly textured fallback visual, so both human asset sources are visible in the scene
+- if one of the extracted meshes fails to load, the sim falls back to the primitive shape for that actor type instead of failing
+
+This keeps the sim runnable while using the new OBJ/MTL asset bundles directly.
 
 ## Observation Modes
 
@@ -62,13 +92,13 @@ When the simulation is launched with `--gui`:
 - `1`..`9`: select the active drone
 - `M`: toggle manual control for the selected drone
 - `R`: return the selected drone to scripted mode
-- `I` / `K`: move forward / backward
-- `J` / `L`: strafe left / right
+- `Up` / `Down` or `I` / `K`: move forward / backward
+- `Left` / `Right` or `J` / `L`: strafe left / right
 - `U` / `O`: move up / down
 - `Z` / `X`: yaw left / right
 
 Only one drone is manually controlled at a time. The others continue following the scripted surveillance behavior.
-The manual keys intentionally avoid `WASD`, and the camera-mode toggle intentionally avoids `V`, because PyBullet already uses parts of those keys for viewer/debug interactions.
+The manual path now reads one keyboard snapshot per simulation step, which makes multi-key combinations more stable than the previous per-function polling approach.
 
 ## Outputs
 

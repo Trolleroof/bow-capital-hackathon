@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=8)
     parser.add_argument("--time-step", type=float, default=1.0 / 30.0)
     parser.add_argument("--drones", type=int, default=4)
-    parser.add_argument("--troops", type=int, default=20)
+    parser.add_argument("--troops", type=int, default=6)
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=180)
     parser.add_argument("--gui", action="store_true")

@@ -25,10 +25,12 @@ import websockets
 from websockets.server import WebSocketServerProtocol
 
 from .. import config
-from . import router
+from . import image_router, router
 from ..state import system_state
 
 log = logging.getLogger(__name__)
+
+_IMAGE_TOPICS = {"camera_frame", "camera_right_frame", "slam_frame", "fpv_raw", "fpv_hud"}
 
 # Maps the incoming topic to its owning module so we can update health state
 # whenever a remote client (Jetson, etc.) publishes on that topic.
@@ -96,6 +98,8 @@ async def _handler(ws: WebSocketServerProtocol) -> None:
 
             # Relay to all OTHER subscribers (exclude=q prevents echo).
             await router.publish(topic, payload, exclude=q)
+            if topic in _IMAGE_TOPICS:
+                await image_router.publish(topic, payload)
 
     except websockets.exceptions.ConnectionClosedError:
         pass
@@ -107,7 +111,14 @@ async def _handler(ws: WebSocketServerProtocol) -> None:
 
 async def serve() -> None:
     """Start the WebSocket server and run until cancelled."""
-    async with websockets.serve(_handler, config.BUS_HOST, config.BUS_PORT):
+    async with websockets.serve(
+        _handler,
+        config.BUS_HOST,
+        config.BUS_PORT,
+        max_size=config.WS_MAX_SIZE,
+        ping_interval=config.WS_PING_INTERVAL,
+        ping_timeout=config.WS_PING_TIMEOUT,
+    ):
         log.info(
             "CombatOS bus  ws://%s:%d  (dashboard + remote modules connect here)",
             config.BUS_HOST, config.BUS_PORT,

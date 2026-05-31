@@ -56,7 +56,14 @@ async def _handler(ws: WebSocketServerProtocol) -> None:
 
 
 async def serve() -> None:
-    async with websockets.serve(_handler, config.IMAGE_BUS_HOST, config.IMAGE_BUS_PORT):
+    async with websockets.serve(
+        _handler,
+        config.IMAGE_BUS_HOST,
+        config.IMAGE_BUS_PORT,
+        max_size=config.WS_MAX_SIZE,
+        ping_interval=config.WS_PING_INTERVAL,
+        ping_timeout=config.WS_PING_TIMEOUT,
+    ):
         log.info(
             "CombatOS image bus ws://%s:%d (frame transport only)",
             config.IMAGE_BUS_HOST,

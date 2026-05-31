@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 
-const ORCH_WS = import.meta.env.VITE_COMBATOS_WS_URL ?? 'ws://localhost:8000'
-const IMAGE_WS = import.meta.env.VITE_COMBATOS_IMAGE_WS_URL ?? 'ws://localhost:8001'
+const DEFAULT_WS_HOST = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
+const ORCH_WS = import.meta.env.VITE_COMBATOS_WS_URL ?? `ws://${DEFAULT_WS_HOST}:8000`
+const IMAGE_WS = import.meta.env.VITE_COMBATOS_IMAGE_WS_URL ?? `ws://${DEFAULT_WS_HOST}:8001`
 const CONTROL_TOPICS = [
   'pose',
   'detections',
@@ -11,6 +12,10 @@ const CONTROL_TOPICS = [
   'slam_odometry',
   'slam_path',
   'slam_point_cloud',
+  'camera_frame',
+  'fpv_raw',
+  'slam_frame',
+  'fpv_hud',
 ] as const
 const IMAGE_TOPICS = [
   'camera_frame',
@@ -163,6 +168,16 @@ function toFrame(msg: Record<string, unknown>): SlamFrame | null {
     height: typeof msg.height === 'number' ? msg.height : 0,
     source: typeof msg.source === 'string' ? msg.source : '',
     data: base64ToBlob(msg.data),
+  }
+}
+
+function applyFrameMessage(msg: Record<string, unknown>, setT: React.Dispatch<React.SetStateAction<TelemetryState>>) {
+  if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
+    const frame = toFrame(msg)
+    if (frame) setT(p => (frame.t >= (p.cameraFrame?.t ?? -Infinity) ? { ...p, cameraFrame: frame } : p))
+  } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
+    const frame = toFrame(msg)
+    if (frame) setT(p => (frame.t >= (p.slamFrame?.t ?? -Infinity) ? { ...p, slamFrame: frame } : p))
   }
 }
 
@@ -342,11 +357,9 @@ export function useCombatState() {
                 },
               }))
             } else if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
-              const frame = toFrame(msg)
-              if (frame) setT(p => ({ ...p, cameraFrame: frame }))
+              applyFrameMessage(msg, setT)
             } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
-              const frame = toFrame(msg)
-              if (frame) setT(p => ({ ...p, slamFrame: frame }))
+              applyFrameMessage(msg, setT)
             }
           } catch {
             // ignore parse errors
@@ -392,15 +405,9 @@ export function useCombatState() {
           try {
             const msg = JSON.parse(ev.data as string)
             if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
-              const frame = toFrame(msg)
-              if (frame) {
-                setT((p) => ({ ...p, cameraFrame: frame }))
-              }
+              applyFrameMessage(msg, setT)
             } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
-              const frame = toFrame(msg)
-              if (frame) {
-                setT((p) => ({ ...p, slamFrame: frame }))
-              }
+              applyFrameMessage(msg, setT)
             }
           } catch {
             // ignore parse errors

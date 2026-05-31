@@ -71,6 +71,7 @@ class DroneSurveillanceSimulation:
         self.drone_yaws = np.zeros(config.num_drones, dtype=np.float32)
         self.troop_positions = np.zeros((config.num_troops, 3), dtype=np.float32)
         self.troop_yaws = np.zeros(config.num_troops, dtype=np.float32)
+        self._troop_headings = np.zeros(config.num_troops, dtype=np.float32)
         self._troop_offsets = np.zeros((config.num_troops, 2), dtype=np.float32)
         self._troop_anchor_ids = np.zeros(config.num_troops, dtype=np.int32)
         self._troop_anchor_bases = np.zeros((4, 2), dtype=np.float32)
@@ -690,14 +691,14 @@ class DroneSurveillanceSimulation:
                     self._log_asset("failed to apply battlefield ground texture; using flat ground color")
         marker_visual = p.createVisualShape(
             p.GEOM_BOX,
-            halfExtents=[size * 0.68, size * 0.42, 0.05],
-            rgbaColor=[0.33, 0.24, 0.17, 0.75],
+            halfExtents=[size * 3.0, size * 3.0, 0.005],
+            rgbaColor=[0.36, 0.30, 0.21, 1.0],
             physicsClientId=self.client_id,
         )
         marker_body = p.createMultiBody(
             baseMass=0.0,
             baseVisualShapeIndex=marker_visual,
-            basePosition=[0.0, 0.0, 0.05],
+            basePosition=[0.0, 0.0, 0.005],
             physicsClientId=self.client_id,
         )
         if self._plane_id is not None:
@@ -740,15 +741,15 @@ class DroneSurveillanceSimulation:
         blast_visual = p.createVisualShape(
             p.GEOM_CYLINDER,
             radius=1.5,
-            length=0.04,
+            length=0.012,
             rgbaColor=[0.15, 0.12, 0.11, 0.95],
             physicsClientId=self.client_id,
         )
         dust_visual = p.createVisualShape(
             p.GEOM_CYLINDER,
             radius=2.8,
-            length=0.03,
-            rgbaColor=[0.31, 0.26, 0.18, 0.32],
+            length=0.010,
+            rgbaColor=[0.31, 0.26, 0.18, 1.0],
             physicsClientId=self.client_id,
         )
         berm_visual = p.createVisualShape(
@@ -782,13 +783,13 @@ class DroneSurveillanceSimulation:
             p.createMultiBody(
                 baseMass=0.0,
                 baseVisualShapeIndex=blast_visual,
-                basePosition=[x, y, 0.03],
+                basePosition=[x, y, 0.100],
                 physicsClientId=self.client_id,
             )
             p.createMultiBody(
                 baseMass=0.0,
                 baseVisualShapeIndex=dust_visual,
-                basePosition=[x + 0.4, y - 0.2, 0.02],
+                basePosition=[x + 0.4, y - 0.2, 0.115],
                 baseOrientation=p.getQuaternionFromEuler(
                     [0.0, 0.0, self.rng.uniform(0.0, math.pi)]
                 ),
@@ -812,14 +813,14 @@ class DroneSurveillanceSimulation:
 
         road_visual = p.createVisualShape(
             p.GEOM_BOX,
-            halfExtents=[size * 0.88, 1.8, 0.02],
+            halfExtents=[size * 0.88, 1.8, 0.006],
             rgbaColor=[0.23, 0.22, 0.21, 1.0],
             physicsClientId=self.client_id,
         )
         road_body = p.createMultiBody(
             baseMass=0.0,
             baseVisualShapeIndex=road_visual,
-            basePosition=[0.0, -1.2, 0.02],
+            basePosition=[0.0, -1.2, 0.085],
             baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, 0.08]),
             physicsClientId=self.client_id,
         )
@@ -887,6 +888,8 @@ class DroneSurveillanceSimulation:
                 physicsClientId=self.client_id,
             )
 
+        self._spawn_terrain_patches()
+        self._spawn_rock_clusters()
         self._spawn_sandbag_emplacements()
 
         ruin_specs = [
@@ -906,6 +909,115 @@ class DroneSurveillanceSimulation:
                 physicsClientId=self.client_id,
             )
             self._ruin_ids.append(body)
+
+    def _spawn_terrain_patches(self) -> None:
+        # Flat colored zones laid just above the ground plane to break up the uniform surface.
+        # Groups: scorched earth (near blast craters), warm dirt, rock/gravel, dry scrub.
+        patch_defs: list[tuple[list[float], list[tuple[float, float, float, float, float]]]] = [
+            # scorched earth -- co-located with blast craters so the camera sees burn marks
+            ([0.16, 0.12, 0.08, 1.0], [
+                (-11.5, -7.5, 4.2, 4.0, 0.18),
+                (-4.0,   8.5, 3.8, 3.6, -0.08),
+                ( 6.5,  -4.5, 4.0, 3.8, 0.05),
+                (12.0,   6.0, 3.4, 3.4, 0.22),
+                (16.5,  -9.0, 3.8, 3.6, -0.12),
+                (-15.5,  3.0, 3.4, 3.2, 0.08),
+            ]),
+            # warm dirt patches
+            ([0.50, 0.36, 0.20, 1.0], [
+                (-15.5,  -8.5, 5.8, 3.6,  0.28),
+                (  3.2,  12.5, 4.5, 6.2, -0.18),
+                ( -7.5,   1.8, 3.2, 2.8,  0.72),
+                ( 18.5,  -4.5, 3.8, 2.6,  0.12),
+                (-18.5,  14.5, 2.8, 4.2, -0.55),
+                (  8.5, -17.0, 4.0, 2.5,  0.38),
+            ]),
+            # rock / gravel
+            ([0.40, 0.37, 0.34, 1.0], [
+                ( -9.5,  -5.5, 2.8, 2.2,  0.42),
+                (  9.5,   8.5, 3.2, 2.0, -0.28),
+                ( 14.5,  -8.5, 2.2, 3.4,  0.08),
+                (-17.5,   2.5, 3.6, 2.4,  0.52),
+                ( 20.0,  12.0, 2.5, 3.0, -0.30),
+            ]),
+            # dry scrub / sparse vegetation
+            ([0.29, 0.27, 0.13, 1.0], [
+                (  6.2, -14.5, 3.2, 4.8,  0.22),
+                ( -3.2, -10.5, 2.8, 2.2, -0.38),
+                ( 16.5,   4.5, 4.2, 2.8,  0.58),
+                (-12.5,  15.5, 3.8, 3.2, -0.12),
+                (-21.0,  -7.0, 3.0, 5.0,  0.45),
+            ]),
+        ]
+        patch_z = 0.015
+        for rgba, positions in patch_defs:
+            for x, y, hw, hd, yaw in positions:
+                visual = p.createVisualShape(
+                    p.GEOM_BOX,
+                    halfExtents=[hw, hd, 0.006],
+                    rgbaColor=rgba,
+                    physicsClientId=self.client_id,
+                )
+                p.createMultiBody(
+                    baseMass=0.0,
+                    baseVisualShapeIndex=visual,
+                    basePosition=[x, y, patch_z],
+                    baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
+                    physicsClientId=self.client_id,
+                )
+                patch_z += 0.002  # unique z per patch -- no two patches share a depth plane
+
+    def _spawn_rock_clusters(self) -> None:
+        # Clusters of rocks and rubble scattered across the map.
+        # Mix of flat slabs, medium upright rocks, and small rubble -- some are
+        # ambiguous human height from above and act as false-positive candidates
+        # for the perception module.
+        cluster_centers = [
+            (-17.0, -12.0), (-14.0,  7.0), ( -8.0, -14.0), ( -1.5,  17.0),
+            (  5.5,  10.5), (  8.0, -12.0), ( 11.0,  15.0), ( 17.0, -13.0),
+            ( 22.0,   5.0), (-22.0,   5.0), (  0.0, -20.0), ( -5.5, -17.0),
+            ( 13.5, -17.0), (-20.0, -15.0), ( 19.0,  18.0),
+        ]
+        for cx, cy in cluster_centers:
+            n_rocks = int(self.rng.integers(3, 7))
+            for _ in range(n_rocks):
+                ox = float(self.rng.uniform(-2.2, 2.2))
+                oy = float(self.rng.uniform(-2.2, 2.2))
+                rock_type = int(self.rng.integers(0, 3))
+                if rock_type == 0:  # flat slab
+                    hw = float(self.rng.uniform(0.25, 0.65))
+                    hd = float(self.rng.uniform(0.18, 0.50))
+                    hz = float(self.rng.uniform(0.06, 0.14))
+                elif rock_type == 1:  # medium upright -- ambiguous silhouette from above
+                    hw = float(self.rng.uniform(0.15, 0.30))
+                    hd = float(self.rng.uniform(0.15, 0.28))
+                    hz = float(self.rng.uniform(0.20, 0.45))
+                else:  # small rubble
+                    hw = float(self.rng.uniform(0.10, 0.22))
+                    hd = float(self.rng.uniform(0.08, 0.18))
+                    hz = float(self.rng.uniform(0.06, 0.18))
+                grey = float(self.rng.uniform(0.28, 0.46))
+                tint = float(self.rng.uniform(-0.04, 0.04))
+                rgba = [
+                    min(1.0, grey + tint),
+                    min(1.0, grey),
+                    min(1.0, grey - tint * 0.5),
+                    1.0,
+                ]
+                yaw = float(self.rng.uniform(0.0, math.pi))
+                visual = p.createVisualShape(
+                    p.GEOM_BOX,
+                    halfExtents=[hw, hd, hz],
+                    rgbaColor=rgba,
+                    physicsClientId=self.client_id,
+                )
+                p.createMultiBody(
+                    baseMass=0.0,
+                    baseVisualShapeIndex=visual,
+                    basePosition=[cx + ox, cy + oy, hz],
+                    baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
+                    physicsClientId=self.client_id,
+                )
 
     def _spawn_sandbag_emplacements(self) -> None:
         sandbag_asset = self._sandbag_mesh_asset()
@@ -1279,8 +1391,11 @@ class DroneSurveillanceSimulation:
             x = float(anchor_positions[anchor, 0] + spread[0] + drift[0])
             y = float(anchor_positions[anchor, 1] + spread[1] + drift[1])
             z = 1.0
-            heading_vec = anchor_positions[anchor] - np.array([x, y], dtype=np.float32)
-            yaw = math.atan2(float(heading_vec[1]), float(heading_vec[0]))
+            dx = x - float(self.troop_positions[idx, 0])
+            dy = y - float(self.troop_positions[idx, 1])
+            if math.hypot(dx, dy) > 0.002:
+                self._troop_headings[idx] = math.atan2(dy, dx)
+            yaw = self._troop_headings[idx]
             self.troop_positions[idx] = (x, y, z)
             use_mesh = bool(self._troop_mesh_mask[idx])
             self.troop_yaws[idx] = yaw + self._troop_visual_yaw_offset
@@ -1470,7 +1585,7 @@ class DroneSurveillanceSimulation:
                 lightAmbientCoeff=0.55,
                 lightDiffuseCoeff=0.68,
                 lightSpecularCoeff=0.08,
-                shadow=1 if renderer != p.ER_TINY_RENDERER else 0,
+                shadow=1,
                 renderer=renderer,
                 physicsClientId=client_id,
             )

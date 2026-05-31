@@ -31,11 +31,7 @@ class DroneCameraConfig:
 @dataclass(frozen=True)
 class RecordingConfig:
     output_path: Path = Path("output/drone_spy_demo.mp4")
-    per_drone_dir: Path | None = None
     fps: int = 12
-    tile_gap_px: int = 6
-    background_rgb: tuple[int, int, int] = (6, 8, 12)
-    tile_columns: int | None = None
 
 
 @dataclass(frozen=True)

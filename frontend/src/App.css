@@ -424,7 +424,9 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  background: #03070a;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.72)),
+    #020507;
 }
 
 .pybullet-sim__viewport {
@@ -439,6 +441,7 @@
   height: 100%;
   object-fit: cover;
   image-rendering: auto;
+  transform: scale(1.002);
 }
 
 .pybullet-sim__frame--hidden {
@@ -468,57 +471,110 @@
   font: 800 1.15rem/1.2 'Fira Sans', sans-serif;
 }
 
-.pybullet-hud {
+.pybullet-video-treatment {
   position: absolute;
-  z-index: 2;
-  display: grid;
-  gap: 12px;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 50%, transparent 50%),
+    radial-gradient(circle at center, transparent 38%, rgba(0, 0, 0, 0.38) 100%);
+  background-size: 100% 4px, 100% 100%;
+  mix-blend-mode: screen;
+  opacity: 0.34;
+}
+
+.pybullet-topline,
+.pybullet-sidecar,
+.pybullet-camera-controls,
+.pybullet-feed-rail {
+  position: absolute;
+  z-index: 3;
   border: 1px solid rgba(120, 154, 180, 0.24);
   border-radius: 8px;
   background: rgba(4, 10, 15, 0.82);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(12px);
 }
 
-.pybullet-hud--left {
+.pybullet-topline {
   left: 18px;
-  top: 18px;
-  width: min(360px, calc(100vw - 36px));
-  padding: 16px;
-}
-
-.pybullet-hud--right {
   right: 18px;
   top: 18px;
-  width: 194px;
-  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  padding: 12px 14px;
 }
 
-.pybullet-hud strong {
+.pybullet-title-stack {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.pybullet-title-stack span,
+.pybullet-asset-strip span,
+.pybullet-live-cluster span {
+  color: var(--accent);
+  font: 700 0.68rem/1 'Fira Code', monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.pybullet-title-stack strong {
   color: var(--text);
   font: 800 1rem/1.2 'Fira Sans', sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pybullet-live-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pybullet-live-cluster span,
+.pybullet-asset-strip span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid rgba(120, 154, 180, 0.22);
+  border-radius: 999px;
+  background: rgba(10, 18, 26, 0.78);
+  color: var(--text);
+  letter-spacing: 0.04em;
+}
+
+.pybullet-live-cluster span[data-state='online'] {
+  border-color: rgba(95, 222, 146, 0.45);
+  color: #8df0ae;
+}
+
+.pybullet-live-cluster span[data-state='offline'] {
+  border-color: rgba(255, 138, 61, 0.4);
+  color: #ffc08c;
 }
 
 .pybullet-camera-controls {
-  position: absolute;
   left: 50%;
   bottom: 18px;
-  z-index: 2;
   display: flex;
   max-width: calc(100vw - 36px);
   gap: 8px;
   align-items: center;
   padding: 8px;
-  border: 1px solid rgba(120, 154, 180, 0.24);
-  border-radius: 8px;
-  background: rgba(4, 10, 15, 0.82);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
-  backdrop-filter: blur(12px);
   transform: translateX(-50%);
 }
 
-.pybullet-camera-controls button,
-.pybullet-camera-controls select {
+.pybullet-camera-controls button {
   height: 34px;
   border: 1px solid rgba(120, 154, 180, 0.24);
   border-radius: 6px;
@@ -534,10 +590,6 @@
   cursor: pointer;
 }
 
-.pybullet-camera-controls select {
-  padding: 0 28px 0 10px;
-}
-
 .pybullet-camera-controls button:hover,
 .pybullet-camera-controls button:focus-visible,
 .pybullet-camera-controls button.is-active {
@@ -546,18 +598,79 @@
   color: #dff7ff;
 }
 
+.pybullet-camera-controls button:disabled,
+.pybullet-feed-rail button:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.pybullet-feed-rail {
+  left: 18px;
+  bottom: 18px;
+  display: grid;
+  gap: 8px;
+  width: min(170px, calc(50vw - 28px));
+  padding: 8px;
+}
+
+.pybullet-feed-rail button {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(120, 154, 180, 0.2);
+  border-radius: 6px;
+  background: rgba(10, 18, 26, 0.82);
+  color: var(--text);
+  font: 700 0.66rem/1 'Fira Code', monospace;
+  cursor: pointer;
+}
+
+.pybullet-feed-rail button.is-active {
+  border-color: rgba(113, 215, 255, 0.52);
+  background: rgba(113, 215, 255, 0.14);
+}
+
+.pybullet-feed-rail i,
+.pybullet-map i {
+  border-radius: 999px;
+}
+
+.pybullet-feed-rail i {
+  width: 8px;
+  height: 8px;
+  background: #8df0ae;
+  box-shadow: 0 0 12px rgba(141, 240, 174, 0.9);
+}
+
+.pybullet-feed-rail i[data-alive='false'],
+.pybullet-map i[data-alive='false'] {
+  background: #ff8a78;
+  box-shadow: 0 0 12px rgba(255, 138, 120, 0.74);
+}
+
+.pybullet-sidecar {
+  right: 18px;
+  top: 86px;
+  display: grid;
+  gap: 12px;
+  width: min(270px, calc(100vw - 36px));
+  padding: 12px;
+}
+
 .pybullet-stat-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
-.pybullet-stat-grid span,
-.pybullet-coverage {
+.pybullet-stat-grid span {
   min-width: 0;
   padding: 9px 10px;
   border: 1px solid rgba(120, 154, 180, 0.2);
-  border-radius: 999px;
+  border-radius: 6px;
   background: rgba(10, 18, 26, 0.82);
   color: var(--text);
   font: 700 0.7rem/1 'Fira Code', monospace;
@@ -565,14 +678,10 @@
   white-space: nowrap;
 }
 
-.pybullet-stat-grid span[data-state='online'] {
-  border-color: rgba(95, 222, 146, 0.45);
-  color: #8df0ae;
-}
-
-.pybullet-stat-grid span[data-state='offline'] {
-  border-color: rgba(255, 138, 61, 0.4);
-  color: #ffc08c;
+.pybullet-asset-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .pybullet-map {
@@ -592,15 +701,91 @@
   position: absolute;
   width: 8px;
   height: 8px;
-  border-radius: 999px;
   background: #8df0ae;
   box-shadow: 0 0 14px rgba(141, 240, 174, 0.9);
   transform: translate(-50%, -50%);
 }
 
-.pybullet-coverage {
-  display: inline-flex;
-  justify-content: center;
+.pybullet-fpv-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.pybullet-fpv-overlay.is-active {
+  opacity: 1;
+}
+
+.pybullet-reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 74px;
+  height: 74px;
+  transform: translate(-50%, -50%);
+}
+
+.pybullet-reticle i {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-color: rgba(141, 240, 174, 0.78);
+  border-style: solid;
+}
+
+.pybullet-reticle i:nth-child(1) { top: 0; left: 0; border-width: 2px 0 0 2px; }
+.pybullet-reticle i:nth-child(2) { top: 0; right: 0; border-width: 2px 2px 0 0; }
+.pybullet-reticle i:nth-child(3) { bottom: 0; left: 0; border-width: 0 0 2px 2px; }
+.pybullet-reticle i:nth-child(4) { right: 0; bottom: 0; border-width: 0 2px 2px 0; }
+
+.pybullet-tape,
+.pybullet-fpv-footer {
+  position: absolute;
+  border: 1px solid rgba(95, 222, 146, 0.22);
+  border-radius: 8px;
+  background: rgba(3, 10, 8, 0.68);
+  color: rgba(141, 240, 174, 0.88);
+  font-family: 'Fira Code', monospace;
+  backdrop-filter: blur(8px);
+}
+
+.pybullet-tape {
+  top: 50%;
+  display: grid;
+  min-width: 68px;
+  gap: 6px;
+  padding: 10px 8px;
+  text-align: center;
+  transform: translateY(-50%);
+}
+
+.pybullet-tape--left { left: 220px; }
+.pybullet-tape--right { right: 308px; }
+
+.pybullet-tape span {
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+}
+
+.pybullet-tape strong {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.pybullet-fpv-footer {
+  right: 308px;
+  bottom: 18px;
+  left: 220px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .gym-layout {
@@ -1516,6 +1701,72 @@
 
   .scene-actions button {
     flex: 1 1 140px;
+  }
+
+  .pybullet-topline {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .pybullet-title-stack strong {
+    white-space: normal;
+  }
+
+  .pybullet-live-cluster {
+    justify-content: flex-start;
+  }
+
+  .pybullet-sidecar {
+    top: 132px;
+    right: 32px;
+    left: 32px;
+    width: auto;
+    max-height: calc(100% - 276px);
+    overflow: auto;
+  }
+
+  .pybullet-map {
+    aspect-ratio: 1.5;
+    max-height: 112px;
+  }
+
+  .pybullet-feed-rail {
+    right: 32px;
+    bottom: 78px;
+    left: 32px;
+    width: auto;
+  }
+
+  .pybullet-camera-controls {
+    right: 32px;
+    bottom: 16px;
+    left: 32px;
+    justify-content: center;
+    transform: none;
+  }
+
+  .pybullet-camera-controls button {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .pybullet-tape--left {
+    left: 20px;
+  }
+
+  .pybullet-tape--right {
+    right: 20px;
+  }
+
+  .pybullet-fpv-footer {
+    right: 20px;
+    bottom: 136px;
+    left: 20px;
+    flex-wrap: wrap;
   }
 }
 

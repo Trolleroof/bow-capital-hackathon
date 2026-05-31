@@ -25,10 +25,12 @@ import websockets
 from websockets.server import WebSocketServerProtocol
 
 from .. import config
-from . import router
+from . import image_router, router
 from ..state import system_state
 
 log = logging.getLogger(__name__)
+
+_IMAGE_TOPICS = {"camera_frame", "camera_right_frame", "slam_frame", "fpv_raw", "fpv_hud", "perception_frame"}
 
 # Maps the incoming topic to its owning module so we can update health state
 # whenever a remote client (Jetson, etc.) publishes on that topic.
@@ -47,8 +49,16 @@ _TOPIC_MODULE: dict[str, str] = {
 }
 
 
+def _topics_from_subscription(value: object) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return []
+    return [topic for topic in value if isinstance(topic, str)]
+
+
 async def _handler(ws: WebSocketServerProtocol) -> None:
-    q: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
+    q: asyncio.Queue[str] = asyncio.Queue(maxsize=32)
     # Default: subscribe to all topics so dashboard gets everything without
     # sending an explicit subscribe message first.
     router.subscribe(q, topics=None)
@@ -75,8 +85,9 @@ async def _handler(ws: WebSocketServerProtocol) -> None:
             # ── Subscription control ──────────────────────────────────────────
             if data.get("type") == "subscribe":
                 router.unsubscribe(q)
-                topics = data.get("topics")  # None = all
+                topics = _topics_from_subscription(data.get("topics"))  # None = all
                 router.subscribe(q, topics)
+                router.replay_latest(q, topics)
                 log.debug("client %s → subscribed to %s", ws.remote_address, topics)
                 continue
 
@@ -94,6 +105,8 @@ async def _handler(ws: WebSocketServerProtocol) -> None:
 
             # Relay to all OTHER subscribers (exclude=q prevents echo).
             await router.publish(topic, payload, exclude=q)
+            if topic in _IMAGE_TOPICS:
+                await image_router.publish(topic, payload)
 
     except websockets.exceptions.ConnectionClosedError:
         pass
@@ -105,7 +118,14 @@ async def _handler(ws: WebSocketServerProtocol) -> None:
 
 async def serve() -> None:
     """Start the WebSocket server and run until cancelled."""
-    async with websockets.serve(_handler, config.BUS_HOST, config.BUS_PORT):
+    async with websockets.serve(
+        _handler,
+        config.BUS_HOST,
+        config.BUS_PORT,
+        max_size=config.WS_MAX_SIZE,
+        ping_interval=config.WS_PING_INTERVAL,
+        ping_timeout=config.WS_PING_TIMEOUT,
+    ):
         log.info(
             "CombatOS bus  ws://%s:%d  (dashboard + remote modules connect here)",
             config.BUS_HOST, config.BUS_PORT,

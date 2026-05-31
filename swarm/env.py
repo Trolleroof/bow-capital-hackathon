@@ -500,52 +500,140 @@ class SwarmEnv:
                     events["reached"] = 1.0
         return events
     def _resolve_obstacle_collisions(self, live_mask: np.ndarray) -> int:
-        """Hard push every live agent out of any obstacle's expanded footprint.
+        return self._resolve_obstacle_collisions_from(live_mask, self.pos.copy())
+
+    def _point_inside_obstacle(self, x: float, y: float, k: int, obs: Obstacle) -> bool:
+        if self._obs_is_circle[k]:
+            r = float(obs.sx) + AGENT_RADIUS
+            dx, dy = x - float(obs.cx), y - float(obs.cy)
+            return dx * dx + dy * dy < r * r
+
+        hx = float(obs.sx) + AGENT_RADIUS
+        hy = float(obs.sy) + AGENT_RADIUS
+        return abs(x - float(obs.cx)) < hx and abs(y - float(obs.cy)) < hy
+
+    def _segment_hits_obstacle(
+        self,
+        sx: float,
+        sy: float,
+        ex: float,
+        ey: float,
+        k: int,
+        obs: Obstacle,
+    ) -> float | None:
+        dx, dy = ex - sx, ey - sy
+        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+            return None
+        if self._point_inside_obstacle(sx, sy, k, obs):
+            return None
+
+        if self._obs_is_circle[k]:
+            r = float(obs.sx) + AGENT_RADIUS
+            ox, oy = sx - float(obs.cx), sy - float(obs.cy)
+            a = dx * dx + dy * dy
+            b = 2.0 * (ox * dx + oy * dy)
+            c = ox * ox + oy * oy - r * r
+            disc = b * b - 4.0 * a * c
+            if disc < 0.0:
+                return None
+            root = math.sqrt(disc)
+            t0 = (-b - root) / (2.0 * a)
+            t1 = (-b + root) / (2.0 * a)
+            if t1 < 0.0 or t0 > 1.0:
+                return None
+            return max(0.0, t0)
+
+        min_x = float(obs.cx) - float(obs.sx) - AGENT_RADIUS
+        max_x = float(obs.cx) + float(obs.sx) + AGENT_RADIUS
+        min_y = float(obs.cy) - float(obs.sy) - AGENT_RADIUS
+        max_y = float(obs.cy) + float(obs.sy) + AGENT_RADIUS
+        t_enter = 0.0
+        t_exit = 1.0
+
+        for start, delta, min_v, max_v in ((sx, dx, min_x, max_x), (sy, dy, min_y, max_y)):
+            if abs(delta) < 1e-9:
+                if start < min_v or start > max_v:
+                    return None
+                continue
+            a = (min_v - start) / delta
+            b = (max_v - start) / delta
+            if a > b:
+                a, b = b, a
+            t_enter = max(t_enter, a)
+            t_exit = min(t_exit, b)
+            if t_enter > t_exit:
+                return None
+
+        if t_exit < 0.0 or t_enter > 1.0:
+            return None
+        return max(0.0, t_enter)
+
+    def _push_out_of_obstacle(self, px: float, py: float, k: int, obs: Obstacle) -> tuple[float, float, bool]:
+        cx, cy = float(obs.cx), float(obs.cy)
+        if self._obs_is_circle[k]:
+            r = float(obs.sx) + AGENT_RADIUS
+            dx, dy = px - cx, py - cy
+            d2 = dx * dx + dy * dy
+            if d2 < r * r:
+                d = math.sqrt(d2) if d2 > 1e-12 else 1e-6
+                # pick a deterministic direction when at exact center
+                if d < 1e-5:
+                    dx, dy, d = 1.0, 0.0, 1.0
+                return cx + dx / d * r, cy + dy / d * r, True
+            return px, py, False
+
+        hx = float(obs.sx) + AGENT_RADIUS
+        hy = float(obs.sy) + AGENT_RADIUS
+        dx, dy = px - cx, py - cy
+        if abs(dx) < hx and abs(dy) < hy:
+            # push along the axis of least penetration
+            pen_x = hx - abs(dx)
+            pen_y = hy - abs(dy)
+            if pen_x < pen_y:
+                px = cx + math.copysign(hx, dx if dx != 0 else 1.0)
+            else:
+                py = cy + math.copysign(hy, dy if dy != 0 else 1.0)
+            return px, py, True
+        return px, py, False
+
+    def _resolve_obstacle_collisions_from(self, live_mask: np.ndarray, start_pos: np.ndarray) -> int:
+        """Hard block live agents against any obstacle's expanded footprint.
 
         Each obstacle footprint is grown by AGENT_RADIUS, then any agent inside
         is shoved to the nearest edge (boxes) or onto the inflated circle
-        (cylinders). Returns the number of live agents that needed correction
-        this step — used as a collision count for the reward.
+        (cylinders). The segment from the previous to proposed position is also
+        swept so high-speed agents cannot tunnel through thin walls. Returns
+        the number of live agents that needed correction this step — used as a
+        collision count for the reward.
         """
         if not self.obstacles or not live_mask.any():
             return 0
         live_idx = np.where(live_mask)[0]
         collided = 0
         for i in live_idx:
+            sx, sy = float(start_pos[i, 0]), float(start_pos[i, 1])
             px, py = float(self.pos[i, 0]), float(self.pos[i, 1])
             hit_any = False
+
+            hit_t: float | None = None
+            for k, obs in enumerate(self.obstacles):
+                t = self._segment_hits_obstacle(sx, sy, px, py, k, obs)
+                if t is not None and (hit_t is None or t < hit_t):
+                    hit_t = t
+            if hit_t is not None:
+                stop_t = max(0.0, hit_t - 1e-4)
+                px = sx + (px - sx) * stop_t
+                py = sy + (py - sy) * stop_t
+                hit_any = True
+
             # Two passes so an agent pushed out of one obstacle can't still sit
             # inside an adjacent one (rare with our layouts but cheap insurance).
             for _ in range(2):
                 still_hit = False
                 for k, obs in enumerate(self.obstacles):
-                    cx, cy = float(obs.cx), float(obs.cy)
-                    if self._obs_is_circle[k]:
-                        r = float(obs.sx) + AGENT_RADIUS
-                        dx, dy = px - cx, py - cy
-                        d2 = dx * dx + dy * dy
-                        if d2 < r * r:
-                            d = math.sqrt(d2) if d2 > 1e-12 else 1e-6
-                            # pick a deterministic direction when at exact center
-                            if d < 1e-5:
-                                dx, dy, d = 1.0, 0.0, 1.0
-                            px = cx + dx / d * r
-                            py = cy + dy / d * r
-                            still_hit = True
-                            hit_any = True
-                    else:
-                        hx = float(obs.sx) + AGENT_RADIUS
-                        hy = float(obs.sy) + AGENT_RADIUS
-                        if abs(px - cx) < hx and abs(py - cy) < hy:
-                            # push along the axis of least penetration
-                            pen_x = hx - abs(px - cx)
-                            pen_y = hy - abs(py - cy)
-                            if pen_x < pen_y:
-                                px = cx + math.copysign(hx, px - cx if px != cx else 1.0)
-                            else:
-                                py = cy + math.copysign(hy, py - cy if py != cy else 1.0)
-                            still_hit = True
-                            hit_any = True
+                    px, py, hit = self._push_out_of_obstacle(px, py, k, obs)
+                    still_hit = still_hit or hit
+                    hit_any = hit_any or hit
                 if not still_hit:
                     break
             if hit_any:
@@ -1003,6 +1091,7 @@ class SwarmEnv:
 
         live = self.alive
         self.vel = actions  # record applied command (used in obs)
+        start_pos = self.pos.copy()
         # only live agents move
         self.pos[live] += actions[live] * MAX_SPEED * DT
 
@@ -1016,7 +1105,7 @@ class SwarmEnv:
 
         # Hard collision push-out against scenario obstacles, then re-clip in
         # case the push moved an agent past the world wall.
-        n_collisions = self._resolve_obstacle_collisions(live)
+        n_collisions = self._resolve_obstacle_collisions_from(live, start_pos)
         if n_collisions:
             self.pos = np.clip(self.pos, -bound, bound)
 

@@ -14,6 +14,14 @@ from . import image_router
 log = logging.getLogger(__name__)
 
 
+def _topics_from_subscription(value: object) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return []
+    return [topic for topic in value if isinstance(topic, str)]
+
+
 async def _handler(ws: WebSocketServerProtocol) -> None:
     q: asyncio.Queue[str] = asyncio.Queue(maxsize=4)
 
@@ -38,7 +46,9 @@ async def _handler(ws: WebSocketServerProtocol) -> None:
 
             if data.get("type") == "subscribe":
                 image_router.unsubscribe(q)
-                image_router.subscribe(q, data.get("topics"))
+                topics = _topics_from_subscription(data.get("topics"))
+                image_router.subscribe(q, topics)
+                image_router.replay_latest(q, topics)
                 continue
 
             topic = data.get("topic")
@@ -56,7 +66,14 @@ async def _handler(ws: WebSocketServerProtocol) -> None:
 
 
 async def serve() -> None:
-    async with websockets.serve(_handler, config.IMAGE_BUS_HOST, config.IMAGE_BUS_PORT):
+    async with websockets.serve(
+        _handler,
+        config.IMAGE_BUS_HOST,
+        config.IMAGE_BUS_PORT,
+        max_size=config.WS_MAX_SIZE,
+        ping_interval=config.WS_PING_INTERVAL,
+        ping_timeout=config.WS_PING_TIMEOUT,
+    ):
         log.info(
             "CombatOS image bus ws://%s:%d (frame transport only)",
             config.IMAGE_BUS_HOST,

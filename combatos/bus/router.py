@@ -21,11 +21,26 @@ log = logging.getLogger(__name__)
 
 _drop_counts: dict[str, int] = defaultdict(int)
 
+# Last serialized frame for each topic. New dashboard subscribers receive this
+# immediately so reloads do not wait for the next ROS/perception publish tick.
+_latest: dict[str, str] = {}
+
 # topic → set of subscriber queues
 _topic_subs: dict[str, set[asyncio.Queue]] = defaultdict(set)
 
 # Queues subscribed to ALL topics (no filter)
 _wildcard_subs: set[asyncio.Queue] = set()
+
+
+def _enqueue_latest(q: asyncio.Queue, frame: str, topic: str) -> None:
+    try:
+        q.put_nowait(frame)
+    except asyncio.QueueFull:
+        try:
+            q.get_nowait()
+            q.put_nowait(frame)
+        except (asyncio.QueueEmpty, asyncio.QueueFull):
+            _drop_counts[topic] += 1
 
 
 def subscribe(q: asyncio.Queue, topics: list[str] | None = None) -> None:
@@ -44,6 +59,16 @@ def unsubscribe(q: asyncio.Queue) -> None:
         s.discard(q)
 
 
+def replay_latest(q: asyncio.Queue, topics: list[str] | None = None) -> None:
+    """Queue the latest known message for each subscribed topic."""
+    if topics is None:
+        items = list(_latest.items())
+    else:
+        items = [(topic, _latest[topic]) for topic in topics if topic in _latest]
+    for topic, frame in items:
+        _enqueue_latest(q, frame, topic)
+
+
 async def publish(
     topic: str,
     payload: dict[str, Any],
@@ -55,6 +80,7 @@ async def publish(
     a publishing client from receiving its own message back.
     """
     frame = json.dumps({"topic": topic, **payload})
+    _latest[topic] = frame
     targets = _wildcard_subs | _topic_subs.get(topic, set())
     for q in list(targets):
         if q is exclude:

@@ -30,6 +30,41 @@ function detColor(d: Detection): string {
   return COLOR[d.cls.toLowerCase()] ?? COLOR.default
 }
 
+interface DetectionOverlayOptions {
+  lineScale?: number
+}
+
+export function makeDetectionOverlay(displayDets: Detection[], options: DetectionOverlayOptions = {}) {
+  return (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    const lineScale = options.lineScale ?? 1
+    for (const d of displayDets) {
+      if (!d.bbox) continue
+      const [nx, ny, nw, nh] = d.bbox
+      const x = nx * width
+      const y = ny * height
+      const w = nw * width
+      const h = nh * height
+      const color = detColor(d)
+      const thick = (d.confirmed || d.tone === 'amber' ? 8 : 6) * lineScale
+      const frac = d.confirmed ? 0.3 : 0.24
+
+      drawCorners(ctx, x, y, w, h, color, thick, frac)
+
+      if (d.confirmed || d.tone === 'amber') {
+        ctx.fillStyle = color
+        ctx.beginPath()
+        ctx.arc(x + w / 2, y + h / 2, 4.5, 0, Math.PI * 2)
+        ctx.fill()
+      }
+
+      const state = d.confirmed ? 'CONFIRMED' : d.tone === 'amber' ? 'LOCKED' : d.tone === 'candidate' ? 'FOLLOW' : ''
+      const iffTag = d.allegiance ? `  ${d.allegiance.toUpperCase()}` : ''
+      const label = `${d.id}  ${d.cls}  ${d.conf.toFixed(2)}${state ? '  ' + state : ''}${iffTag}`
+      drawLabel(ctx, label, x + w / 2, y - 4, color, d.confirmed)
+    }
+  }
+}
+
 function drawCorners(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -117,36 +152,7 @@ export function OpticView({ t, onExit, onFollow, onConfirm, onRelease }: Props) 
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 3)
 
-  const overlay = useMemo(
-    () => (ctx: CanvasRenderingContext2D, width: number, height: number) => {
-      for (const d of displayDets) {
-        if (!d.bbox) continue
-        const [nx, ny, nw, nh] = d.bbox
-        const x = nx * width
-        const y = ny * height
-        const w = nw * width
-        const h = nh * height
-        const color = detColor(d)
-        const thick = d.confirmed || d.tone === 'amber' ? 8 : 6
-        const frac = d.confirmed ? 0.3 : 0.24
-
-        drawCorners(ctx, x, y, w, h, color, thick, frac)
-
-        if (d.confirmed || d.tone === 'amber') {
-          ctx.fillStyle = color
-          ctx.beginPath()
-          ctx.arc(x + w / 2, y + h / 2, 4.5, 0, Math.PI * 2)
-          ctx.fill()
-        }
-
-        const state = d.confirmed ? 'CONFIRMED' : d.tone === 'amber' ? 'LOCKED' : d.tone === 'candidate' ? 'FOLLOW' : ''
-        const iffTag = d.allegiance ? `  ${d.allegiance.toUpperCase()}` : ''
-        const label = `${d.id}  ${d.cls}  ${d.conf.toFixed(2)}${state ? '  ' + state : ''}${iffTag}`
-        drawLabel(ctx, label, x + w / 2, y - 4, color, d.confirmed)
-      }
-    },
-    [displayDets],
-  )
+  const overlay = useMemo(() => makeDetectionOverlay(displayDets), [displayDets])
 
   const handleFollow = () => {
     if (!candidate) return

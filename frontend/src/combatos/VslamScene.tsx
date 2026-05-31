@@ -38,7 +38,7 @@ function mapPoint(point: SlamPoint, origin: SlamPoint, scale: number, size: numb
 }
 
 export function VslamScene({ points, path, pose }: Props) {
-  const [chaseEnabled, setChaseEnabled] = useState(false)
+  const [chaseEnabled, setChaseEnabled] = useState(true)
   const hostRef = useRef<HTMLDivElement>(null)
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
   const controlsRef = useRef<OrbitControls | null>(null)
@@ -47,7 +47,7 @@ export function VslamScene({ points, path, pose }: Props) {
   const poseRef = useRef<THREE.Group | null>(null)
   const frameRef = useRef<number | null>(null)
   const hasFramedRef = useRef(false)
-  const chaseEnabledRef = useRef(false)
+  const chaseEnabledRef = useRef(true)
   const mapSize = 150
   const mapOrigin = pose ?? path[path.length - 1] ?? { x: 0, y: 0, z: 0 }
   const mapScale = 4.2
@@ -86,6 +86,7 @@ export function VslamScene({ points, path, pose }: Props) {
     controls.minDistance = 0.4
     controls.maxDistance = 220
     controls.target.set(0, 0, 0)
+    controls.enabled = !chaseEnabledRef.current
 
     const grid = new THREE.GridHelper(24, 24, 0x2f5d82, 0x162638)
     grid.position.y = -0.02

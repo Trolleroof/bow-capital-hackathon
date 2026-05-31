@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { LiveFrameCanvas } from './LiveFrameCanvas'
 import type { TelemetryState, LogEntry } from './useCombatState'
 import { Gauge } from './atoms'
 import { VslamScene } from './VslamScene'
+import { makeDetectionOverlay } from './OpticView'
 
 const MODULES = ['NAVIGATION', 'TARGETS', 'RECON', 'SYSTEM']
 
@@ -14,15 +15,15 @@ interface Props {
 }
 
 export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
-  const [intel, setIntel] = useState<'det' | 'recon'>('det')
-  const [frameMinimized, setFrameMinimized] = useState(false)
-  const [bridgeMinimized, setBridgeMinimized] = useState(false)
+  const [fullscreenPanel, setFullscreenPanel] = useState<'slam-map' | 'slam-keyframe' | null>(null)
   const clock = 'T+' + String(Math.floor(t.sec / 60)).padStart(2, '0') + ':' + String(t.sec % 60).padStart(2, '0')
   const tracked = t.dets.filter(d => d.st !== 'LOST').length
   const liveFeed = t.cameraFrame
   const annotatedFeed = t.slamFrame
-  const slamLabel = t.slamStatus !== '--' ? t.slamStatus : t.tracking
-  const slamOk = slamLabel === 'OK' || slamLabel === 'LOCALIZED'
+  const liveFeedAspect = liveFeed && liveFeed.width > 0 && liveFeed.height > 0
+    ? `${liveFeed.width} / ${liveFeed.height}`
+    : '16 / 9'
+  const cameraOverlay = useMemo(() => makeDetectionOverlay(t.dets, { lineScale: 0.42 }), [t.dets])
   const vslamPose = t.slamOdometry ?? { ...t.pose, qz: Math.sin(t.yaw * Math.PI / 360), qw: Math.cos(t.yaw * Math.PI / 360) }
 
   return (
@@ -42,19 +43,22 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           ))}
         </nav>
         <div className="hero-status">
-          <div className={`pill ${t.wsConnected ? 'pill--ok' : 'pill--alert'}`}>
-            <i /><span>ORCH</span><b>{t.wsConnected ? 'UP' : 'DOWN'}</b>
+          <div className={'pill pill--deny'}>
+            <i /><span>GPS</span><b>DENIED</b>
           </div>
-          <div className={`pill ${slamOk ? 'pill--ok' : 'pill--alert'}`}>
-            <i /><span>SLAM</span><b>{slamLabel}</b>
+          <div className={'pill pill--deny'}>
+            <i /><span>LINK</span><b>NONE</b>
           </div>
-          {tracked > 0 && (
+          <div className={`pill ${t.tracking === 'OK' ? 'pill--ok' : 'pill--alert'}`}>
+            <i /><span>STATE</span><b>{t.tracking === 'OK' ? 'LOCALIZED' : t.tracking}</b>
+          </div>
+          {t.wsConnected && (
             <div className="pill pill--ok">
-              <i /><span>TARGETS</span><b>{tracked}</b>
+              <i /><b>LIVE</b>
             </div>
           )}
           <div className="clk">
-            <span className="ck">UPTIME</span>
+            <span className="ck">MISSION</span>
             <span className="cv">{clock}</span>
           </div>
         </div>
@@ -129,25 +133,33 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           </div>
 
           <div className="rail-foot">
-            <span className="rf-dot" />
-            {t.wsConnected ? 'Orchestrator connected' : 'Orchestrator offline'}
-            {liveFeed ? ` · camera #${liveFeed.seq}` : ' · no camera feed'}
+            <span className="rf-dot" /> ALL SUBSYSTEMS NOMINAL
           </div>
         </div>
 
-        {/* nav map */}
-        <div className="pnl nav-col">
-          <h4>NAVIGATION · STEREO VSLAM <em>6-DoF</em></h4>
+        {/* top-left: SLAM 3D environment */}
+        <div className={`pnl nav-col${fullscreenPanel === 'slam-map' ? ' panel-fullscreen' : ''}`}>
+          <h4>
+            <span>NAVIGATION · STEREO VSLAM</span>
+            <span className="panel-head-actions">
+              <em>6-DoF</em>
+              <button
+                type="button"
+                className="panel-fullscreen-btn"
+                onClick={() => setFullscreenPanel(fullscreenPanel === 'slam-map' ? null : 'slam-map')}
+                aria-label={fullscreenPanel === 'slam-map' ? 'Restore SLAM map panel' : 'Fullscreen SLAM map panel'}
+                title={fullscreenPanel === 'slam-map' ? 'Restore' : 'Fullscreen'}
+              >
+                {fullscreenPanel === 'slam-map' ? 'RESTORE' : 'FULL'}
+              </button>
+            </span>
+          </h4>
           <div className="fig map" style={{ flex: 1 }}>
             <VslamScene points={t.slamPointCloud} path={t.slamPath} pose={vslamPose} />
             <div className="corner tl" /><div className="corner tr" />
             <div className="corner bl" /><div className="corner br" />
-            <div className="fig-val">
-              {t.wsConnected
-                ? `● ${slamLabel} · ${t.slamPointCloudTotal || t.slamPointCloud.length} MAP PTS`
-                : '● waiting for pose stream'}
-            </div>
-            <div className="fig-cap">VSLAM MAP · {t.loops} LOOP CLOSURES · /slam/odometry · /slam/path · /slam/point_cloud</div>
+            <div className="fig-val">● LIVE · {t.slamPointCloud.length} MAP PTS</div>
+            <div className="fig-cap">VSLAM MAP · /slam/odometry · /slam/path · /slam/point_cloud</div>
             <div className="fig-legend">
               <span><i className="lg" />SLAM PATH</span>
               <span><i className="lg dot" />EGO POSE</span>
@@ -156,12 +168,38 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           </div>
         </div>
 
-        {/* stereo feed */}
+        {/* bottom-left: SLAM keyframe */}
+        <div className={`pnl slam-frame-col${fullscreenPanel === 'slam-keyframe' ? ' panel-fullscreen' : ''}`}>
+          <h4>
+            <span>SLAM KEYFRAME</span>
+            <span className="panel-head-actions">
+              <em>{annotatedFeed ? `#${annotatedFeed.seq}` : 'WAITING'}</em>
+              <button
+                type="button"
+                className="panel-fullscreen-btn"
+                onClick={() => setFullscreenPanel(fullscreenPanel === 'slam-keyframe' ? null : 'slam-keyframe')}
+                aria-label={fullscreenPanel === 'slam-keyframe' ? 'Restore SLAM keyframe panel' : 'Fullscreen SLAM keyframe panel'}
+                title={fullscreenPanel === 'slam-keyframe' ? 'Restore' : 'Fullscreen'}
+              >
+                {fullscreenPanel === 'slam-keyframe' ? 'RESTORE' : 'FULL'}
+              </button>
+            </span>
+          </h4>
+          <div className="slam-keyframe">
+            {annotatedFeed ? (
+              <LiveFrameCanvas frame={annotatedFeed} className="sw-canvas" fit="contain" />
+            ) : (
+              <div className="hatch" data-cap={'WAITING\n/slam/tracked_image/compressed'} />
+            )}
+          </div>
+        </div>
+
+        {/* top-right: YOLOX stream */}
         <div className="pnl feed-col">
-          <h4>OAK CAMERA STREAM <em>{liveFeed ? `#${liveFeed.seq}` : 'WAITING'}</em></h4>
-          <div className="feed" onClick={onEnterOptic}>
+          <h4>YOLOX VIDEO STREAM <em>{liveFeed ? `#${liveFeed.seq}` : 'WAITING'}</em></h4>
+          <div className="feed" style={{ aspectRatio: liveFeedAspect }} onClick={onEnterOptic}>
             {liveFeed ? (
-              <LiveFrameCanvas frame={liveFeed} className="slam-live-canvas" fit="cover" />
+              <LiveFrameCanvas frame={liveFeed} className="slam-live-canvas" fit="contain" overlay={cameraOverlay} />
             ) : (
               <div className="subj-ph hatch" data-cap={'AWAITING\nCAMERA FEED'} />
             )}
@@ -173,136 +211,41 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           </div>
         </div>
 
-        {/* intel panel */}
+        {/* bottom-right: detections list */}
         <div className="pnl intel-col">
-          <div className="ptabs">
-            <button className={'pt' + (intel === 'det' ? ' is-on' : '')} onClick={() => setIntel('det')}>
-              DETECTIONS <em>{tracked}</em>
-            </button>
-            <button className={'pt' + (intel === 'recon' ? ' is-on' : '')} onClick={() => setIntel('recon')}>
-              RECON · 3DGS
-            </button>
-            <span className="pt-status">
-              {intel === 'det' ? 'YOLO v8 · LIVE' : t.recon.status === 'ready' ? 'SPLAT READY' : 'TRAINING'}
-            </span>
-          </div>
-
-          {intel === 'det' ? (
-            <div className="dtable">
-              <div className="dt-head">
-                <span>TRACK ID</span>
-                <span>CLASS</span>
-                <span className="r">CONF</span>
-                <span className="r">RNG·M</span>
-                <span className="r">BRG</span>
-                <span>IFF</span>
-                <span>STATUS</span>
-              </div>
-              <div className="dt-body">
-                {t.dets.map(d => (
-                  <div
-                    key={d.id}
-                    className={'dt-row' + (d.tone ? ` dt-row--${d.tone}` : '')}
-                    onClick={() => d.st === 'TRACK' && !d.confirmed && onConfirm(d.numericId, d.id)}
-                    title={d.st === 'TRACK' && !d.confirmed ? 'Click to confirm target' : undefined}
-                    style={{ cursor: d.st === 'TRACK' && !d.confirmed ? 'pointer' : 'default' }}
-                  >
-                    <span className="dt-id">{d.id}</span>
-                    <span>{d.cls}</span>
-                    <span className="r mono">{d.conf.toFixed(2)}</span>
-                    <span className="r mono">{isNaN(d.rng) ? '---' : d.rng.toFixed(1)}</span>
-                    <span className="r mono">{isNaN(d.brg) ? '---' : String(d.brg).padStart(3, '0')}</span>
-                    <span className={d.allegiance ? `dt-iff dt-iff--${d.allegiance}` : 'dt-iff'}>
-                      {d.allegiance ? d.allegiance.toUpperCase() : '---'}
-                    </span>
-                    <span className="dt-st">{d.confirmed ? 'CONFIRMED' : d.st}</span>
-                  </div>
-                ))}
-              </div>
+          <h4>DETECTIONS <em>{tracked} ACTIVE</em></h4>
+          <div className="dtable">
+            <div className="dt-head">
+              <span>TRACK ID</span>
+              <span>CLASS</span>
+              <span className="r">CONF</span>
+              <span className="r">RNG·M</span>
+              <span className="r">BRG</span>
+              <span>IFF</span>
+              <span>STATUS</span>
             </div>
-          ) : (
-            <div className="recon">
-              <div className="fig" style={{ flex: 1 }}>
-                <div className="grid-bg" />
+            <div className="dt-body">
+              {t.dets.map(d => (
                 <div
-                  className="hatch"
-                  style={{ position: 'absolute', inset: '1px' }}
-                  data-cap={t.recon.status === 'ready' ? 'GAUSSIAN SPLAT\nREADY · FLY-THROUGH ARMED' : 'GAUSSIAN SPLAT\nTRAINING IN PROGRESS'}
-                />
-                <div className="corner tl" /><div className="corner tr" />
-                <div className="corner bl" /><div className="corner br" />
-                <div className="fig-val">{t.recon.status === 'ready' ? '◆ SPLAT READY' : '◈ TRAINING'}</div>
-              </div>
-              {t.recon.status === 'ready' && (
-                <div className="mini-stat">
-                  <div className="ms">FRAMES<b>{t.recon.frames || 220}</b></div>
-                  <div className="ms">POSES<b className="amber">VSLAM</b></div>
-                  <div className="ms">RENDER<b className="green">READY</b></div>
+                  key={d.id}
+                  className={'dt-row' + (d.tone ? ` dt-row--${d.tone}` : '')}
+                  onClick={() => d.st === 'TRACK' && !d.confirmed && onConfirm(d.numericId, d.id)}
+                  title={d.st === 'TRACK' && !d.confirmed ? 'Click to confirm target' : undefined}
+                  style={{ cursor: d.st === 'TRACK' && !d.confirmed ? 'pointer' : 'default' }}
+                >
+                  <span className="dt-id">{d.id}</span>
+                  <span>{d.cls}</span>
+                  <span className="r mono">{d.conf.toFixed(2)}</span>
+                  <span className="r mono">{isNaN(d.rng) ? '---' : d.rng.toFixed(1)}</span>
+                  <span className="r mono">{isNaN(d.brg) ? '---' : String(d.brg).padStart(3, '0')}</span>
+                  <span className={d.allegiance ? `dt-iff dt-iff--${d.allegiance}` : 'dt-iff'}>
+                    {d.allegiance ? d.allegiance.toUpperCase() : '---'}
+                  </span>
+                  <span className="dt-st">{d.confirmed ? 'CONFIRMED' : d.st}</span>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="slam-windows">
-        <div className={`slam-window slam-window--frame${frameMinimized ? ' slam-window--collapsed' : ''}`}>
-          <div className="sw-head">
-            <span>ANNOTATED SLAM FRAME</span>
-            <div className="sw-head-actions">
-              <em>{annotatedFeed ? `#${annotatedFeed.seq}` : 'NO FRAME'}</em>
-              <button
-                type="button"
-                className="sw-toggle"
-                onClick={() => setFrameMinimized(v => !v)}
-                aria-expanded={!frameMinimized}
-                aria-label={frameMinimized ? 'Expand annotated SLAM frame panel' : 'Minimize annotated SLAM frame panel'}
-                title={frameMinimized ? 'Expand' : 'Minimize'}
-              >
-                {frameMinimized ? '+' : '-'}
-              </button>
+              ))}
             </div>
           </div>
-          {!frameMinimized && (
-            <div className="sw-frame">
-              {annotatedFeed ? (
-                <LiveFrameCanvas frame={annotatedFeed} className="sw-canvas" fit="contain" />
-              ) : (
-                <div className="hatch" data-cap={'WAITING\n/slam/tracked_image/compressed'} />
-              )}
-            </div>
-          )}
-        </div>
-        <div className={`slam-window slam-window--diag${bridgeMinimized ? ' slam-window--collapsed' : ''}`}>
-          <div className="sw-head">
-            <span>SLAM BRIDGE</span>
-            <div className="sw-head-actions">
-              <em>{t.wsConnected ? 'BUS UP' : 'BUS DOWN'}</em>
-              <button
-                type="button"
-                className="sw-toggle"
-                onClick={() => setBridgeMinimized(v => !v)}
-                aria-expanded={!bridgeMinimized}
-                aria-label={bridgeMinimized ? 'Expand SLAM bridge panel' : 'Minimize SLAM bridge panel'}
-                title={bridgeMinimized ? 'Expand' : 'Minimize'}
-              >
-                {bridgeMinimized ? '+' : '-'}
-              </button>
-            </div>
-          </div>
-          {!bridgeMinimized && (
-            <div className="sw-diag-grid">
-              <div><span>TRACKING</span><b>{t.slamStatus}</b></div>
-              <div><span>CAM FRAMES</span><b>{t.slamDiagnostics.cameraFrames}</b></div>
-              <div><span>SLAM FRAMES</span><b>{t.slamDiagnostics.annotatedFrames}</b></div>
-              <div><span>DROPPED</span><b>{t.slamDiagnostics.droppedFrames}</b></div>
-              <div><span>QUEUE</span><b>{t.slamDiagnostics.queueDepth}</b></div>
-              <div><span>POSE</span><b>{t.pose.x.toFixed(1)}, {t.pose.y.toFixed(1)}, {t.pose.z.toFixed(1)}</b></div>
-              <div><span>ODOM SPEED</span><b>{t.vel.toFixed(2)} m/s</b></div>
-              <div><span>PATH POSES</span><b>{t.slamPath.length}</b></div>
-              <div><span>MAP POINTS</span><b>{t.slamPointCloudTotal || t.slamPointCloud.length}</b></div>
-            </div>
-          )}
         </div>
       </div>
 

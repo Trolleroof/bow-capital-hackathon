@@ -90,6 +90,102 @@ function sampleNormal(rand: () => number): number {
   return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
 }
 
+function pointInsideObstacle(x: number, y: number, obs: Obstacle): boolean {
+  if (obs.kind === 'cylinder') {
+    const r = obs.sx + AGENT_RADIUS
+    const dx = x - obs.cx
+    const dy = y - obs.cy
+    return dx * dx + dy * dy < r * r
+  }
+  const hx = obs.sx + AGENT_RADIUS
+  const hy = obs.sy + AGENT_RADIUS
+  return Math.abs(x - obs.cx) < hx && Math.abs(y - obs.cy) < hy
+}
+
+function segmentHitObstacle(
+  sx: number,
+  sy: number,
+  ex: number,
+  ey: number,
+  obs: Obstacle,
+): number | null {
+  const dx = ex - sx
+  const dy = ey - sy
+  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return null
+  if (pointInsideObstacle(sx, sy, obs)) return null
+
+  if (obs.kind === 'cylinder') {
+    const r = obs.sx + AGENT_RADIUS
+    const ox = sx - obs.cx
+    const oy = sy - obs.cy
+    const a = dx * dx + dy * dy
+    const b = 2 * (ox * dx + oy * dy)
+    const c = ox * ox + oy * oy - r * r
+    const disc = b * b - 4 * a * c
+    if (disc < 0) return null
+    const root = Math.sqrt(disc)
+    const t0 = (-b - root) / (2 * a)
+    const t1 = (-b + root) / (2 * a)
+    if (t1 < 0 || t0 > 1) return null
+    return Math.max(0, t0)
+  }
+
+  const minX = obs.cx - obs.sx - AGENT_RADIUS
+  const maxX = obs.cx + obs.sx + AGENT_RADIUS
+  const minY = obs.cy - obs.sy - AGENT_RADIUS
+  const maxY = obs.cy + obs.sy + AGENT_RADIUS
+  let tEnter = 0
+  let tExit = 1
+
+  const applySlab = (start: number, delta: number, min: number, max: number) => {
+    if (Math.abs(delta) < 1e-9) return start >= min && start <= max
+    let a = (min - start) / delta
+    let b = (max - start) / delta
+    if (a > b) [a, b] = [b, a]
+    tEnter = Math.max(tEnter, a)
+    tExit = Math.min(tExit, b)
+    return tEnter <= tExit
+  }
+
+  if (!applySlab(sx, dx, minX, maxX)) return null
+  if (!applySlab(sy, dy, minY, maxY)) return null
+  if (tExit < 0 || tEnter > 1) return null
+  return Math.max(0, tEnter)
+}
+
+function pushOutOfObstacle(px: number, py: number, obs: Obstacle): [number, number, boolean] {
+  if (obs.kind === 'cylinder') {
+    const r = obs.sx + AGENT_RADIUS
+    let dx = px - obs.cx
+    let dy = py - obs.cy
+    const d2 = dx * dx + dy * dy
+    if (d2 < r * r) {
+      let d = Math.sqrt(d2)
+      if (d < 1e-5) {
+        dx = 1
+        dy = 0
+        d = 1
+      }
+      return [obs.cx + (dx / d) * r, obs.cy + (dy / d) * r, true]
+    }
+    return [px, py, false]
+  }
+
+  const hx = obs.sx + AGENT_RADIUS
+  const hy = obs.sy + AGENT_RADIUS
+  const dx = px - obs.cx
+  const dy = py - obs.cy
+  if (Math.abs(dx) < hx && Math.abs(dy) < hy) {
+    const penX = hx - Math.abs(dx)
+    const penY = hy - Math.abs(dy)
+    if (penX < penY) {
+      return [obs.cx + (dx >= 0 ? hx : -hx), py, true]
+    }
+    return [px, obs.cy + (dy >= 0 ? hy : -hy), true]
+  }
+  return [px, py, false]
+}
+
 export class SwarmEnv {
   readonly n: number
   readonly k = K_NEIGHBORS
@@ -139,6 +235,37 @@ export class SwarmEnv {
   t = 0
 
   private rand: () => number
+
+  private resolveObstacleMotion(sx: number, sy: number, ex: number, ey: number): [number, number] {
+    if (this.obstacles.length === 0) return [ex, ey]
+
+    let hitT = Infinity
+    for (const obs of this.obstacles) {
+      const t = segmentHitObstacle(sx, sy, ex, ey, obs)
+      if (t !== null && t < hitT) hitT = t
+    }
+
+    let px = ex
+    let py = ey
+    if (hitT !== Infinity) {
+      const stopT = Math.max(0, hitT - 1e-4)
+      px = sx + (ex - sx) * stopT
+      py = sy + (ey - sy) * stopT
+    }
+
+    for (let pass = 0; pass < 2; pass++) {
+      let stillHit = false
+      for (const obs of this.obstacles) {
+        const [nx, ny, hit] = pushOutOfObstacle(px, py, obs)
+        px = nx
+        py = ny
+        stillHit ||= hit
+      }
+      if (!stillHit) break
+    }
+
+    return [px, py]
+  }
 
   constructor(
     maxSteps = 400,
@@ -368,53 +495,20 @@ export class SwarmEnv {
       this.vel[i * 2 + 1] = ay
 
       if (this.alive[i]) {
+        const startX = this.pos[i * 2]
+        const startY = this.pos[i * 2 + 1]
         // pos += action * MAX_SPEED * DT + wind_drift, then clip to world bounds
-        let px = this.pos[i * 2] + ax * MAX_SPEED * DT + this.windX
-        let py = this.pos[i * 2 + 1] + ay * MAX_SPEED * DT + this.windY
+        let px = startX + ax * MAX_SPEED * DT + this.windX
+        let py = startY + ay * MAX_SPEED * DT + this.windY
         if (px < -bound) px = -bound
         else if (px > bound) px = bound
         if (py < -bound) py = -bound
         else if (py > bound) py = bound
-        // hard push-out against scenario obstacles (mirrors env.py exactly)
+        // Swept collision blocks fast agents from tunneling through thin walls.
         if (this.obstacles.length > 0) {
-          for (let pass = 0; pass < 2; pass++) {
-            let stillHit = false
-            for (const obs of this.obstacles) {
-              if (obs.kind === 'cylinder') {
-                const r = obs.sx + AGENT_RADIUS
-                let dx = px - obs.cx
-                let dy = py - obs.cy
-                const d2 = dx * dx + dy * dy
-                if (d2 < r * r) {
-                  let d = Math.sqrt(d2)
-                  if (d < 1e-5) {
-                    dx = 1
-                    dy = 0
-                    d = 1
-                  }
-                  px = obs.cx + (dx / d) * r
-                  py = obs.cy + (dy / d) * r
-                  stillHit = true
-                }
-              } else {
-                const hx = obs.sx + AGENT_RADIUS
-                const hy = obs.sy + AGENT_RADIUS
-                const dx = px - obs.cx
-                const dy = py - obs.cy
-                if (Math.abs(dx) < hx && Math.abs(dy) < hy) {
-                  const penX = hx - Math.abs(dx)
-                  const penY = hy - Math.abs(dy)
-                  if (penX < penY) {
-                    px = obs.cx + (dx >= 0 ? hx : -hx)
-                  } else {
-                    py = obs.cy + (dy >= 0 ? hy : -hy)
-                  }
-                  stillHit = true
-                }
-              }
-            }
-            if (!stillHit) break
-          }
+          const resolved = this.resolveObstacleMotion(startX, startY, px, py)
+          px = resolved[0]
+          py = resolved[1]
           if (px < -bound) px = -bound
           else if (px > bound) px = bound
           if (py < -bound) py = -bound

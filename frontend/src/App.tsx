@@ -3,16 +3,7 @@ import './App.css'
 import CompositeScenePanel from './panels/CompositeScenePanel'
 import GymScenarioStage from './gym/GymScenarioStage'
 import { getScenarioById, scenarios } from './gym/scenarios'
-<<<<<<< HEAD
 import { CombatOS } from './combatos/CombatOS'
-
-type View = 'sim' | 'gym' | 'combatos'
-
-function getInitialView(): View {
-  if (window.location.hash === '#gym') return 'gym'
-  if (window.location.hash === '#combatos') return 'combatos'
-  return 'sim'
-=======
 import {
   checkPolicyExists,
   setActiveEnvId,
@@ -28,6 +19,7 @@ type AppRoute =
   | { view: 'gym-registry' }
   | { view: 'gym-env'; envId: string }
   | { view: 'sim' }
+  | { view: 'combatos' }
 
 function parseRoute(): AppRoute {
   const raw = window.location.hash.replace(/^#/, '')
@@ -37,13 +29,14 @@ function parseRoute(): AppRoute {
     return { view: 'gym-env', envId: envId || scenarios[0].id }
   }
   if (raw === 'sim') return { view: 'sim' }
+  if (raw === 'combatos') return { view: 'combatos' }
   return { view: 'gym-registry' }
->>>>>>> 56a396ff1e698cdfb4e4f56d776fc8ac5ea88e0a
 }
 
 function pushHash(route: AppRoute) {
   if (route.view === 'gym-registry') window.location.hash = 'gym'
   else if (route.view === 'gym-env') window.location.hash = `gym/${route.envId}`
+  else if (route.view === 'combatos') window.location.hash = 'combatos'
   else window.location.hash = 'sim'
 }
 
@@ -70,7 +63,7 @@ function App() {
 
   // ── Hash-driven routing ──────────────────────────────────────────────────
   useEffect(() => {
-    // #19 — fresh load always lands on #gym, not sim.
+    // Fresh load always lands on #gym, not sim.
     if (!window.location.hash || window.location.hash === '#') {
       window.location.hash = 'gym'
     }
@@ -79,11 +72,6 @@ function App() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-<<<<<<< HEAD
-  const switchView = (nextView: View) => {
-    window.location.hash = nextView === 'gym' ? 'gym' : nextView === 'combatos' ? 'combatos' : 'sim'
-    setView(nextView)
-=======
   // ── Probe checkpoints on mount ───────────────────────────────────────────
   useEffect(() => {
     scenarios.forEach(async (s) => {
@@ -100,7 +88,7 @@ function App() {
   )
   const simAllowed = hasAnyReadyPolicy || ALLOW_HEURISTIC
 
-  // ── #23 — guard: redirect sim → gym if policy gate blocks access ─────────
+  // ── Guard: redirect sim → gym if policy gate blocks access ───────────────
   useEffect(() => {
     if (route.view === 'sim' && !simAllowed) {
       showToast('Train a policy in Gym first.')
@@ -114,24 +102,16 @@ function App() {
     setToast(msg)
     if (toastTimer.current) clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(null), 4000)
->>>>>>> 56a396ff1e698cdfb4e4f56d776fc8ac5ea88e0a
   }
 
   // ── Navigation ───────────────────────────────────────────────────────────
 
-<<<<<<< HEAD
-  if (view === 'combatos') {
-    return <CombatOS />
-  }
-
-=======
   const goToRegistry = () => {
     const next: AppRoute = { view: 'gym-registry' }
     pushHash(next)
     setRoute(next)
   }
 
-  /** #18 — click a card → fullscreen gym env at #gym/<envId>. */
   const enterGymEnv = (envId: string) => {
     setSelectedEnvId(envId)
     const next: AppRoute = { view: 'gym-env', envId }
@@ -139,14 +119,12 @@ function App() {
     setRoute(next)
   }
 
-  /** #19 / #23 — attempt to enter Mission Sim. */
   const goToSim = () => {
     if (!simAllowed) {
       showToast('Train a policy in Gym first.')
       return
     }
 
-    // Prefer the env that is currently active in gym; fall back to first ready.
     const activeEnvId =
       route.view === 'gym-env' ? route.envId : selectedEnvId
     const chosenEnvId =
@@ -155,8 +133,6 @@ function App() {
         : (scenarios.find((s) => policyStore[s.id] === 'ready')?.id ??
           activeEnvId)
 
-    // Set module-level env ID *before* CompositeScenePanel mounts so its
-    // zero-arg loadPolicy() call resolves to the correct checkpoint (#23).
     setActiveEnvId(chosenEnvId)
     setSimEnvId(chosenEnvId)
     setSelectedEnvId(chosenEnvId)
@@ -166,6 +142,17 @@ function App() {
     setRoute(next)
   }
 
+  const goToCombatOS = () => {
+    const next: AppRoute = { view: 'combatos' }
+    pushHash(next)
+    setRoute(next)
+  }
+
+  // ── Render: CombatOS (full takeover, no app-shell chrome) ────────────────
+  if (route.view === 'combatos') {
+    return <CombatOS />
+  }
+
   // ── Derived ──────────────────────────────────────────────────────────────
   const gymFullEnvId =
     route.view === 'gym-env' ? route.envId : selectedEnvId
@@ -173,10 +160,8 @@ function App() {
   const registryEnv = getScenarioById(selectedEnvId)
 
   // ── Shared top-nav ───────────────────────────────────────────────────────
->>>>>>> 56a396ff1e698cdfb4e4f56d776fc8ac5ea88e0a
   const nav = (
     <nav className="top-nav" aria-label="Primary">
-      {/* #19 — disabled + tooltip until a policy is ready */}
       <button
         type="button"
         className={route.view === 'sim' ? 'is-active' : undefined}
@@ -188,21 +173,21 @@ function App() {
       </button>
       <button
         type="button"
-        className={route.view !== 'sim' ? 'is-active' : undefined}
+        className={route.view !== 'sim' && route.view !== 'combatos' ? 'is-active' : undefined}
         onClick={goToRegistry}
       >
         Gym Environments
       </button>
       <button
         type="button"
-        onClick={() => switchView('combatos')}
+        onClick={goToCombatOS}
       >
         CombatOS
       </button>
     </nav>
   )
 
-  // ── Render: fullscreen gym environment (#18) ─────────────────────────────
+  // ── Render: fullscreen gym environment ───────────────────────────────────
   if (route.view === 'gym-env') {
     return (
       <main className="app-shell app-shell--gym-full">
@@ -211,7 +196,6 @@ function App() {
           className="gym-scene-full"
           aria-label={`${gymEnv.name} training environment`}
         >
-          {/* Slim chrome — single back button, no sidebar essays (#18) */}
           <div className="gym-scene-full-nav">
             <button
               type="button"
@@ -233,11 +217,9 @@ function App() {
                   : gymEnv.label}
               </em>
             </div>
-            {/* Track B slot: <TrainPolicyPanel envId={gymEnv.id} status={policyStore[gymEnv.id]} /> */}
             <div className="gym-scene-full-right">{nav}</div>
           </div>
 
-          {/* Full-viewport 3-D scene matching sim-viewport-full treatment */}
           <GymScenarioStage key={gymEnv.id} scenario={gymEnv} />
         </section>
 
@@ -250,7 +232,7 @@ function App() {
     )
   }
 
-  // ── Render: Mission Sim (#23) ────────────────────────────────────────────
+  // ── Render: Mission Sim ──────────────────────────────────────────────────
   if (route.view === 'sim' && simAllowed) {
     const simEnv = getScenarioById(simEnvId)
     const policyReady = policyStore[simEnvId] === 'ready'
@@ -261,7 +243,6 @@ function App() {
         <section className="sim-viewport-full" aria-label="Mission simulation">
           <div className="sim-viewport-nav">{nav}</div>
 
-          {/* Read-only badge: env + policy source (#23) */}
           <div className="sim-policy-badge" aria-label="Active policy info">
             <span className="sim-policy-env">{simEnv.name}</span>
             <em data-status={policyReady ? 'Ready' : 'Queued'}>
@@ -269,7 +250,6 @@ function App() {
             </em>
           </div>
 
-          {/* key={simEnvId} forces remount + fresh policy load on env change */}
           <CompositeScenePanel key={simEnvId} missionName={simEnv.name} />
         </section>
 
@@ -282,7 +262,7 @@ function App() {
     )
   }
 
-  // ── Render: Gym registry (default / #gym) (#19) ──────────────────────────
+  // ── Render: Gym registry (default / #gym) ────────────────────────────────
   return (
     <main className="app-shell app-shell--gym">
       <div className="app-backdrop" />
@@ -291,7 +271,6 @@ function App() {
         <header className="app-header app-header--minimal">{nav}</header>
 
         <section className="gym-layout">
-          {/* Sidebar: environment card list */}
           <aside className="gym-sidebar panel-frame">
             <div className="panel-kicker">Environments</div>
 
@@ -313,7 +292,6 @@ function App() {
                   >
                     <span className="gym-card-topline">
                       <strong>{env.name}</strong>
-                      {/* #19 — show policy status on card */}
                       <em
                         data-status={
                           status === 'ready'
@@ -337,7 +315,6 @@ function App() {
             </div>
           </aside>
 
-          {/* Main stage: live preview */}
           <section className="gym-stage panel-frame">
             <div className="panel-head">
               <h2>{registryEnv.name}</h2>

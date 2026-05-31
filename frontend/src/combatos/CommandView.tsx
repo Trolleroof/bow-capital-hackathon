@@ -15,6 +15,8 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
   const [intel, setIntel] = useState<'det' | 'recon'>('det')
   const clock = 'T+' + String(Math.floor(t.sec / 60)).padStart(2, '0') + ':' + String(t.sec % 60).padStart(2, '0')
   const tracked = t.dets.filter(d => d.st !== 'LOST').length
+  const liveFeed = t.cameraFrame
+  const annotatedFeed = t.slamFrame
 
   return (
     <div className="cmd">
@@ -146,11 +148,15 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
 
         {/* stereo feed */}
         <div className="pnl feed-col">
-          <h4>STEREO FEED <em>L / R</em></h4>
+          <h4>OAK CAMERA STREAM <em>{liveFeed ? `#${liveFeed.seq}` : 'WAITING'}</em></h4>
           <div className="feed" onClick={onEnterOptic}>
-            <div className="scan-img" />
+            {liveFeed ? (
+              <img className="slam-live-img" src={liveFeed.data} alt="OAK-D Lite camera stream" />
+            ) : (
+              <div className="scan-img" />
+            )}
             <div className="horizon" />
-            <div className="subj-ph hatch" data-cap={'SUBJECT\nLIVE FEED'} />
+            {!liveFeed && <div className="subj-ph hatch" data-cap={'WAITING\nCAMERA FRAME'} />}
             <div className="det-box" style={{ left: '18%', top: '30%', width: '24%', height: '40%' }}>
               <div className="dl">PERSON · 0.71</div>
             </div>
@@ -158,7 +164,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
               <div className="dl">SUBJECT · 0.94</div>
             </div>
             <div className="feed-scan" />
-            <div className="feed-tag"><i />REC · 1280×720</div>
+            <div className="feed-tag"><i />REC · {liveFeed ? `${liveFeed.width}×${liveFeed.height}` : 'NO FRAME'}</div>
             <div className="enter">
               <div className="ico">⤢</div>
               <div className="lbl">ENTER OPTIC FEED</div>
@@ -231,6 +237,36 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
               )}
             </div>
           )}
+        </div>
+      </div>
+
+      <div className="slam-windows">
+        <div className="slam-window slam-window--frame">
+          <div className="sw-head">
+            <span>ANNOTATED SLAM FRAME</span>
+            <em>{annotatedFeed ? `#${annotatedFeed.seq}` : 'NO FRAME'}</em>
+          </div>
+          <div className="sw-frame">
+            {annotatedFeed ? (
+              <img src={annotatedFeed.data} alt="Annotated ORB-SLAM frame" />
+            ) : (
+              <div className="hatch" data-cap={'WAITING\n/slam/tracked_image'} />
+            )}
+          </div>
+        </div>
+        <div className="slam-window slam-window--diag">
+          <div className="sw-head">
+            <span>SLAM BRIDGE</span>
+            <em>{t.wsConnected ? 'BUS UP' : 'BUS DOWN'}</em>
+          </div>
+          <div className="sw-diag-grid">
+            <div><span>TRACKING</span><b>{t.slamStatus}</b></div>
+            <div><span>CAM FRAMES</span><b>{t.slamDiagnostics.cameraFrames}</b></div>
+            <div><span>SLAM FRAMES</span><b>{t.slamDiagnostics.annotatedFrames}</b></div>
+            <div><span>DROPPED</span><b>{t.slamDiagnostics.droppedFrames}</b></div>
+            <div><span>QUEUE</span><b>{t.slamDiagnostics.queueDepth}</b></div>
+            <div><span>POSE</span><b>{t.pose.x.toFixed(1)}, {t.pose.y.toFixed(1)}, {t.pose.z.toFixed(1)}</b></div>
+          </div>
         </div>
       </div>
 

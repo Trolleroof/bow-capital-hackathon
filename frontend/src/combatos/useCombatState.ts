@@ -2,6 +2,22 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 
 const ORCH_WS = 'ws://localhost:8000'
 
+export interface SlamFrame {
+  seq: number
+  t: number
+  width: number
+  height: number
+  source: string
+  data: string
+}
+
+export interface SlamDiagnostics {
+  droppedFrames: number
+  cameraFrames: number
+  annotatedFrames: number
+  queueDepth: number
+}
+
 export interface Detection {
   id: string
   cls: string
@@ -38,6 +54,10 @@ export interface TelemetryState {
   gps: boolean
   recon: { status: 'training' | 'ready'; frames: number }
   wsConnected: boolean
+  slamStatus: string
+  cameraFrame: SlamFrame | null
+  slamFrame: SlamFrame | null
+  slamDiagnostics: SlamDiagnostics
 }
 
 function j(v: number, a: number) { return +(v + (Math.random() - 0.5) * a) }
@@ -84,6 +104,27 @@ function initState(): TelemetryState {
     gps: false,
     recon: { status: 'training', frames: 0 },
     wsConnected: false,
+    slamStatus: 'NO_LOCK',
+    cameraFrame: null,
+    slamFrame: null,
+    slamDiagnostics: {
+      droppedFrames: 0,
+      cameraFrames: 0,
+      annotatedFrames: 0,
+      queueDepth: 0,
+    },
+  }
+}
+
+function toFrame(msg: Record<string, unknown>): SlamFrame | null {
+  if (typeof msg.data !== 'string') return null
+  return {
+    seq: typeof msg.seq === 'number' ? msg.seq : 0,
+    t: typeof msg.t === 'number' ? msg.t : 0,
+    width: typeof msg.width === 'number' ? msg.width : 0,
+    height: typeof msg.height === 'number' ? msg.height : 0,
+    source: typeof msg.source === 'string' ? msg.source : '',
+    data: `data:image/jpeg;base64,${msg.data}`,
   }
 }
 
@@ -216,7 +257,7 @@ export function useCombatState() {
                 bbox: [number, number, number, number]; is_target: boolean; confirmed: boolean
               }> = msg.objects ?? []
               if (objects.length > 0) {
-                const mapped: Detection[] = objects.map((o, i) => ({
+                const mapped: Detection[] = objects.map((o) => ({
                   id: `T-${String(o.id).padStart(4, '0')}`,
                   cls: o.cls.toUpperCase(),
                   conf: o.conf,
@@ -237,6 +278,25 @@ export function useCombatState() {
                 },
               }))
               if (msg.status === 'ready') pushLog('RECON', '3DGS splat ready', 'amber')
+            } else if (msg.topic === 'slam_status') {
+              const tracking = typeof msg.tracking === 'string' ? msg.tracking : 'NO_LOCK'
+              setT(p => ({ ...p, tracking, slamStatus: tracking }))
+            } else if (msg.topic === 'slam_diagnostics') {
+              setT(p => ({
+                ...p,
+                slamDiagnostics: {
+                  droppedFrames: msg.dropped_frames ?? p.slamDiagnostics.droppedFrames,
+                  cameraFrames: msg.camera_frames ?? p.slamDiagnostics.cameraFrames,
+                  annotatedFrames: msg.annotated_frames ?? p.slamDiagnostics.annotatedFrames,
+                  queueDepth: msg.queue_depth ?? p.slamDiagnostics.queueDepth,
+                },
+              }))
+            } else if (msg.topic === 'camera_frame') {
+              const frame = toFrame(msg)
+              if (frame) setT(p => ({ ...p, cameraFrame: frame }))
+            } else if (msg.topic === 'slam_frame') {
+              const frame = toFrame(msg)
+              if (frame) setT(p => ({ ...p, slamFrame: frame }))
             }
           } catch {
             // ignore parse errors

@@ -368,6 +368,123 @@
 .fig-legend span { display: flex; align-items: center; gap: 6px; }
 .fig-legend .lg { width: 14px; height: 0; border-top: 2px solid var(--amber); }
 .fig-legend .lg.dot { width: 7px; height: 7px; border: 0; border-radius: 50%; background: var(--amber-br); }
+.fig-legend .lg.cloud { width: 14px; height: 8px; border: 0; background: radial-gradient(circle, var(--amber-br) 1.4px, transparent 1.6px); background-size: 5px 5px; }
+.vslam-wrap,
+.vslam-scene,
+.vslam-scene canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.vslam-wrap { z-index: 0; }
+.vslam-scene::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(90,130,170,.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(90,130,170,.04) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+.vslam-chase {
+  position: absolute;
+  left: 11px;
+  top: 9px;
+  z-index: 3;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgba(63,163,230,.36);
+  background: rgba(7, 12, 19, .82);
+  color: var(--ink-dim);
+  font: 700 8.5px/1 var(--mono);
+  letter-spacing: .14em;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+.vslam-chase:hover,
+.vslam-chase:focus-visible {
+  border-color: rgba(117, 205, 255, .62);
+  color: #fff;
+  outline: none;
+}
+.vslam-chase.is-on {
+  border-color: rgba(55,184,164,.7);
+  color: var(--green);
+  box-shadow: 0 0 18px rgba(55,184,164,.12);
+}
+.vslam-pip {
+  position: absolute;
+  left: 11px;
+  bottom: 34px;
+  z-index: 3;
+  width: 164px;
+  border: 1px solid rgba(63,163,230,.3);
+  background: rgba(7, 12, 19, .86);
+  box-shadow: 0 12px 28px rgba(0,0,0,.34);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+.vslam-pip-head {
+  height: 23px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 7px;
+  border-bottom: 1px solid rgba(63,163,230,.22);
+  font-size: 7.5px;
+  letter-spacing: .14em;
+  color: var(--ink-mute);
+}
+.vslam-pip-head b {
+  max-width: 76px;
+  overflow: hidden;
+  color: var(--green);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vslam-map {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+}
+.map-land { fill: #111923; }
+.map-park { fill: rgba(55, 184, 164, .1); }
+.map-water { fill: rgba(63, 163, 230, .13); }
+.map-minor path {
+  fill: none;
+  stroke: rgba(132, 147, 168, .2);
+  stroke-width: 2.1;
+  stroke-linecap: round;
+}
+.map-major path {
+  fill: none;
+  stroke: rgba(205, 217, 232, .38);
+  stroke-width: 4.8;
+  stroke-linecap: round;
+}
+.map-blocks rect {
+  fill: rgba(205, 217, 232, .08);
+  stroke: rgba(132, 147, 168, .15);
+  stroke-width: .7;
+}
+.map-slam-path {
+  fill: none;
+  stroke: var(--green);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.map-pose circle {
+  fill: rgba(231, 106, 91, .22);
+  stroke: var(--red);
+  stroke-width: 1.5;
+}
+.map-pose path { fill: #fff; }
 
 /* feed */
 .feed {

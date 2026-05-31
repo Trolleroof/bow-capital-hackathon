@@ -91,6 +91,7 @@ MonocularMode::MonocularMode() :Node("mono_node_cpp")
     posePub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/slam/pose", 10);
     odomPub_ = this->create_publisher<nav_msgs::msg::Odometry>("/slam/odometry", 10);
     pathPub_ = this->create_publisher<nav_msgs::msg::Path>("/slam/path", 10);
+    pointCloudPub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/slam/point_cloud", 10);
 
     //* subscrbite to the image messages coming from the Python driver node
     subImgMsg_subscription_= this->create_subscription<sensor_msgs::msg::Image>(subImgMsgName, 1, std::bind(&MonocularMode::Img_callback, this, _1));
@@ -300,4 +301,66 @@ void MonocularMode::publishSLAMOutput(const Sophus::SE3f& Tcw, const rclcpp::Tim
     path_msg.header = pose_msg.header;
     path_msg.poses = poseHistory_;
     pathPub_->publish(path_msg);
+
+    publishPointCloud(stamp);
+}
+
+void MonocularMode::publishPointCloud(const rclcpp::Time& stamp)
+{
+    if (!pointCloudPub_ || !pAgent)
+        return;
+
+    pointCloudPublishCounter_++;
+    if (pointCloudPublishCounter_ % pointCloudPublishStride_ != 0)
+        return;
+
+    std::vector<ORB_SLAM3::MapPoint*> mapPoints = pAgent->GetAllMapPoints();
+    if (mapPoints.empty())
+        return;
+
+    size_t stride = std::max<size_t>(1, static_cast<size_t>(std::ceil(static_cast<double>(mapPoints.size()) / pointCloudMaxPoints_)));
+
+    sensor_msgs::msg::PointCloud2 cloud_msg;
+    cloud_msg.header.stamp = stamp;
+    cloud_msg.header.frame_id = "map";
+    cloud_msg.height = 1;
+    cloud_msg.is_bigendian = false;
+    cloud_msg.is_dense = false;
+    cloud_msg.point_step = 3 * sizeof(float);
+
+    sensor_msgs::msg::PointField field_x;
+    field_x.name = "x";
+    field_x.offset = 0;
+    field_x.datatype = sensor_msgs::msg::PointField::FLOAT32;
+    field_x.count = 1;
+    sensor_msgs::msg::PointField field_y = field_x;
+    field_y.name = "y";
+    field_y.offset = sizeof(float);
+    sensor_msgs::msg::PointField field_z = field_x;
+    field_z.name = "z";
+    field_z.offset = 2 * sizeof(float);
+    cloud_msg.fields = {field_x, field_y, field_z};
+
+    std::vector<float> packed;
+    packed.reserve(std::min(mapPoints.size(), pointCloudMaxPoints_) * 3);
+    for (size_t i = 0; i < mapPoints.size(); i += stride)
+    {
+        ORB_SLAM3::MapPoint* mapPoint = mapPoints[i];
+        if (!mapPoint || mapPoint->isBad())
+            continue;
+        Eigen::Vector3f pos = mapPoint->GetWorldPos();
+        if (!std::isfinite(pos.x()) || !std::isfinite(pos.y()) || !std::isfinite(pos.z()))
+            continue;
+        packed.push_back(pos.x());
+        packed.push_back(pos.y());
+        packed.push_back(pos.z());
+    }
+
+    cloud_msg.width = static_cast<uint32_t>(packed.size() / 3);
+    cloud_msg.row_step = cloud_msg.width * cloud_msg.point_step;
+    cloud_msg.data.resize(packed.size() * sizeof(float));
+    if (!packed.empty())
+        std::memcpy(cloud_msg.data.data(), packed.data(), cloud_msg.data.size());
+
+    pointCloudPub_->publish(cloud_msg);
 }

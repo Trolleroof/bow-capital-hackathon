@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
+import struct
 import threading
 import time
 from dataclasses import dataclass
@@ -16,7 +18,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import String
 
 
@@ -56,6 +58,7 @@ class CombatOSSlamBridge(Node):
         self.declare_parameter("pose_topic", "/slam/pose")
         self.declare_parameter("odom_topic", "/slam/odometry")
         self.declare_parameter("path_topic", "/slam/path")
+        self.declare_parameter("point_cloud_topic", "/slam/point_cloud")
         self.declare_parameter("status_topic", "/slam/status")
         self.declare_parameter("camera_topic", "/oak/left/image_rect")
         self.declare_parameter("right_camera_topic", "/oak/right/image_rect")
@@ -66,12 +69,14 @@ class CombatOSSlamBridge(Node):
         self.declare_parameter("video_fps", 8.0)
         self.declare_parameter("jpeg_quality", 70)
         self.declare_parameter("path_max_poses", 240)
+        self.declare_parameter("point_cloud_max_points", 2500)
         self.declare_parameter("queue_size", 96)
 
         self.orch_ws = self.get_parameter("orch_ws").value
         self.video_period = 1.0 / max(0.1, float(self.get_parameter("video_fps").value))
         self.jpeg_quality = max(20, min(95, int(self.get_parameter("jpeg_quality").value)))
         self.path_max_poses = max(1, int(self.get_parameter("path_max_poses").value))
+        self.point_cloud_max_points = max(1, int(self.get_parameter("point_cloud_max_points").value))
         self.tracking = "NO_LOCK"
         self.cv_bridge = CvBridge()
         self.stats = {
@@ -96,6 +101,7 @@ class CombatOSSlamBridge(Node):
         self.create_subscription(PoseStamped, self.get_parameter("pose_topic").value, self._on_pose, reliable_qos)
         self.create_subscription(Odometry, self.get_parameter("odom_topic").value, self._on_odom, reliable_qos)
         self.create_subscription(Path, self.get_parameter("path_topic").value, self._on_path, reliable_qos)
+        self.create_subscription(PointCloud2, self.get_parameter("point_cloud_topic").value, self._on_point_cloud, reliable_qos)
         self.create_subscription(String, self.get_parameter("status_topic").value, self._on_status, reliable_qos)
 
         if bool(self.get_parameter("enable_camera").value):
@@ -208,6 +214,42 @@ class CombatOSSlamBridge(Node):
                     }
                     for p in poses
                 ],
+            }
+        )
+
+    def _on_point_cloud(self, msg: PointCloud2) -> None:
+        field_offsets = {field.name: int(field.offset) for field in msg.fields}
+        if not {"x", "y", "z"}.issubset(field_offsets):
+            return
+        point_step = int(msg.point_step)
+        if point_step <= 0:
+            return
+        total_points = int(msg.width) * int(msg.height)
+        if total_points <= 0:
+            return
+
+        stride = max(1, math.ceil(total_points / self.point_cloud_max_points))
+        endian = ">" if msg.is_bigendian else "<"
+        data = bytes(msg.data)
+        points: list[dict[str, float]] = []
+        for idx in range(0, total_points, stride):
+            base = idx * point_step
+            try:
+                x = struct.unpack_from(endian + "f", data, base + field_offsets["x"])[0]
+                y = struct.unpack_from(endian + "f", data, base + field_offsets["y"])[0]
+                z = struct.unpack_from(endian + "f", data, base + field_offsets["z"])[0]
+            except struct.error:
+                break
+            if math.isfinite(x) and math.isfinite(y) and math.isfinite(z):
+                points.append({"x": float(x), "y": float(y), "z": float(z)})
+
+        self._enqueue(
+            {
+                "topic": "slam_point_cloud",
+                "t": stamp_seconds(msg.header.stamp),
+                "frame_id": msg.header.frame_id,
+                "points": points,
+                "total_points": total_points,
             }
         )
 

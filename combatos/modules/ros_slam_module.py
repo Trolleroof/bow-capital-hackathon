@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import math
+import struct
 import threading
 import time
 from dataclasses import dataclass
@@ -46,6 +48,7 @@ class RosSlamModule(AbstractModule):
         self._stop = threading.Event()
         self._tracking = "NO_LOCK"
         self._path_max = max(1, config.ROS_SLAM_PATH_MAX_POSES)
+        self._point_cloud_max = max(1, config.ROS_SLAM_POINT_CLOUD_MAX_POINTS)
         self._video_period = 1.0 / max(0.1, config.ROS_SLAM_VIDEO_FPS)
         self._jpeg_quality = max(20, min(95, config.ROS_SLAM_JPEG_QUALITY))
         self._image_transport = config.ROS_SLAM_IMAGE_TRANSPORT.lower()
@@ -107,7 +110,7 @@ class RosSlamModule(AbstractModule):
             from nav_msgs.msg import Odometry, Path
             from rclpy.node import Node
             from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-            from sensor_msgs.msg import CompressedImage, Image
+            from sensor_msgs.msg import CompressedImage, Image, PointCloud2
             from std_msgs.msg import String
         except Exception as exc:
             log.error("[ros_slam] ROS2 dependencies unavailable: %s", exc)
@@ -179,6 +182,37 @@ class RosSlamModule(AbstractModule):
                 ],
             })
 
+        def on_point_cloud(msg: PointCloud2) -> None:
+            field_offsets = {field.name: int(field.offset) for field in msg.fields}
+            if not {"x", "y", "z"}.issubset(field_offsets):
+                return
+            point_step = int(msg.point_step)
+            if point_step <= 0:
+                return
+            total_points = int(msg.width) * int(msg.height)
+            if total_points <= 0:
+                return
+            stride = max(1, math.ceil(total_points / self._point_cloud_max))
+            data = bytes(msg.data)
+            endian = ">" if msg.is_bigendian else "<"
+            points: list[dict[str, float]] = []
+            for idx in range(0, total_points, stride):
+                base = idx * point_step
+                try:
+                    x = struct.unpack_from(endian + "f", data, base + field_offsets["x"])[0]
+                    y = struct.unpack_from(endian + "f", data, base + field_offsets["y"])[0]
+                    z = struct.unpack_from(endian + "f", data, base + field_offsets["z"])[0]
+                except struct.error:
+                    break
+                if math.isfinite(x) and math.isfinite(y) and math.isfinite(z):
+                    points.append({"x": float(x), "y": float(y), "z": float(z)})
+            self._enqueue("slam_point_cloud", {
+                "t": _stamp_seconds(msg.header.stamp),
+                "frame_id": msg.header.frame_id,
+                "points": points,
+                "total_points": total_points,
+            })
+
         def on_status(msg: String) -> None:
             self._tracking = msg.data or "NO_LOCK"
             self._enqueue_status()
@@ -244,6 +278,7 @@ class RosSlamModule(AbstractModule):
         node.create_subscription(PoseStamped, config.ROS_SLAM_POSE_TOPIC, on_pose, reliable_qos)
         node.create_subscription(Odometry, config.ROS_SLAM_ODOM_TOPIC, on_odom, reliable_qos)
         node.create_subscription(Path, config.ROS_SLAM_PATH_TOPIC, on_path, reliable_qos)
+        node.create_subscription(PointCloud2, config.ROS_SLAM_POINT_CLOUD_TOPIC, on_point_cloud, reliable_qos)
         node.create_subscription(String, config.ROS_SLAM_STATUS_TOPIC, on_status, reliable_qos)
         image_msg_type = CompressedImage if self._image_transport == "compressed" else Image
         image_callback = on_compressed_image if self._image_transport == "compressed" else on_raw_image
@@ -264,8 +299,11 @@ class RosSlamModule(AbstractModule):
         node.create_timer(1.0, self._enqueue_status)
 
         log.info(
-            "[ros_slam] subscribed pose=%s camera=%s annotated=%s transport=%s",
+            "[ros_slam] subscribed pose=%s odom=%s path=%s cloud=%s camera=%s annotated=%s transport=%s",
             config.ROS_SLAM_POSE_TOPIC,
+            config.ROS_SLAM_ODOM_TOPIC,
+            config.ROS_SLAM_PATH_TOPIC,
+            config.ROS_SLAM_POINT_CLOUD_TOPIC,
             config.ROS_SLAM_CAMERA_TOPIC,
             config.ROS_SLAM_ANNOTATED_TOPIC,
             self._image_transport,

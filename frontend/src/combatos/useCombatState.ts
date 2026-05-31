@@ -8,6 +8,9 @@ const CONTROL_TOPICS = [
   'recon',
   'slam_status',
   'slam_diagnostics',
+  'slam_odometry',
+  'slam_path',
+  'slam_point_cloud',
 ] as const
 const IMAGE_TOPICS = [
   'camera_frame',
@@ -30,6 +33,29 @@ export interface SlamDiagnostics {
   cameraFrames: number
   annotatedFrames: number
   queueDepth: number
+}
+
+export interface SlamPoint {
+  x: number
+  y: number
+  z: number
+}
+
+export interface SlamPose extends SlamPoint {
+  t?: number
+  qx?: number
+  qy?: number
+  qz?: number
+  qw?: number
+}
+
+export interface SlamOdometry extends SlamPose {
+  vx: number
+  vy: number
+  vz: number
+  wx: number
+  wy: number
+  wz: number
 }
 
 export interface Detection {
@@ -74,6 +100,10 @@ export interface TelemetryState {
   cameraFrame: SlamFrame | null
   slamFrame: SlamFrame | null
   slamDiagnostics: SlamDiagnostics
+  slamOdometry: SlamOdometry | null
+  slamPath: SlamPose[]
+  slamPointCloud: SlamPoint[]
+  slamPointCloudTotal: number
 }
 
 function base64ToBlob(data: string, mime = 'image/jpeg') {
@@ -117,6 +147,10 @@ function initState(): TelemetryState {
       annotatedFrames: 0,
       queueDepth: 0,
     },
+    slamOdometry: null,
+    slamPath: [],
+    slamPointCloud: [],
+    slamPointCloudTotal: 0,
   }
 }
 
@@ -129,6 +163,34 @@ function toFrame(msg: Record<string, unknown>): SlamFrame | null {
     height: typeof msg.height === 'number' ? msg.height : 0,
     source: typeof msg.source === 'string' ? msg.source : '',
     data: base64ToBlob(msg.data),
+  }
+}
+
+function toNumber(value: unknown, fallback = 0) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function toSlamPoint(value: unknown): SlamPoint | null {
+  if (!value || typeof value !== 'object') return null
+  const point = value as Record<string, unknown>
+  const x = toNumber(point.x, NaN)
+  const y = toNumber(point.y, NaN)
+  const z = toNumber(point.z, NaN)
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null
+  return { x, y, z }
+}
+
+function toSlamPose(value: unknown): SlamPose | null {
+  const point = toSlamPoint(value)
+  if (!point || !value || typeof value !== 'object') return null
+  const pose = value as Record<string, unknown>
+  return {
+    ...point,
+    t: typeof pose.t === 'number' ? pose.t : undefined,
+    qx: typeof pose.qx === 'number' ? pose.qx : undefined,
+    qy: typeof pose.qy === 'number' ? pose.qy : undefined,
+    qz: typeof pose.qz === 'number' ? pose.qz : undefined,
+    qw: typeof pose.qw === 'number' ? pose.qw : undefined,
   }
 }
 
@@ -238,6 +300,44 @@ export function useCombatState() {
                 const tracking = typeof msg.tracking === 'string' ? msg.tracking : p.slamStatus
                 return { ...p, tracking, slamStatus: tracking }
               })
+            } else if (msg.topic === 'slam_odometry') {
+              const odomPose = toSlamPose(msg)
+              if (odomPose) {
+                const vx = toNumber(msg.vx)
+                const vy = toNumber(msg.vy)
+                const vz = toNumber(msg.vz)
+                const wx = toNumber(msg.wx)
+                const wy = toNumber(msg.wy)
+                const wz = toNumber(msg.wz)
+                setT(p => ({
+                  ...p,
+                  pose: { x: odomPose.x, y: odomPose.y, z: odomPose.z },
+                  vel: Math.hypot(vx, vy, vz),
+                  slamOdometry: { ...odomPose, vx, vy, vz, wx, wy, wz },
+                }))
+              }
+            } else if (msg.topic === 'slam_path') {
+              const rawPoses: unknown[] = Array.isArray(msg.poses) ? msg.poses : []
+              const poses = rawPoses
+                .map(toSlamPose)
+                .filter((pose): pose is SlamPose => Boolean(pose))
+              if (poses.length > 0) {
+                setT(p => ({
+                  ...p,
+                  slamPath: poses,
+                  traj: poses.slice(-80).map((pose: SlamPose) => ({ x: pose.x * 10, y: pose.z * 10 })),
+                }))
+              }
+            } else if (msg.topic === 'slam_point_cloud') {
+              const rawPoints: unknown[] = Array.isArray(msg.points) ? msg.points : []
+              const points = rawPoints
+                .map(toSlamPoint)
+                .filter((point): point is SlamPoint => Boolean(point))
+              setT(p => ({
+                ...p,
+                slamPointCloud: points,
+                slamPointCloudTotal: toNumber(msg.total_points, points.length),
+              }))
             } else if (msg.topic === 'slam_diagnostics') {
               setT(p => ({
                 ...p,

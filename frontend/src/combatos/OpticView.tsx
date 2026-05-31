@@ -171,10 +171,10 @@ export function OpticView({ t, onExit, onFollow, onConfirm, onRelease }: Props) 
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.repeat) return
-      if (e.key === 'f' || e.key === 'F') handleFollow()
-      else if (e.key === 'c' || e.key === 'C') handleConfirm()
-      else if (e.key === 'r' || e.key === 'R') handleRelease()
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return
+      if (e.key === 'f' || e.key === 'F') { e.preventDefault(); handleFollow() }
+      else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); handleConfirm() }
+      else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); handleRelease() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -219,21 +219,8 @@ export function OpticView({ t, onExit, onFollow, onConfirm, onRelease }: Props) 
         )}
       </div>
 
-      {primary && (
-        <div className="recticle-wrap">
-          <div className="rt-corner tl" /><div className="rt-corner tr" />
-          <div className="rt-corner bl" /><div className="rt-corner br" />
-          <div className="rt-fill" />
-          <div className="cross" />
-          {confirmedId == null && <div className="rt-scan" />}
-          <div className="rt-tag">
-            {confirmedId != null ? `CONFIRMED ${primary.id}` : `TRACKING ${primary.id}`}
-          </div>
-          <div className="rt-conf">{primary.conf.toFixed(2)}</div>
-        </div>
-      )}
 
-      <div className="kbd-legend">
+<div className="kbd-legend">
         <div className="kbd-row"><span className="kbd-key">F</span><span className="kbd-desc">FOLLOW TARGET</span></div>
         <div className="kbd-row"><span className="kbd-key">C</span><span className="kbd-desc">CONFIRM TARGET</span></div>
         <div className="kbd-row"><span className="kbd-key">R</span><span className="kbd-desc">RELEASE</span></div>

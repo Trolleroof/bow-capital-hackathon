@@ -1706,6 +1706,30 @@
   gap: 6px;
 }
 
+.menu-action {
+  flex-shrink: 0;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(8, 15, 23, 0.72);
+  color: var(--text);
+  font: 700 0.82rem/1 'Fira Code', monospace;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+.menu-action:hover,
+.menu-action:focus-visible {
+  border-color: rgba(113, 215, 255, 0.45);
+  background: rgba(113, 215, 255, 0.12);
+  color: var(--accent);
+}
+
 .menu-title {
   margin: 0;
   font: 800 2.2rem/1 'Sora', 'Fira Sans', sans-serif;
@@ -1870,6 +1894,27 @@
 
 .menu-card:hover .menu-card-cta {
   opacity: 1;
+}
+
+.menu-card-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.menu-card-cta--button {
+  min-height: 36px;
+  margin-top: 0;
+  padding: 0 12px;
+  border: 1px solid rgba(113, 215, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(113, 215, 255, 0.08);
+  cursor: pointer;
+}
+
+.menu-card-cta--button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
 }
 
 @media (max-width: 720px) {

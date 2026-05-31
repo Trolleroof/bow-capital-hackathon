@@ -3,78 +3,109 @@ import './App.css'
 import CompositeScenePanel from './panels/CompositeScenePanel'
 import GymScenarioStage, { ScenarioMiniPreview } from './gym/GymScenarioStage'
 import { getScenarioById, scenarios } from './gym/scenarios'
-import { checkPolicyExists, type PolicyStatus } from './swarm/policy'
+import { CombatOS } from './combatos/CombatOS'
+import {
+  checkPolicyExists,
+  setActiveEnvId,
+  type PolicyStatus,
+} from './swarm/policy'
+
+const ALLOW_HEURISTIC = true
 
 type AppRoute =
   | { view: 'menu' }
   | { view: 'gym'; envId: string }
   | { view: 'sim'; envId: string }
+  | { view: 'combatos' }
 
-function scenarioExists(envId: string): boolean {
-  return scenarios.some((scenario) => scenario.id === envId)
-}
+const scenarioExists = (envId: string) => getScenarioById(envId) != null
 
-function parseRoute(): AppRoute {
-  const raw = window.location.hash.replace(/^#/, '')
-  if (raw.startsWith('gym/')) {
-    const envId = raw.slice(4)
-    return { view: 'gym', envId: scenarioExists(envId) ? envId : scenarios[0].id }
+const parseRoute = (): AppRoute => {
+  const hash = window.location.hash.replace(/^#\/?/, '')
+  const [view, envId] = hash.split('/')
+
+  if (view === 'combatos') return { view: 'combatos' }
+
+  if (view === 'gym' && envId && scenarioExists(envId)) {
+    return { view: 'gym', envId }
   }
-  if (raw.startsWith('sim/')) {
-    const envId = raw.slice(4)
-    return { view: 'sim', envId: scenarioExists(envId) ? envId : scenarios[0].id }
+
+  if (view === 'sim' && envId && scenarioExists(envId)) {
+    return { view: 'sim', envId }
   }
+
+  if (view === 'sim') {
+    return { view: 'sim', envId: scenarios[0].id }
+  }
+
   return { view: 'menu' }
 }
 
-function setHashRoute(hash: string) {
+const setHashRoute = (hash: string) => {
   window.history.pushState(null, '', `#${hash}`)
 }
 
-function App() {
-  const [route, setRoute] = useState<AppRoute>(parseRoute)
+export default function App() {
+  const [route, setRoute] = useState<AppRoute>(() => parseRoute())
   const [policyStore, setPolicyStore] = useState<Record<string, PolicyStatus>>(
     () =>
       Object.fromEntries(
-        scenarios.map((scenario) => [scenario.id, 'not-trained' as PolicyStatus]),
-      ),
+        scenarios.map((scenario) => [
+          scenario.id,
+          'not-trained' as PolicyStatus,
+        ]),
+      ) as Record<string, PolicyStatus>,
   )
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | null>(null)
 
   useEffect(() => {
-    if (!window.location.hash || window.location.hash === '#') {
-      window.location.hash = 'menu'
+    if (!window.location.hash) {
+      setHashRoute('menu')
     }
+
     const onHashChange = () => setRoute(parseRoute())
     window.addEventListener('hashchange', onHashChange)
-    return () => window.removeEventListener('hashchange', onHashChange)
+    window.addEventListener('popstate', onHashChange)
+
+    return () => {
+      window.removeEventListener('hashchange', onHashChange)
+      window.removeEventListener('popstate', onHashChange)
+    }
   }, [])
 
   useEffect(() => {
-    let cancelled = false
-    void Promise.all(
-      scenarios.map(async (scenario) => [scenario.id, await checkPolicyExists(scenario.id)] as const),
-    ).then(results => {
-      if (cancelled) return
-      setPolicyStore(prev => {
-        const next = { ...prev }
-        for (const [envId, exists] of results) {
-          if (exists && next[envId] === 'not-trained') next[envId] = 'ready'
-        }
-        return next
-      })
+    let canceled = false
+
+    Promise.all(
+      scenarios.map(async (scenario) => {
+        const exists = await checkPolicyExists(scenario.id)
+        const status: PolicyStatus = exists ? 'ready' : 'not-trained'
+        return [scenario.id, status] as const
+      }),
+    ).then((entries) => {
+      if (!canceled) {
+        setPolicyStore(Object.fromEntries(entries) as Record<string, PolicyStatus>)
+      }
     })
+
     return () => {
-      cancelled = true
+      canceled = true
     }
   }, [])
 
-  function showToast(message: string) {
+  const showToast = (message: string) => {
     setToast(message)
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => setToast(null), 4000)
+
+    if (toastTimer.current != null) {
+      window.clearTimeout(toastTimer.current)
+    }
+
+    toastTimer.current = window.setTimeout(() => setToast(null), 2600)
   }
+
+  const simAllowedFor = (envId: string) =>
+    policyStore[envId] === 'ready' || ALLOW_HEURISTIC
 
   const enterMenu = () => {
     setHashRoute('menu')
@@ -87,153 +118,195 @@ function App() {
   }
 
   const enterSim = (envId: string) => {
+    if (!simAllowedFor(envId)) {
+      showToast('Train this environment first to unlock Mission Sim.')
+      return
+    }
+
+    setActiveEnvId(envId)
     setHashRoute(`sim/${envId}`)
     setRoute({ view: 'sim', envId })
   }
 
+  const enterCombatOS = () => {
+    setHashRoute('combatos')
+    setRoute({ view: 'combatos' })
+  }
+
   const handlePolicyReady = (envId: string) => {
-    setPolicyStore((prev) => ({ ...prev, [envId]: 'ready' }))
-    showToast(`${getScenarioById(envId).name}: policy exported`)
+    setPolicyStore((current) => ({ ...current, [envId]: 'ready' }))
   }
 
   const handleTrainingStart = (envId: string) => {
-    setPolicyStore((prev) => ({ ...prev, [envId]: 'training' }))
+    setPolicyStore((current) => ({ ...current, [envId]: 'training' }))
   }
 
   const handleTrainingError = (message: string) => {
     showToast(message)
   }
 
-  const scopedNav = (envId: string, active: 'gym' | 'sim') => (
-    <nav className="top-nav" aria-label="Primary">
-      <button
-        type="button"
-        className={active === 'gym' ? 'is-active' : undefined}
-        onClick={() => enterGym(envId)}
-      >
-        Gym
-      </button>
-      <button
-        type="button"
-        className={active === 'sim' ? 'is-active' : undefined}
-        onClick={() => enterSim(envId)}
-      >
-        Mission Sim
-      </button>
-    </nav>
-  )
+  const scopedNav = (envId: string, active: 'gym' | 'sim') => {
+    const simLocked = !simAllowedFor(envId)
+
+    return (
+      <div className="app-nav app-nav--scoped" aria-label="Scenario navigation">
+        <button
+          type="button"
+          className={`nav-pill ${active === 'gym' ? 'nav-pill--active' : ''}`}
+          onClick={() => enterGym(envId)}
+        >
+          Gym
+        </button>
+        <button
+          type="button"
+          className={`nav-pill ${active === 'sim' ? 'nav-pill--active' : ''}`}
+          onClick={() => enterSim(envId)}
+          disabled={simLocked}
+          title={simLocked ? 'Train this environment first.' : undefined}
+        >
+          Mission Sim
+        </button>
+        <button type="button" className="nav-pill" onClick={enterCombatOS}>
+          CombatOS
+        </button>
+      </div>
+    )
+  }
+
+  if (route.view === 'combatos') {
+    return <CombatOS />
+  }
 
   if (route.view === 'sim') {
-    const env = getScenarioById(route.envId)
-    const policyReady = policyStore[route.envId] === 'ready'
+    const env = getScenarioById(route.envId) ?? scenarios[0]
+    const policyReady = policyStore[env.id] === 'ready'
+    const controllerActive = policyReady || ALLOW_HEURISTIC
 
     return (
       <main className="app-shell app-shell--sim">
-        <div className="app-backdrop" />
-        <section className="sim-viewport-full" aria-label={`${env.name} mission simulation`}>
-          <header className="sim-top-bar">
-            <div className="sim-top-bar__left">
-              <div className="sim-policy-badge" aria-label="Active policy info">
-                <span className="sim-policy-badge__kicker">Mission</span>
-                <span className="sim-policy-env">{env.name}</span>
-                <em data-status={policyReady ? 'Ready' : 'Queued'}>
-                  {policyReady ? 'ONNX' : 'Policy required'}
-                </em>
-              </div>
-              <div className="sim-comms-badges" aria-label="Comms status">
-                <span>GPS: DENIED</span>
-                <span>LINK: NONE</span>
-                <span>LOCALIZED</span>
-              </div>
-            </div>
-            <div className="sim-viewport-nav">{scopedNav(route.envId, 'sim')}</div>
-          </header>
-          <CompositeScenePanel
-            key={route.envId}
-            envId={route.envId}
-            missionName={env.name}
-            policyEnabled={policyReady}
-          />
-        </section>
-        {toast && <div className="app-toast" role="status">{toast}</div>}
+        <div className="sim-top-bar">
+          <button type="button" className="sim-back-link" onClick={enterMenu}>
+            Back to gym menu
+          </button>
+          <div className="sim-title-block">
+            <span>Mission Sim</span>
+            <strong>{env.name}</strong>
+          </div>
+          {scopedNav(env.id, 'sim')}
+          <div
+            className={`sim-policy-badge ${
+              controllerActive ? 'sim-policy-badge--ready' : ''
+            }`}
+          >
+            <span className="sim-policy-badge__kicker">Controller</span>
+            <span>
+              {policyReady
+                ? 'Trained policy'
+                : ALLOW_HEURISTIC
+                  ? 'Task behavior'
+                  : 'Locked'}
+            </span>
+          </div>
+        </div>
+
+        {!policyReady && ALLOW_HEURISTIC ? (
+          <div className="sim-status-callout">
+            mission controller active - task behavior executing
+          </div>
+        ) : null}
+
+        <CompositeScenePanel
+          key={env.id}
+          envId={env.id}
+          missionName={env.name}
+          policyEnabled={controllerActive}
+        />
       </main>
     )
   }
 
   if (route.view === 'gym') {
-    const env = getScenarioById(route.envId)
-    const status = policyStore[route.envId]
+    const env = getScenarioById(route.envId) ?? scenarios[0]
 
     return (
       <main className="app-shell app-shell--gym-full">
-        <div className="app-backdrop" />
-        <section className="gym-scene-full" aria-label={`${env.name} training environment`}>
-          <div className="gym-scene-full-nav">
-            <button type="button" className="gym-back-btn" onClick={enterMenu}>
-              ← Environments
-            </button>
-            <div className="gym-scene-full-meta">
-              <span className="gym-scene-full-name">{env.name}</span>
-              <em data-status={status === 'ready' ? 'Ready' : status === 'training' ? 'Queued' : env.status}>
-                {status === 'ready' ? 'Policy ready' : status === 'training' ? 'Training...' : env.label}
-              </em>
-            </div>
-            <div className="gym-scene-full-right">{scopedNav(route.envId, 'gym')}</div>
+        <div className="gym-top-bar">
+          <button type="button" className="sim-back-link" onClick={enterMenu}>
+            Back to gym menu
+          </button>
+          <div className="sim-title-block">
+            <span>Training Gym</span>
+            <strong>{env.name}</strong>
           </div>
-          <GymScenarioStage
-            key={route.envId}
-            scenario={env}
-            policyStatus={status}
-            onPolicyReady={handlePolicyReady}
-            onTrainingStart={handleTrainingStart}
-            onTrainingError={handleTrainingError}
-          />
-        </section>
-        {toast && <div className="app-toast" role="status">{toast}</div>}
+          {scopedNav(env.id, 'gym')}
+          <div
+            className={`sim-policy-badge ${
+              policyStore[env.id] === 'ready' ? 'sim-policy-badge--ready' : ''
+            }`}
+          >
+            <span className="sim-policy-badge__kicker">Policy</span>
+            <span>{policyStore[env.id] ?? 'not-trained'}</span>
+          </div>
+        </div>
+
+        <GymScenarioStage
+          key={env.id}
+          scenario={env}
+          onPolicyReady={handlePolicyReady}
+          onTrainingStart={handleTrainingStart}
+          onTrainingError={handleTrainingError}
+          policyStatus={policyStore[env.id] ?? 'not-trained'}
+        />
       </main>
     )
   }
 
   return (
     <main className="app-shell app-shell--menu">
-      <div className="app-backdrop" />
-      <div className="menu-viewport">
-        <header className="menu-header">
+      <section className="menu-viewport">
+        <div className="menu-header">
           <div className="menu-header-left">
-            <h1 className="menu-title">CombatOS</h1>
-            <span className="menu-subtitle">SWARM TRAINING GYMNASIUM</span>
+            <span className="menu-subtitle">Select training environment</span>
+            <h1 className="menu-title">Training Gym</h1>
+            <p className="menu-kicker">
+              Pick a scenario, train the controller, then open Mission Sim with
+              the same environment and policy context.
+            </p>
           </div>
-        </header>
+          <button
+            type="button"
+            className="menu-action"
+            onClick={enterCombatOS}
+          >
+            CombatOS
+          </button>
+        </div>
 
-        <section className="menu-kicker" aria-label="Section label">
-          Select Training Environment
-        </section>
-
-        <div className="menu-grid" role="list" aria-label="Training scenarios">
+        <div className="menu-grid">
           {scenarios.map((scenario) => {
-            const status = policyStore[scenario.id]
-            const isReady = status === 'ready'
-            const isTraining = status === 'training'
+            const status = policyStore[scenario.id] ?? 'not-trained'
+            const ready = status === 'ready'
 
             return (
-              <button
+              <article
                 key={scenario.id}
-                type="button"
-                role="listitem"
-                className={`menu-card ${isReady ? 'menu-card--ready' : ''}`}
-                onClick={() => enterGym(scenario.id)}
-                aria-label={`Enter ${scenario.name}`}
+                className={`menu-card ${ready ? 'menu-card--ready' : ''}`}
               >
                 <div className="menu-card-preview">
                   <ScenarioMiniPreview scenarioId={scenario.id} />
                 </div>
                 <div className="menu-card-topline">
-                  <strong className="menu-card-name">{scenario.name}</strong>
+                  <div>
+                    <span className="menu-card-meta-label">
+                      {scenario.label}
+                    </span>
+                    <h2 className="menu-card-name">{scenario.name}</h2>
+                  </div>
                   <span
                     className="menu-card-badge"
-                    data-status={isReady ? 'Ready' : isTraining ? 'Queued' : scenario.status}
+                    data-status={ready ? 'Ready' : 'Not trained'}
                   >
-                    {isReady ? 'Policy ready' : isTraining ? 'Training...' : scenario.label}
+                    {ready ? 'Policy ready' : status}
                   </span>
                 </div>
                 <p className="menu-card-summary">{scenario.summary}</p>
@@ -251,17 +324,29 @@ function App() {
                     {scenario.telemetryLabels[2]}
                   </span>
                 </div>
-                <div className="menu-card-cta">
-                  {isTraining ? 'View Training ->' : 'Train ->'}
+                <div className="menu-card-actions">
+                  <button
+                    type="button"
+                    className="menu-card-cta menu-card-cta--button"
+                    onClick={() => enterGym(scenario.id)}
+                  >
+                    Train
+                  </button>
+                  <button
+                    type="button"
+                    className="menu-card-cta menu-card-cta--button"
+                    onClick={() => enterSim(scenario.id)}
+                    disabled={!simAllowedFor(scenario.id)}
+                  >
+                    Mission Sim
+                  </button>
                 </div>
-              </button>
+              </article>
             )
           })}
         </div>
-      </div>
-      {toast && <div className="app-toast" role="status">{toast}</div>}
+      </section>
+      {toast ? <div className="app-toast">{toast}</div> : null}
     </main>
   )
 }
-
-export default App

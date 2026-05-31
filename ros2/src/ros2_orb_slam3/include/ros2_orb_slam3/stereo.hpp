@@ -20,6 +20,7 @@
 #include "ament_index_cpp/get_package_share_directory.hpp"
 
 #include <std_msgs/msg/header.hpp>
+#include <std_msgs/msg/string.hpp>
 #include "sensor_msgs/msg/image.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -88,7 +89,9 @@ class StereoMode : public rclcpp::Node
         rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odomPub_;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pathPub_;
         image_transport::Publisher trackedImgPub_;
+        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr statusPub_;
         std::vector<geometry_msgs::msg::PoseStamped> poseHistory_;
+        bool hasPublishedPose_ = false;
 
         // Callbacks
         void StereoImg_callback(const Image::ConstSharedPtr& leftMsg,
@@ -97,6 +100,7 @@ class StereoMode : public rclcpp::Node
         // Helpers
         void initializeVSLAM(std::string& configString);
         void publishSLAMOutput(const Sophus::SE3f& Tcw, const rclcpp::Time& stamp);
+        void publishTrackingStatus(int state);
 };
 
 #endif

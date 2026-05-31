@@ -1,7 +1,17 @@
+.clean/
+.clean-agent/
+.clean-worktrees/
+
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*/.venv/
 .venv/
 venv/
 .env
@@ -49,6 +59,16 @@ logs/
 
 # ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
+
+# ── Frontend build output ─────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.vite/
+node_modules/
+
+# ── Design handoff zips (large binary, committed src is the canonical form) ───
+*.zip
 
 # ── Editor / OS ───────────────────────────────────────────────────────────────
 .DS_Store

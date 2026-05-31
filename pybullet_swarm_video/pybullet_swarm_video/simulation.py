@@ -88,6 +88,7 @@ class DroneSurveillanceSimulation:
         self._asset_messages: set[str] = set()
         self._texture_ids: dict[Path, int] = {}
         self._obj_bounds_cache: dict[Path, tuple[np.ndarray, np.ndarray]] = {}
+        self._split_obj_cache: dict[Path, list[tuple[str, Path]]] = {}
         self._keyboard_events: dict[int, int] = {}
         self._drone_rgba = [1.0, 1.0, 1.0, 1.0]
         self._drone_mesh_asset_ref: MeshAsset | None = None
@@ -291,6 +292,111 @@ class DroneSurveillanceSimulation:
         self._obj_bounds_cache[obj_path] = result
         return result
 
+    def _parse_mtl_diffuse_colors(self, mtl_path: Path | None) -> dict[str, tuple[float, float, float, float]]:
+        if mtl_path is None or not mtl_path.exists():
+            return {}
+        colors: dict[str, tuple[float, float, float, float]] = {}
+        current_name: str | None = None
+        try:
+            with mtl_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    if stripped.startswith("newmtl "):
+                        current_name = stripped.split(None, 1)[1]
+                        continue
+                    if stripped.startswith("Kd ") and current_name is not None:
+                        parts = stripped.split()
+                        if len(parts) >= 4:
+                            colors[current_name] = (
+                                float(parts[1]),
+                                float(parts[2]),
+                                float(parts[3]),
+                                1.0,
+                            )
+        except OSError:
+            self._log_asset(f"failed to read material data from {mtl_path.name}; using fallback colors")
+        return colors
+
+    def _split_obj_by_material(self, obj_path: Path) -> list[tuple[str, Path]]:
+        cached = self._split_obj_cache.get(obj_path)
+        if cached is not None:
+            return cached
+
+        target_dir = obj_path.parent / f"{obj_path.stem}_parts"
+        stamp_path = target_dir / ".stamp"
+        obj_stamp = str(obj_path.stat().st_mtime_ns)
+        manifest_path = target_dir / "manifest.txt"
+        if stamp_path.exists() and manifest_path.exists():
+            try:
+                if stamp_path.read_text().strip() == obj_stamp:
+                    pairs: list[tuple[str, Path]] = []
+                    for line in manifest_path.read_text().splitlines():
+                        if not line:
+                            continue
+                        material, rel_path = line.split("|", 1)
+                        pairs.append((material, target_dir / rel_path))
+                    self._split_obj_cache[obj_path] = pairs
+                    return pairs
+            except OSError:
+                pass
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        vertices: list[str] = []
+        texcoords: list[str] = []
+        normals: list[str] = []
+        faces_by_material: dict[str, list[str]] = {}
+        material_order: list[str] = []
+        current_material = "default"
+
+        try:
+            with obj_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    if line.startswith("v "):
+                        vertices.append(line)
+                    elif line.startswith("vt "):
+                        texcoords.append(line)
+                    elif line.startswith("vn "):
+                        normals.append(line)
+                    elif line.startswith("usemtl "):
+                        current_material = line.split(None, 1)[1].strip()
+                        if current_material not in faces_by_material:
+                            faces_by_material[current_material] = []
+                            material_order.append(current_material)
+                    elif line.startswith("f "):
+                        faces_by_material.setdefault(current_material, []).append(line)
+                        if current_material not in material_order:
+                            material_order.append(current_material)
+        except OSError:
+            self._log_asset(f"failed to split {obj_path.name} by material; using fallback visuals")
+            return []
+
+        pairs: list[tuple[str, Path]] = []
+        manifest_lines: list[str] = []
+        for index, material in enumerate(material_order):
+            faces = faces_by_material.get(material, [])
+            if not faces:
+                continue
+            out_path = target_dir / f"{obj_path.stem}_{index:02d}.obj"
+            with out_path.open("w", encoding="utf-8") as handle:
+                handle.writelines(vertices)
+                handle.writelines(texcoords)
+                handle.writelines(normals)
+                handle.write("s off\n")
+                handle.writelines(faces)
+            pairs.append((material, out_path))
+            manifest_lines.append(f"{material}|{out_path.name}")
+
+        try:
+            stamp_path.write_text(obj_stamp)
+            manifest_path.write_text("\n".join(manifest_lines))
+        except OSError:
+            pass
+
+        self._split_obj_cache[obj_path] = pairs
+        return pairs
+
     def _mesh_asset_from_archive(
         self,
         archive_name: str,
@@ -370,14 +476,71 @@ class DroneSurveillanceSimulation:
             return None
         return visual
 
-    def _apply_body_texture(self, body_id: int, texture_path: Path | None) -> None:
+    def _create_composite_body(
+        self,
+        collision_shape_id: int,
+        assets: Sequence[MeshAsset],
+        visual_ids: Sequence[int | None],
+        base_position: Sequence[float],
+        base_orientation_euler: Sequence[float],
+    ) -> int | None:
+        usable: list[tuple[MeshAsset, int]] = [
+            (asset, visual_id)
+            for asset, visual_id in zip(assets, visual_ids, strict=True)
+            if visual_id is not None
+        ]
+        if not usable:
+            return None
+
+        base_visual = usable[0][1]
+        base_orientation = p.getQuaternionFromEuler(list(base_orientation_euler))
+        if len(usable) == 1:
+            body = p.createMultiBody(
+                baseMass=0.0,
+                baseCollisionShapeIndex=collision_shape_id,
+                baseVisualShapeIndex=base_visual,
+                basePosition=list(base_position),
+                baseOrientation=base_orientation,
+                physicsClientId=self.client_id,
+            )
+            self._apply_body_texture(body, usable[0][0].texture_path)
+            return body
+
+        link_count = len(usable) - 1
+        body = p.createMultiBody(
+            baseMass=0.0,
+            baseCollisionShapeIndex=collision_shape_id,
+            baseVisualShapeIndex=base_visual,
+            basePosition=list(base_position),
+            baseOrientation=base_orientation,
+            linkMasses=[0.0] * link_count,
+            linkCollisionShapeIndices=[-1] * link_count,
+            linkVisualShapeIndices=[visual for _, visual in usable[1:]],
+            linkPositions=[[0.0, 0.0, 0.0]] * link_count,
+            linkOrientations=[[0.0, 0.0, 0.0, 1.0]] * link_count,
+            linkInertialFramePositions=[[0.0, 0.0, 0.0]] * link_count,
+            linkInertialFrameOrientations=[[0.0, 0.0, 0.0, 1.0]] * link_count,
+            linkParentIndices=[0] * link_count,
+            linkJointTypes=[p.JOINT_FIXED] * link_count,
+            linkJointAxis=[[0.0, 0.0, 0.0]] * link_count,
+            physicsClientId=self.client_id,
+        )
+        for part_index, (asset, _) in enumerate(usable):
+            self._apply_body_texture(
+                body_id=body,
+                texture_path=asset.texture_path,
+                link_index=-1 if part_index == 0 else part_index - 1,
+            )
+        return body
+
+    def _apply_body_texture(self, body_id: int, texture_path: Path | None, link_index: int = -1) -> None:
         texture_id = self._load_texture_if_present(texture_path)
         if texture_id is None:
             return
         try:
             p.changeVisualShape(
                 body_id,
-                -1,
+                link_index,
                 textureUniqueId=texture_id,
                 rgbaColor=[1.0, 1.0, 1.0, 1.0],
                 physicsClientId=self._require_connection(),
@@ -418,14 +581,35 @@ class DroneSurveillanceSimulation:
         archive = self._resource_path("low-poly-soldiers-rigged-free.zip")
         return self._extract_zip_member(archive, (".png",))
 
-    def _soldier_mesh_asset(self) -> MeshAsset | None:
-        return self._mesh_asset_from_archive(
+    def _soldier_mesh_assets(self) -> list[MeshAsset]:
+        base_asset = self._mesh_asset_from_archive(
             archive_name="free_military_soldier_rigged.zip",
             obj_name="free_military_soldier_rigged.obj",
             target_height_m=1.72,
             yaw_offset=math.pi / 2.0,
-            rgba=(0.31, 0.39, 0.24, 1.0),
         )
+        if base_asset is None:
+            return []
+        extracted_root = base_asset.path.parent
+        mtl_path = self._find_file(extracted_root, suffix=".mtl")
+        diffuse_colors = self._parse_mtl_diffuse_colors(mtl_path)
+        parts = self._split_obj_by_material(base_asset.path)
+        if not parts:
+            return [base_asset]
+        assets: list[MeshAsset] = []
+        for material_name, part_path in parts:
+            assets.append(
+                MeshAsset(
+                    path=part_path,
+                    scale_xyz=base_asset.scale_xyz,
+                    roll_offset=base_asset.roll_offset,
+                    pitch_offset=base_asset.pitch_offset,
+                    yaw_offset=base_asset.yaw_offset,
+                    vertical_offset=base_asset.vertical_offset,
+                    rgba=diffuse_colors.get(material_name, (0.75, 0.75, 0.75, 1.0)),
+                )
+            )
+        return assets
 
     def _sandbag_mesh_asset(self) -> MeshAsset | None:
         return self._mesh_asset_from_archive(
@@ -669,15 +853,20 @@ class DroneSurveillanceSimulation:
             specularColor=[0.04, 0.04, 0.04],
             physicsClientId=self.client_id,
         )
-        soldier_asset = self._soldier_mesh_asset()
-        soldier_visual = self._create_mesh_visual(soldier_asset)
-        self._troop_mesh_asset_ref = soldier_asset if soldier_visual is not None else None
+        soldier_assets = self._soldier_mesh_assets()
+        soldier_visuals = [self._create_mesh_visual(asset) for asset in soldier_assets]
+        mesh_assets_usable = any(visual_id is not None for visual_id in soldier_visuals)
+        self._troop_mesh_asset_ref = soldier_assets[0] if mesh_assets_usable and soldier_assets else None
         troop_texture_id = self._load_texture_if_present(self._low_poly_soldier_texture_path())
         self._troop_visual_z_offset = (
-            0.0 if soldier_asset is None or soldier_visual is None else soldier_asset.vertical_offset
+            0.0
+            if self._troop_mesh_asset_ref is None
+            else self._troop_mesh_asset_ref.vertical_offset
         )
         self._troop_visual_yaw_offset = (
-            math.pi / 2.0 if soldier_asset is None or soldier_visual is None else soldier_asset.yaw_offset
+            math.pi / 2.0
+            if self._troop_mesh_asset_ref is None
+            else self._troop_mesh_asset_ref.yaw_offset
         )
         self._troop_anchor_bases = np.array(
             [
@@ -705,26 +894,42 @@ class DroneSurveillanceSimulation:
             x = float(self._troop_anchor_bases[anchor, 0] + offset[0])
             y = float(self._troop_anchor_bases[anchor, 1] + offset[1])
             z = 1.0
-            use_mesh = soldier_visual is not None and idx % 2 == 0
+            use_mesh = mesh_assets_usable and idx % 2 == 0
             self._troop_mesh_mask[idx] = use_mesh
-            visual = soldier_visual if use_mesh else fallback_visual
             spawn_z = z + (self._troop_visual_z_offset if use_mesh else 0.0)
             yaw = self._troop_visual_yaw_offset
-            body = p.createMultiBody(
-                baseMass=0.0,
-                baseCollisionShapeIndex=collision,
-                baseVisualShapeIndex=visual,
-                basePosition=[x, y, spawn_z],
-                baseOrientation=p.getQuaternionFromEuler(
-                    [
-                        0.0 if not use_mesh or soldier_asset is None else soldier_asset.roll_offset,
-                        0.0 if not use_mesh or soldier_asset is None else soldier_asset.pitch_offset,
+            if use_mesh:
+                body = self._create_composite_body(
+                    collision_shape_id=collision,
+                    assets=soldier_assets,
+                    visual_ids=soldier_visuals,
+                    base_position=[x, y, spawn_z],
+                    base_orientation_euler=[
+                        0.0 if self._troop_mesh_asset_ref is None else self._troop_mesh_asset_ref.roll_offset,
+                        0.0 if self._troop_mesh_asset_ref is None else self._troop_mesh_asset_ref.pitch_offset,
                         yaw,
-                    ]
-                ),
-                physicsClientId=self.client_id,
-            )
-            if troop_texture_id is not None and not use_mesh:
+                    ],
+                )
+            else:
+                body = p.createMultiBody(
+                    baseMass=0.0,
+                    baseCollisionShapeIndex=collision,
+                    baseVisualShapeIndex=fallback_visual,
+                    basePosition=[x, y, spawn_z],
+                    baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
+                    physicsClientId=self.client_id,
+                )
+            if body is None:
+                body = p.createMultiBody(
+                    baseMass=0.0,
+                    baseCollisionShapeIndex=collision,
+                    baseVisualShapeIndex=fallback_visual,
+                    basePosition=[x, y, z],
+                    baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
+                    physicsClientId=self.client_id,
+                )
+                self._troop_mesh_mask[idx] = False
+            if troop_texture_id is not None and not self._troop_mesh_mask[idx]:
                 try:
                     p.changeVisualShape(
                         body,

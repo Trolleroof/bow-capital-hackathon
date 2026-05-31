@@ -149,12 +149,6 @@ function App() {
     setRoute(next)
   }
 
-  const goToCombatOS = () => {
-    const next: AppRoute = { view: 'combatos' }
-    pushHash(next)
-    setRoute(next)
-  }
-
   // ── Render: CombatOS (full takeover, no app-shell chrome) ────────────────
   if (route.view === 'combatos') {
     return <CombatOS />

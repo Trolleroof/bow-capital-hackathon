@@ -33,3 +33,20 @@ STATUS_HZ = float(os.getenv("COMBATOS_STATUS_HZ", "1.0"))
 EMIT_MOCK_POSE = os.getenv("COMBATOS_MOCK_POSE", "1") == "1"
 EMIT_MOCK_DETECTIONS = os.getenv("COMBATOS_MOCK_DETECTIONS", "1") == "1"
 MOCK_POSE_HZ = float(os.getenv("COMBATOS_MOCK_POSE_HZ", "1.0"))
+
+# ── Desktop ROS2 SLAM bridge ────────────────────────────────────────────────
+# Runs inside the orchestrator process on the desktop. It subscribes to ROS2
+# topics published by the Jetson over DDS and performs image serialization on
+# the desktop instead of on the Jetson.
+ENABLE_ROS_SLAM = os.getenv("COMBATOS_ROS_SLAM", "0") == "1"
+ROS_SLAM_POSE_TOPIC = os.getenv("COMBATOS_ROS_SLAM_POSE_TOPIC", "/slam/pose")
+ROS_SLAM_ODOM_TOPIC = os.getenv("COMBATOS_ROS_SLAM_ODOM_TOPIC", "/slam/odometry")
+ROS_SLAM_PATH_TOPIC = os.getenv("COMBATOS_ROS_SLAM_PATH_TOPIC", "/slam/path")
+ROS_SLAM_STATUS_TOPIC = os.getenv("COMBATOS_ROS_SLAM_STATUS_TOPIC", "/slam/status")
+ROS_SLAM_CAMERA_TOPIC = os.getenv("COMBATOS_ROS_SLAM_CAMERA_TOPIC", "/oak/left/image_rect")
+ROS_SLAM_ANNOTATED_TOPIC = os.getenv("COMBATOS_ROS_SLAM_ANNOTATED_TOPIC", "/slam/tracked_image")
+ROS_SLAM_ENABLE_CAMERA = os.getenv("COMBATOS_ROS_SLAM_ENABLE_CAMERA", "1") == "1"
+ROS_SLAM_ENABLE_ANNOTATED = os.getenv("COMBATOS_ROS_SLAM_ENABLE_ANNOTATED", "1") == "1"
+ROS_SLAM_VIDEO_FPS = float(os.getenv("COMBATOS_ROS_SLAM_VIDEO_FPS", "8.0"))
+ROS_SLAM_JPEG_QUALITY = int(os.getenv("COMBATOS_ROS_SLAM_JPEG_QUALITY", "70"))
+ROS_SLAM_PATH_MAX_POSES = int(os.getenv("COMBATOS_ROS_SLAM_PATH_MAX_POSES", "240"))

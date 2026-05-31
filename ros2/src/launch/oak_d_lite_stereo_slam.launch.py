@@ -24,7 +24,7 @@ def launch_setup(context, *args, **kwargs):
     resolution = LaunchConfiguration("resolution", default="400p").perform(context)
     fps = float(LaunchConfiguration("fps", default="15.0").perform(context))
     settings_name = LaunchConfiguration("settings_name", default="OAK_D_Lite").perform(context)
-    enable_combatos_bridge = LaunchConfiguration("enable_combatos_bridge", default="true")
+    enable_combatos_bridge = LaunchConfiguration("enable_combatos_bridge", default="false")
     orch_ws = LaunchConfiguration("orch_ws", default="ws://192.168.0.90:8000").perform(context)
     video_fps = float(LaunchConfiguration("video_fps", default="8.0").perform(context))
     jpeg_quality = int(LaunchConfiguration("jpeg_quality", default="70").perform(context))
@@ -136,7 +136,7 @@ def generate_launch_description():
         DeclareLaunchArgument("resolution",    default_value="400p"),
         DeclareLaunchArgument("fps",           default_value="15.0"),
         DeclareLaunchArgument("settings_name", default_value="OAK_D_Lite"),
-        DeclareLaunchArgument("enable_combatos_bridge", default_value="true"),
+        DeclareLaunchArgument("enable_combatos_bridge", default_value="false"),
         DeclareLaunchArgument("orch_ws", default_value="ws://192.168.0.90:8000"),
         DeclareLaunchArgument("video_fps", default_value="8.0"),
         DeclareLaunchArgument("jpeg_quality", default_value="70"),

@@ -14,7 +14,6 @@ from .bus import image_ws_server, ws_server
 from .modules.nav_module import NavModule
 from .modules.perception_module import PerceptionModule
 from .modules.recon_module import ReconModule
-from .modules.ros_perception_module import RosPerceptionModule
 from .modules.ros_slam_module import RosSlamModule
 from .modules.swarm_module import SwarmModule
 from .state.system_state import run_status_loop
@@ -60,7 +59,7 @@ async def main() -> None:
         )
     )
 
-    modules = [NavModule(), PerceptionModule(), ReconModule(), RosSlamModule(), RosPerceptionModule()]
+    modules = [NavModule(), PerceptionModule(), ReconModule(), RosSlamModule()]
     if config.ENABLE_SWARM:
         modules.append(SwarmModule())
     else:

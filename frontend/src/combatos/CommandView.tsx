@@ -19,7 +19,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
   const clock = 'T+' + String(Math.floor(t.sec / 60)).padStart(2, '0') + ':' + String(t.sec % 60).padStart(2, '0')
   const tracked = t.dets.filter(d => d.st !== 'LOST').length
   const liveFeed = t.cameraFrame
-  const annotatedFeed = t.perceptionFrame ?? t.slamFrame
+  const annotatedFeed = t.slamFrame
 
   return (
     <div className="cmd">
@@ -237,7 +237,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
       <div className="slam-windows">
         <div className={`slam-window slam-window--frame${frameMinimized ? ' slam-window--collapsed' : ''}`}>
           <div className="sw-head">
-            <span>ANNOTATED PERCEPTION FRAME</span>
+            <span>ANNOTATED SLAM FRAME</span>
             <div className="sw-head-actions">
               <em>{annotatedFeed ? `#${annotatedFeed.seq}` : 'NO FRAME'}</em>
               <button
@@ -245,7 +245,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
                 className="sw-toggle"
                 onClick={() => setFrameMinimized(v => !v)}
                 aria-expanded={!frameMinimized}
-                aria-label={frameMinimized ? 'Expand Annotated Perception frame panel' : 'Minimize Annotated Perception frame panel'}
+                aria-label={frameMinimized ? 'Expand annotated SLAM frame panel' : 'Minimize annotated SLAM frame panel'}
                 title={frameMinimized ? 'Expand' : 'Minimize'}
               >
                 {frameMinimized ? '+' : '-'}
@@ -257,7 +257,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
               {annotatedFeed ? (
                 <LiveFrameCanvas frame={annotatedFeed} className="sw-canvas" fit="contain" />
               ) : (
-                <div className="hatch" data-cap={'WAITING\n/perception/annotated_image'} />
+                <div className="hatch" data-cap={'WAITING\n/slam/tracked_image/compressed'} />
               )}
             </div>
           )}
@@ -284,7 +284,6 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
               <div><span>TRACKING</span><b>{t.slamStatus}</b></div>
               <div><span>CAM FRAMES</span><b>{t.slamDiagnostics.cameraFrames}</b></div>
               <div><span>SLAM FRAMES</span><b>{t.slamDiagnostics.annotatedFrames}</b></div>
-              <div><span>YOLO FRAMES</span><b>{t.perceptionDiagnostics.frames}</b></div>
               <div><span>DROPPED</span><b>{t.slamDiagnostics.droppedFrames}</b></div>
               <div><span>QUEUE</span><b>{t.slamDiagnostics.queueDepth}</b></div>
               <div><span>POSE</span><b>{t.pose.x.toFixed(1)}, {t.pose.y.toFixed(1)}, {t.pose.z.toFixed(1)}</b></div>

@@ -47,7 +47,7 @@ print("[import] numpy ok", flush=True)
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image as RosImage
+from sensor_msgs.msg import Image as RosImage, CompressedImage as RosCompressedImage
 from cv_bridge import CvBridge
 print("[import] rclpy/cv_bridge ok", flush=True)
 
@@ -186,15 +186,24 @@ class PerceptionNode(Node):
             depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT,
         )
-        self._sub = self.create_subscription(
-            RosImage, config.ROS_CAMERA_TOPIC, self._on_frame, image_qos
-        )
+        self._compressed = config.ROS_CAMERA_TOPIC.endswith("/compressed")
+        if self._compressed:
+            self._sub = self.create_subscription(
+                RosCompressedImage, config.ROS_CAMERA_TOPIC, self._on_frame, image_qos
+            )
+        else:
+            self._sub = self.create_subscription(
+                RosImage, config.ROS_CAMERA_TOPIC, self._on_frame, image_qos
+            )
         self.get_logger().info(f"Subscribing to {config.ROS_CAMERA_TOPIC}")
 
     # ── Frame callback (runs in ROS executor thread) ─────────────────────────
 
-    def _on_frame(self, msg: RosImage) -> None:
-        frame = self._bridge.imgmsg_to_cv2(msg, "bgr8")
+    def _on_frame(self, msg) -> None:
+        if self._compressed:
+            frame = self._bridge.compressed_imgmsg_to_cv2(msg, "bgr8")
+        else:
+            frame = self._bridge.imgmsg_to_cv2(msg, "bgr8")
         h, w  = frame.shape[:2]
 
         # Lazy window + fps init on first frame
@@ -357,7 +366,7 @@ def main() -> None:
         publisher.connect()
         _dbg("connected to bus")
     except Exception as e:
-        _dbg(f"bus unavailable ({e}), running in local-only mode")
+        _dbg(f"bus unavailable ({type(e).__name__}: {e!r}), running in local-only mode")
         publisher = None
 
     rclpy.init()

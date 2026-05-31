@@ -32,13 +32,6 @@ export interface SlamDiagnostics {
   queueDepth: number
 }
 
-export interface PerceptionDiagnostics {
-  detections: number
-  frames: number
-  droppedFrames: number
-  queueDepth: number
-}
-
 export interface Detection {
   id: string
   numericId: number
@@ -80,9 +73,7 @@ export interface TelemetryState {
   slamStatus: string
   cameraFrame: SlamFrame | null
   slamFrame: SlamFrame | null
-  perceptionFrame: SlamFrame | null
   slamDiagnostics: SlamDiagnostics
-  perceptionDiagnostics: PerceptionDiagnostics
 }
 
 function base64ToBlob(data: string, mime = 'image/jpeg') {
@@ -120,17 +111,10 @@ function initState(): TelemetryState {
     slamStatus: '--',
     cameraFrame: null,
     slamFrame: null,
-    perceptionFrame: null,
     slamDiagnostics: {
       droppedFrames: 0,
       cameraFrames: 0,
       annotatedFrames: 0,
-      queueDepth: 0,
-    },
-    perceptionDiagnostics: {
-      detections: 0,
-      frames: 0,
-      droppedFrames: 0,
       queueDepth: 0,
     },
   }
@@ -232,11 +216,7 @@ export function useCombatState() {
                 tone: o.is_primary ? 'amber' : o.is_candidate ? 'candidate' : '',
                 confirmed: o.confirmed,
               }))
-              setT(p => ({
-                ...p,
-                yolo: typeof msg.latency_ms === 'number' ? Math.round(msg.latency_ms) : p.yolo,
-                dets: mapped,
-              }))
+              setT(p => ({ ...p, dets: mapped }))
             } else if (msg.topic === 'recon') {
               setT(p => ({
                 ...p,
@@ -261,26 +241,12 @@ export function useCombatState() {
                   queueDepth: msg.queue_depth ?? p.slamDiagnostics.queueDepth,
                 },
               }))
-            } else if (msg.topic === 'perception_diagnostics') {
-              setT(p => ({
-                ...p,
-                yolo: typeof msg.latency_ms === 'number' ? Math.round(msg.latency_ms) : p.yolo,
-                perceptionDiagnostics: {
-                  detections: msg.detections ?? p.perceptionDiagnostics.detections,
-                  frames: msg.frames ?? p.perceptionDiagnostics.frames,
-                  droppedFrames: msg.dropped_frames ?? p.perceptionDiagnostics.droppedFrames,
-                  queueDepth: msg.queue_depth ?? p.perceptionDiagnostics.queueDepth,
-                },
-              }))
             } else if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
               const frame = toFrame(msg)
               if (frame) setT(p => ({ ...p, cameraFrame: frame }))
             } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
               const frame = toFrame(msg)
               if (frame) setT(p => ({ ...p, slamFrame: frame }))
-            } else if (msg.topic === 'perception_frame') {
-              const frame = toFrame(msg)
-              if (frame) setT(p => ({ ...p, perceptionFrame: frame }))
             }
           } catch {
             // ignore parse errors

@@ -152,7 +152,7 @@ def main() -> None:
         publisher.connect()
         _dbg("connected to bus")
     except Exception as e:
-        _dbg(f"bus unavailable ({e}), running in local-only mode")
+        _dbg(f"bus unavailable ({type(e).__name__}: {e!r}), running in local-only mode")
         publisher = None
 
     src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))

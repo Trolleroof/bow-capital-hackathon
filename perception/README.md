@@ -102,13 +102,9 @@ rosmain.py  (or main.py with VideoCapture directly)
   ReIDGallery   → identity-preserving re-identification
   CandidateBuffer → priority scoring
     │
-    ├── /perception/detections (std_msgs/String JSON)
-    │       ↓
-    │   ros_perception_module.py (orchestrator)
+    ├── BusPublisher → ws://WS_HOST:WS_PORT  (JSON detections)
     │       ↓ WebSocket bus "detections" topic
     │       ↓ React dashboard — detections panel
-    │
-    ├── BusPublisher → ws://WS_HOST:WS_PORT  (JSON detections)
     │
     └── BusPublisher → ws://WS_HOST:IMAGE_WS_PORT  (JPEG FPV stream)
 ```

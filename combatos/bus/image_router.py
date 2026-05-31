@@ -9,6 +9,8 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+_drop_counts: dict[str, int] = defaultdict(int)
+
 _topic_subs: dict[str, set[asyncio.Queue]] = defaultdict(set)
 _wildcard_subs: set[asyncio.Queue] = set()
 
@@ -40,4 +42,17 @@ async def publish(
         try:
             q.put_nowait(frame)
         except asyncio.QueueFull:
-            log.warning("image queue full on topic=%s; dropping frame", topic)
+            try:
+                q.get_nowait()
+                q.put_nowait(frame)
+                _drop_counts[topic] += 1
+                if _drop_counts[topic] in (1, 10, 100) or _drop_counts[topic] % 1000 == 0:
+                    log.warning(
+                        "image queue full on topic=%s; dropped oldest frame and kept latest (count=%d)",
+                        topic,
+                        _drop_counts[topic],
+                    )
+            except asyncio.QueueEmpty:
+                pass
+            except asyncio.QueueFull:
+                _drop_counts[topic] += 1

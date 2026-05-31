@@ -104,7 +104,23 @@ function App() {
     toastTimer.current = window.setTimeout(() => setToast(null), 4000)
   }
 
+  const switchView = (next: 'combatos' | 'sim' | 'gym') => {
+    if (next === 'combatos') {
+      window.location.hash = 'combatos'
+      setRoute({ view: 'combatos' })
+    } else if (next === 'gym') {
+      window.location.hash = 'gym'
+      setRoute({ view: 'gym-registry' })
+    } else {
+      goToSim()
+    }
+  }
+
   // ── Navigation ───────────────────────────────────────────────────────────
+
+  if (route.view === 'combatos') {
+    return <CombatOS />
+  }
 
   const goToRegistry = () => {
     const next: AppRoute = { view: 'gym-registry' }

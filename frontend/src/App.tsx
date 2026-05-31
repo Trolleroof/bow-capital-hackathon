@@ -10,7 +10,7 @@ import {
   type PolicyStatus,
 } from './swarm/policy'
 
-const ALLOW_HEURISTIC = true
+const ALLOW_HEURISTIC = false
 
 type AppRoute =
   | { view: 'menu' }
@@ -119,13 +119,17 @@ export default function App() {
 
   const enterSim = (envId: string) => {
     if (!simAllowedFor(envId)) {
-      showToast('Train this environment first to unlock Mission Sim.')
+      showToast('Train this environment first to unlock PyBullet Sim.')
       return
     }
 
     setActiveEnvId(envId)
     setHashRoute(`sim/${envId}`)
     setRoute({ view: 'sim', envId })
+  }
+
+  const activateScenarioCard = (envId: string) => {
+    enterGym(envId)
   }
 
   const enterCombatOS = () => {
@@ -164,7 +168,7 @@ export default function App() {
           disabled={simLocked}
           title={simLocked ? 'Train this environment first.' : undefined}
         >
-          Mission Sim
+          PyBullet Sim
         </button>
         <button type="button" className="nav-pill" onClick={enterCombatOS}>
           CombatOS
@@ -189,7 +193,7 @@ export default function App() {
             Back to gym menu
           </button>
           <div className="sim-title-block">
-            <span>Mission Sim</span>
+            <span>PyBullet Sim</span>
             <strong>{env.name}</strong>
           </div>
           {scopedNav(env.id, 'sim')}
@@ -209,16 +213,10 @@ export default function App() {
           </div>
         </div>
 
-        {!policyReady && ALLOW_HEURISTIC ? (
-          <div className="sim-status-callout">
-            mission controller active - task behavior executing
-          </div>
-        ) : null}
-
         <CompositeScenePanel
           key={env.id}
           envId={env.id}
-          missionName={env.name}
+          missionName={`${env.name} PyBullet Sim`}
           policyEnabled={controllerActive}
         />
       </main>
@@ -227,6 +225,7 @@ export default function App() {
 
   if (route.view === 'gym') {
     const env = getScenarioById(route.envId) ?? scenarios[0]
+    const policyReady = policyStore[env.id] === 'ready'
 
     return (
       <main className="app-shell app-shell--gym-full">
@@ -252,6 +251,8 @@ export default function App() {
         <GymScenarioStage
           key={env.id}
           scenario={env}
+          canLaunchSim={policyReady}
+          onLaunchSim={() => enterSim(env.id)}
           onPolicyReady={handlePolicyReady}
           onTrainingStart={handleTrainingStart}
           onTrainingError={handleTrainingError}
@@ -269,8 +270,8 @@ export default function App() {
             <span className="menu-subtitle">Select training environment</span>
             <h1 className="menu-title">Training Gym</h1>
             <p className="menu-kicker">
-              Pick a scenario, train the controller, then open Mission Sim with
-              the same environment and policy context.
+              Pick a scenario, train the controller, then open a dedicated
+              PyBullet sim with the same environment and policy context.
             </p>
           </div>
           <button
@@ -291,6 +292,15 @@ export default function App() {
               <article
                 key={scenario.id}
                 className={`menu-card ${ready ? 'menu-card--ready' : ''}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => activateScenarioCard(scenario.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    activateScenarioCard(scenario.id)
+                  }
+                }}
               >
                 <div className="menu-card-preview">
                   <ScenarioMiniPreview scenarioId={scenario.id} />
@@ -328,17 +338,23 @@ export default function App() {
                   <button
                     type="button"
                     className="menu-card-cta menu-card-cta--button"
-                    onClick={() => enterGym(scenario.id)}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      enterGym(scenario.id)
+                    }}
                   >
                     Train
                   </button>
                   <button
                     type="button"
                     className="menu-card-cta menu-card-cta--button"
-                    onClick={() => enterSim(scenario.id)}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      enterSim(scenario.id)
+                    }}
                     disabled={!simAllowedFor(scenario.id)}
                   >
-                    Mission Sim
+                    PyBullet Sim
                   </button>
                 </div>
               </article>

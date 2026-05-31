@@ -262,6 +262,16 @@
   opacity: 0.35;
 }
 
+.app-shell--sim,
+.app-shell--gym-full {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  height: 100svh;
+  padding: 0;
+  overflow: hidden;
+}
+
 .sim-viewport-full {
   position: relative;
   z-index: 1;
@@ -272,11 +282,12 @@
   min-height: 100svh;
 }
 
+.gym-top-bar,
 .sim-top-bar {
   position: relative;
   z-index: 30;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   flex-shrink: 0;
@@ -284,6 +295,86 @@
   border-bottom: 1px solid rgba(113, 215, 255, 0.12);
   background: rgba(5, 10, 16, 0.82);
   backdrop-filter: blur(14px);
+}
+
+.sim-back-link,
+.nav-pill,
+.menu-action {
+  appearance: none;
+}
+
+.sim-back-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid rgba(120, 154, 180, 0.28);
+  border-radius: 999px;
+  background: rgba(7, 16, 24, 0.78);
+  color: var(--text);
+  font: 700 0.76rem/1 'Fira Code', monospace;
+  cursor: pointer;
+}
+
+.sim-back-link:hover,
+.sim-back-link:focus-visible {
+  border-color: rgba(113, 215, 255, 0.45);
+  background: rgba(113, 215, 255, 0.12);
+  color: var(--accent);
+}
+
+.sim-title-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.sim-title-block span {
+  color: var(--muted);
+  font: 700 0.66rem/1 'Fira Code', monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sim-title-block strong {
+  color: var(--text);
+  font: 800 1rem/1.2 'Fira Sans', sans-serif;
+}
+
+.app-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 4px;
+  border: 1px solid rgba(120, 154, 180, 0.16);
+  border-radius: 999px;
+  background: rgba(3, 10, 16, 0.68);
+}
+
+.nav-pill {
+  min-height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 700 0.72rem/1 'Fira Code', monospace;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.nav-pill:hover:not(:disabled),
+.nav-pill--active {
+  background: rgba(113, 215, 255, 0.13);
+  color: var(--accent);
+}
+
+.nav-pill:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .sim-top-bar__left {
@@ -1259,6 +1350,7 @@
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 8px 16px;
   border-bottom: 1px solid var(--line);
@@ -1363,6 +1455,18 @@
   transform: translateY(-1px);
 }
 
+.gym-train-btn--launch {
+  margin-left: 0;
+  background: rgba(110, 240, 163, 0.1);
+  border-color: rgba(110, 240, 163, 0.24);
+  color: #9cf8c3;
+}
+
+.gym-train-btn--launch:hover:not(:disabled) {
+  background: rgba(110, 240, 163, 0.16);
+  border-color: rgba(110, 240, 163, 0.4);
+}
+
 .gym-train-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -1376,6 +1480,97 @@
 
 .gym-train-btn--stop:hover:not(:disabled) {
   background: rgba(255, 107, 107, 0.24);
+}
+
+.gym-train-console {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.7fr);
+  gap: 18px;
+  min-height: calc(100svh - 148px);
+  padding: 24px;
+  background:
+    linear-gradient(180deg, rgba(113, 215, 255, 0.045), transparent 38%),
+    #061019;
+}
+
+.gym-train-console__main,
+.gym-train-console__side {
+  min-width: 0;
+  border: 1px solid rgba(120, 154, 180, 0.16);
+  border-radius: 8px;
+  background: rgba(5, 12, 18, 0.78);
+}
+
+.gym-train-console__main {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(24px, 5vw, 72px);
+}
+
+.gym-train-console__eyebrow {
+  color: var(--accent);
+  font: 700 0.72rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+}
+
+.gym-train-console__main h2 {
+  margin: 12px 0 0;
+  color: var(--text);
+  font: 800 clamp(2rem, 4vw, 4.8rem)/0.95 'Fira Sans', sans-serif;
+}
+
+.gym-train-console__main p {
+  max-width: 760px;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.gym-train-console__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 34px;
+}
+
+.gym-train-console__grid article,
+.gym-policy-card {
+  padding: 14px;
+  border: 1px solid rgba(120, 154, 180, 0.16);
+  border-radius: 8px;
+  background: rgba(8, 18, 28, 0.72);
+}
+
+.gym-train-console__grid span,
+.gym-policy-card span {
+  display: block;
+  color: var(--accent);
+  font: 700 0.66rem/1 'Fira Code', monospace;
+  text-transform: uppercase;
+}
+
+.gym-train-console__grid strong,
+.gym-policy-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--text);
+  font: 650 0.86rem/1.45 'Fira Sans', sans-serif;
+}
+
+.gym-train-console__side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.gym-train-console__side .gym-stats-overlay {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  pointer-events: auto;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1539,6 +1734,35 @@
 }
 
 @media (max-width: 720px) {
+  .gym-top-bar,
+  .sim-top-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .app-nav {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .nav-pill {
+    flex: 1;
+  }
+
+  .gym-train-console {
+    grid-template-columns: 1fr;
+    min-height: auto;
+    padding: 12px;
+  }
+
+  .gym-train-console__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gym-train-console__side .gym-stats-overlay {
+    grid-template-columns: 1fr;
+  }
+
   .gym-training-bar {
     flex-wrap: wrap;
     padding: 8px 12px;
@@ -1785,6 +2009,11 @@
     var(--bg-panel);
   transform: translateY(-2px);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+}
+
+.menu-card:focus-visible {
+  outline: 2px solid rgba(113, 215, 255, 0.72);
+  outline-offset: 4px;
 }
 
 .menu-card--ready {

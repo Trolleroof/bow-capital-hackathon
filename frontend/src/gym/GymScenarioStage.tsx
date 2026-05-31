@@ -14,7 +14,7 @@
  * the controls bar and the .gym-scene without modification.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import BattlefieldParamsPanel from './BattlefieldParamsPanel'
 import { getScenarioDefaults } from './battlefieldParams'
 import { type ScenarioCard, type ScenarioTelemetry, getScenarioById } from './scenarios'
@@ -441,20 +441,13 @@ function renderObstacle(obs: Obstacle) {
   )
 }
 
-// ──────────────────────────────────── overlay helpers (#20) ───────────────
-
-const HEATMAP_ROWS = 10
-const HEATMAP_COLS = 10
-
-function emptyGrid(): number[][] {
-  return Array.from({ length: HEATMAP_ROWS }, () => Array(HEATMAP_COLS).fill(0))
-}
-
 // ─────────────────────────────────────────────── component ────────────────
 
 export interface GymScenarioStageProps {
   scenario: ScenarioCard
   policyStatus?: PolicyStatus
+  canLaunchSim?: boolean
+  onLaunchSim?: () => void
   onPolicyReady?: (envId: string) => void
   onTrainingStart?: (envId: string) => void
   onTrainingError?: (message: string) => void
@@ -463,18 +456,12 @@ export interface GymScenarioStageProps {
 export default function GymScenarioStage({
   scenario,
   policyStatus = 'not-trained',
+  canLaunchSim = false,
+  onLaunchSim,
   onPolicyReady,
   onTrainingStart,
   onTrainingError,
 }: GymScenarioStageProps) {
-  // ── animation tick ──────────────────────────────────────────────────────
-  const [tick, setTick] = useState(0)
-
-  useEffect(() => {
-    const id = window.setInterval(() => setTick(v => v + 1), 120)
-    return () => window.clearInterval(id)
-  }, [scenario.id])
-
   // ── battlefield params (#25) ────────────────────────────────────────────
   const [params, setParams]       = useState(() => getScenarioDefaults(scenario.id))
   const [paramsOpen, setParamsOpen] = useState(false)
@@ -495,69 +482,6 @@ export default function GymScenarioStage({
     void start()
   }
 
-  // ── overlay #1: coverage heatmap (#20) ──────────────────────────────────
-  const heatmapRef = useRef<number[][]>(emptyGrid())
-  const [heatmap, setHeatmap] = useState<readonly (readonly number[])[]>(emptyGrid)
-  const visibleHeatmap = heatmap
-
-  // Reset heatmap when a new training run starts
-  const prevStatusRef = useRef(status)
-  useEffect(() => {
-    if (status === 'running' && prevStatusRef.current !== 'running') {
-      heatmapRef.current = emptyGrid()
-    }
-    prevStatusRef.current = status
-  }, [status])
-
-  // Accumulate agent positions → heatmap every tick while training/rollout
-  useEffect(() => {
-    if (status !== 'running') return
-    const frame = renderFrame(scenario, tick % 120)
-    const grid  = heatmapRef.current
-    frame.agents.forEach(agent => {
-      if (agent.alive === false) return
-      const col = Math.min(Math.floor(agent.x / 10), HEATMAP_COLS - 1)
-      const row = Math.min(Math.floor(agent.y / 10), HEATMAP_ROWS - 1)
-      grid[row][col] = Math.min(grid[row][col] + 0.22, 1)
-    })
-    // Slow decay so trail gradually fades
-    for (let r = 0; r < HEATMAP_ROWS; r++) {
-      for (let c = 0; c < HEATMAP_COLS; c++) {
-        if (grid[r][c] > 0) grid[r][c] = Math.max(0, grid[r][c] - 0.003)
-      }
-    }
-    setHeatmap(grid.map(row => [...row]))
-  }, [tick, status, scenario])
-
-  let frame = renderFrame(scenario, tick % 120)
-  const showBehaviorOverlays = isTraining
-
-  if (isTraining && params.weather.windSpeed > 0) {
-    const drift = params.weather.windSpeed * 0.04
-    const dx = Math.cos(params.weather.windDirRad) * drift
-    const dy = Math.sin(params.weather.windDirRad) * drift
-    frame = {
-      ...frame,
-      agents: frame.agents.map(a => ({
-        ...a,
-        x: clamp(a.x + dx, 4, 96),
-        y: clamp(a.y + dy, 4, 96),
-      })),
-    }
-    frame = withAvoidance(frame)
-  }
-
-  // Policy rollouts carry action vectors from SwarmEnv; scripted previews omit them.
-  const velocities = frame.agents.map(agent => {
-    return {
-      id:  agent.id,
-      x:   agent.x,
-      y:   agent.y,
-      vx:  agent.vx ?? 0,
-      vy:  agent.vy ?? 0,
-    }
-  })
-
   // ──────────────────────────────────────────────────────── render ─────────
 
   return (
@@ -567,135 +491,48 @@ export default function GymScenarioStage({
         params={params}
         onChange={setParams}
         isTraining={isTraining}
+        canLaunchSim={canLaunchSim}
+        onLaunchSim={() => onLaunchSim?.()}
         onTrain={handleTrain}
         onStop={() => void stop()}
         open={paramsOpen}
         onToggleOpen={() => setParamsOpen(v => !v)}
       />
 
-      {/* ── scene canvas ─────────────────────────────────────────────── */}
-      <div className={`gym-scene${scenario.id === 'drone-vs-drone' ? ' gym-scene--flat' : ''}`} aria-label={`${scenario.name} simulated stage`}>
-        <svg
-          className="gym-scene__svg"
-          viewBox="0 0 100 100"
-          role="img"
-          aria-label={scenario.summary}
-        >
-          <defs>
-            {/* grid pattern */}
-            <pattern id="gym-grid" width="8" height="8" patternUnits="userSpaceOnUse">
-              <path d="M 8 0 L 0 0 0 8" fill="none" className="gym-scene__grid-line" />
-            </pattern>
+      <section className="gym-train-console" aria-label={`${scenario.name} training controls`}>
+        <div className="gym-train-console__main">
+          <span className="gym-train-console__eyebrow">{scenario.label}</span>
+          <h2>{scenario.name}</h2>
+          <p>{scenario.summary}</p>
 
-            {/* arrowhead marker for velocity vectors */}
-            <marker
-              id="gym-arrow"
-              markerWidth="5"
-              markerHeight="5"
-              refX="4"
-              refY="2.5"
-              orient="auto"
-            >
-              <path d="M0,0 L0,5 L5,2.5 z" fill="rgba(255, 210, 90, 0.82)" />
-            </marker>
-          </defs>
+          <div className="gym-train-console__grid" aria-label="Scenario contract">
+            <article>
+              <span>Observation</span>
+              <strong>{scenario.observation}</strong>
+            </article>
+            <article>
+              <span>Action</span>
+              <strong>{scenario.action}</strong>
+            </article>
+            <article>
+              <span>Reward</span>
+              <strong>{scenario.reward}</strong>
+            </article>
+          </div>
+        </div>
 
-          {/* floor */}
-          <rect x="0" y="0" width="100" height="100" className="gym-scene__floor" />
-          <rect x="0" y="0" width="100" height="100" fill="url(#gym-grid)" />
-
-          {/* ── overlay #1: coverage heatmap ─────────────────────────── */}
-          {showBehaviorOverlays && (
-            <g aria-label="Coverage heatmap overlay">
-              {(visibleHeatmap as number[][]).flatMap((row, r) =>
-                row.map((intensity, c) =>
-                  intensity > 0.04 ? (
-                    <rect
-                      key={`hm-${r}-${c}`}
-                      x={c * 10}
-                      y={r * 10}
-                      width={10}
-                      height={10}
-                      fill={`rgba(113, 215, 255, ${(intensity * 0.55).toFixed(3)})`}
-                    />
-                  ) : null,
-                ),
-              )}
-            </g>
-          )}
-
-          {/* scenario-specific geometry */}
-          {frame.contour ? (
-            <polygon
-              points={frame.contour.map(p => `${p.x},${p.y}`).join(' ')}
-              className="gym-scene__boundary"
-            />
-          ) : null}
-
-          {frame.ringRadius ? (
-            <circle cx="50" cy="50" r={frame.ringRadius} className="gym-scene__ring" />
-          ) : null}
-
-          {frame.zones?.map(renderZone)}
-
-          {frame.assets?.map(asset => (
-            <g key={asset.id}>
-              <circle cx={asset.x} cy={asset.y} r={asset.radius}     className="gym-scene__asset" />
-              <circle cx={asset.x} cy={asset.y} r={asset.radius + 5} className="gym-scene__asset-halo" />
-            </g>
-          ))}
-
-          {frame.paths?.map((path, i) => (
-            <polyline
-              key={`path-${i}`}
-              points={path.map(p => `${p.x},${p.y}`).join(' ')}
-              className="gym-scene__path"
-            />
-          ))}
-
-          {frame.obstacles?.map(renderObstacle)}
-
-          {frame.agents.map(agent => (
-            <g key={agent.id} opacity={agent.alive === false ? 0.28 : 1}>
-              <circle
-                cx={agent.x} cy={agent.y}
-                r={(agent.radius ?? 3.2) + 2.5}
-                className="gym-scene__agent-halo"
-              />
-              <circle
-                cx={agent.x} cy={agent.y}
-                r={agent.radius ?? 3.2}
-                className={teamClass(agent.team)}
-              />
-            </g>
-          ))}
-
-          {/* ── overlay #2: velocity vectors ─────────────────────────── */}
-          {showBehaviorOverlays && (
-            <g aria-label="Velocity vector overlay">
-              {velocities.map(v => {
-                const speed = Math.sqrt(v.vx * v.vx + v.vy * v.vy)
-                if (speed < 0.5) return null
-                return (
-                  <line
-                    key={`vel-${v.id}`}
-                    x1={v.x}
-                    y1={v.y}
-                    x2={v.x + v.vx}
-                    y2={v.y + v.vy}
-                    stroke="rgba(255, 210, 90, 0.78)"
-                    strokeWidth="0.9"
-                    markerEnd="url(#gym-arrow)"
-                  />
-                )
-              })}
-            </g>
-          )}
-        </svg>
-
-        {/* ── #17 live stats overlay ───────────────────────────────────── */}
-        <TrainingStatsDrawer metrics={metrics} status={status} />
-      </div>
+        <aside className="gym-train-console__side">
+          <div className="gym-policy-card">
+            <span>Policy</span>
+            <strong>{policyStatus}</strong>
+          </div>
+          <div className="gym-policy-card">
+            <span>PyBullet Environment</span>
+            <strong>{canLaunchSim ? 'ready to launch' : 'locked until policy export'}</strong>
+          </div>
+          <TrainingStatsDrawer metrics={metrics} status={status} />
+        </aside>
+      </section>
     </>
   )
 }

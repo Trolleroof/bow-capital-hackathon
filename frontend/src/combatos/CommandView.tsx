@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { LiveFrameCanvas } from './LiveFrameCanvas'
 import type { TelemetryState, LogEntry } from './useCombatState'
 import { Gauge } from './atoms'
 import { VslamScene } from './VslamScene'
+import { makeDetectionOverlay } from './OpticView'
 
 const MODULES = ['NAVIGATION', 'TARGETS', 'RECON', 'SYSTEM']
 
@@ -21,6 +22,10 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
   const tracked = t.dets.filter(d => d.st !== 'LOST').length
   const liveFeed = t.cameraFrame
   const annotatedFeed = t.slamFrame
+  const liveFeedAspect = liveFeed && liveFeed.width > 0 && liveFeed.height > 0
+    ? `${liveFeed.width} / ${liveFeed.height}`
+    : '16 / 9'
+  const cameraOverlay = useMemo(() => makeDetectionOverlay(t.dets), [t.dets])
   const vslamPose = t.slamOdometry ?? { ...t.pose, qz: Math.sin(t.yaw * Math.PI / 360), qw: Math.cos(t.yaw * Math.PI / 360) }
 
   return (
@@ -154,9 +159,9 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
         {/* stereo feed */}
         <div className="pnl feed-col">
           <h4>OAK CAMERA STREAM <em>{liveFeed ? `#${liveFeed.seq}` : 'WAITING'}</em></h4>
-          <div className="feed" onClick={onEnterOptic}>
+          <div className="feed" style={{ aspectRatio: liveFeedAspect }} onClick={onEnterOptic}>
             {liveFeed ? (
-              <LiveFrameCanvas frame={liveFeed} className="slam-live-canvas" fit="cover" />
+              <LiveFrameCanvas frame={liveFeed} className="slam-live-canvas" fit="contain" overlay={cameraOverlay} />
             ) : (
               <div className="subj-ph hatch" data-cap={'AWAITING\nCAMERA FEED'} />
             )}

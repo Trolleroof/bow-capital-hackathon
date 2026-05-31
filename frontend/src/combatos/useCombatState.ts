@@ -20,12 +20,14 @@ export interface SlamDiagnostics {
 
 export interface Detection {
   id: string
+  numericId: number
   cls: string
   conf: number
   rng: number
   brg: number
+  bbox: [number, number, number, number] | null   // normalised [x,y,w,h] 0-1
   st: 'TRACK' | 'OBSERVE' | 'LOST'
-  tone: 'amber' | 'mute' | ''
+  tone: 'amber' | 'candidate' | 'mute' | ''
   confirmed: boolean
 }
 
@@ -78,11 +80,11 @@ function fmtSec(s: number) {
 }
 
 const MOCK_DETS: Detection[] = [
-  { id: 'TGT-01', cls: 'SUBJECT', conf: 0.94, rng: 42.1, brg: 14,  st: 'TRACK',   tone: 'amber', confirmed: false },
-  { id: 'E-2207', cls: 'PERSON',  conf: 0.71, rng: 58.3, brg: 331, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'E-2208', cls: 'PERSON',  conf: 0.66, rng: 61.0, brg: 337, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'V-0714', cls: 'VEHICLE', conf: 0.82, rng: 88.4, brg: 48,  st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'E-2209', cls: 'PERSON',  conf: 0.58, rng: 73.9, brg: 9,   st: 'LOST',    tone: 'mute',  confirmed: false },
+  { id: 'TGT-01', numericId: 1, cls: 'SUBJECT', conf: 0.94, rng: 42.1, brg: 14,  bbox: null, st: 'TRACK',   tone: 'amber', confirmed: false },
+  { id: 'E-2207', numericId: 2, cls: 'PERSON',  conf: 0.71, rng: 58.3, brg: 331, bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
+  { id: 'E-2208', numericId: 3, cls: 'PERSON',  conf: 0.66, rng: 61.0, brg: 337, bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
+  { id: 'V-0714', numericId: 4, cls: 'VEHICLE', conf: 0.82, rng: 88.4, brg: 48,  bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
+  { id: 'E-2209', numericId: 5, cls: 'PERSON',  conf: 0.58, rng: 73.9, brg: 9,   bbox: null, st: 'LOST',    tone: 'mute',  confirmed: false },
 ]
 
 function initState(): TelemetryState {
@@ -99,7 +101,7 @@ function initState(): TelemetryState {
     heading: 150,
     loops: 14,
     traj: makeTraj(24),
-    dets: MOCK_DETS.map(d => ({ ...d })),
+    dets: [],
     tracking: 'OK',
     gps: false,
     recon: { status: 'training', frames: 0 },
@@ -177,13 +179,7 @@ export function useCombatState() {
           temp: Math.round(j(64, 0.7)),
           heading: (p.heading + 0.7) % 360,
           traj,
-          dets: p.dets.map(d =>
-            d.st === 'LOST' ? d : {
-              ...d,
-              conf: Math.min(0.99, Math.max(0.4, +(d.conf + (Math.random() - 0.5) * 0.02).toFixed(2))),
-              rng: +(d.rng + (Math.random() - 0.5) * 0.6).toFixed(1),
-            }
-          ),
+          dets: p.dets,
         }
       })
     }, 850)
@@ -254,21 +250,22 @@ export function useCombatState() {
             } else if (msg.topic === 'detections') {
               const objects: Array<{
                 id: number; cls: string; conf: number
-                bbox: [number, number, number, number]; is_target: boolean; confirmed: boolean
-              }> = msg.objects ?? []
-              if (objects.length > 0) {
-                const mapped: Detection[] = objects.map((o) => ({
-                  id: `T-${String(o.id).padStart(4, '0')}`,
-                  cls: o.cls.toUpperCase(),
-                  conf: o.conf,
-                  rng: NaN,
-                  brg: NaN,
-                  st: o.is_target ? 'TRACK' : 'OBSERVE',
-                  tone: o.is_target ? 'amber' : '',
-                  confirmed: o.confirmed,
-                }))
-                setT(p => ({ ...p, dets: mapped }))
-              }
+                bbox: [number, number, number, number]
+                is_primary: boolean; is_candidate: boolean; confirmed: boolean
+              }> = (msg.objects as typeof objects) ?? []
+              const mapped: Detection[] = objects.map((o) => ({
+                id: `T-${String(o.id).padStart(4, '0')}`,
+                numericId: o.id,
+                cls: o.cls.toUpperCase(),
+                conf: o.conf,
+                rng: NaN,
+                brg: NaN,
+                bbox: Array.isArray(o.bbox) && o.bbox.length === 4 ? o.bbox : null,
+                st: (o.confirmed || o.is_primary) ? 'TRACK' : 'OBSERVE',
+                tone: o.is_primary ? 'amber' : o.is_candidate ? 'candidate' : '',
+                confirmed: o.confirmed,
+              }))
+              setT(p => ({ ...p, dets: mapped }))
             } else if (msg.topic === 'recon') {
               setT(p => ({
                 ...p,
@@ -291,10 +288,10 @@ export function useCombatState() {
                   queueDepth: msg.queue_depth ?? p.slamDiagnostics.queueDepth,
                 },
               }))
-            } else if (msg.topic === 'camera_frame') {
+            } else if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
               const frame = toFrame(msg)
               if (frame) setT(p => ({ ...p, cameraFrame: frame }))
-            } else if (msg.topic === 'slam_frame') {
+            } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
               const frame = toFrame(msg)
               if (frame) setT(p => ({ ...p, slamFrame: frame }))
             }
@@ -315,17 +312,45 @@ export function useCombatState() {
     }
   }, [pushLog])
 
-  const confirmTarget = useCallback((id: string) => {
+  const _sendCmd = useCallback((payload: object) => {
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ topic: 'confirm_target', id }))
+      ws.send(JSON.stringify({ topic: 'command', ...payload }))
     }
+  }, [])
+
+  const followTarget = useCallback((numericId: number, id: string) => {
+    _sendCmd({ action: 'follow', track_id: numericId })
     setT(p => ({
       ...p,
-      dets: p.dets.map(d => d.id === id ? { ...d, confirmed: true } : d),
+      dets: p.dets.map(d => ({ ...d, tone: d.numericId === numericId ? 'amber' : d.tone })),
     }))
-    pushLog('CMD', `target ${id} confirmed`, 'amber')
-  }, [pushLog])
+    pushLog('CMD', `follow → ${id}`, 'amber')
+  }, [_sendCmd, pushLog])
 
-  return { t, log, confirmTarget }
+  const confirmTarget = useCallback((numericId: number, id: string) => {
+    _sendCmd({ action: 'confirm', track_id: numericId })
+    setT(p => ({
+      ...p,
+      dets: p.dets.map(d => ({ ...d, confirmed: d.numericId === numericId })),
+    }))
+    pushLog('CMD', `confirmed ${id}`, 'amber')
+  }, [_sendCmd, pushLog])
+
+  const releaseTarget = useCallback(() => {
+    _sendCmd({ action: 'release' })
+    setT(p => {
+      const hasConfirmed = p.dets.some(d => d.confirmed)
+      if (hasConfirmed) {
+        // confirmed → followed: clear confirmed flag
+        return { ...p, dets: p.dets.map(d => ({ ...d, confirmed: false })) }
+      } else {
+        // followed → proposed: clear amber
+        return { ...p, dets: p.dets.map(d => ({ ...d, tone: (d.tone === 'amber' ? '' : d.tone) as Detection['tone'] })) }
+      }
+    })
+    pushLog('CMD', 'released', '')
+  }, [_sendCmd, pushLog])
+
+  return { t, log, followTarget, confirmTarget, releaseTarget }
 }

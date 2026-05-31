@@ -8,7 +8,7 @@ interface Props {
   t: TelemetryState
   log: LogEntry[]
   onEnterOptic: () => void
-  onConfirm: (id: string) => void
+  onConfirm: (numericId: number, id: string) => void
 }
 
 export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
@@ -151,20 +151,11 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           <h4>OAK CAMERA STREAM <em>{liveFeed ? `#${liveFeed.seq}` : 'WAITING'}</em></h4>
           <div className="feed" onClick={onEnterOptic}>
             {liveFeed ? (
-              <img className="slam-live-img" src={liveFeed.data} alt="OAK-D Lite camera stream" />
+              <img className="slam-live-img" src={liveFeed.data} alt="camera stream" />
             ) : (
-              <div className="scan-img" />
+              <div className="subj-ph hatch" data-cap={'AWAITING\nCAMERA FEED'} />
             )}
-            <div className="horizon" />
-            {!liveFeed && <div className="subj-ph hatch" data-cap={'WAITING\nCAMERA FRAME'} />}
-            <div className="det-box" style={{ left: '18%', top: '30%', width: '24%', height: '40%' }}>
-              <div className="dl">PERSON · 0.71</div>
-            </div>
-            <div className="det-box det-box--target" style={{ right: '17%', top: '24%', width: '28%', height: '52%' }}>
-              <div className="dl">SUBJECT · 0.94</div>
-            </div>
-            <div className="feed-scan" />
-            <div className="feed-tag"><i />REC · {liveFeed ? `${liveFeed.width}×${liveFeed.height}` : 'NO FRAME'}</div>
+            <div className="feed-tag"><i />{liveFeed ? `LIVE · ${liveFeed.width}×${liveFeed.height}` : 'NO SIGNAL'}</div>
             <div className="enter">
               <div className="ico">⤢</div>
               <div className="lbl">ENTER OPTIC FEED</div>
@@ -201,7 +192,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
                   <div
                     key={d.id}
                     className={'dt-row' + (d.tone ? ` dt-row--${d.tone}` : '')}
-                    onClick={() => d.st === 'TRACK' && !d.confirmed && onConfirm(d.id)}
+                    onClick={() => d.st === 'TRACK' && !d.confirmed && onConfirm(d.numericId, d.id)}
                     title={d.st === 'TRACK' && !d.confirmed ? 'Click to confirm target' : undefined}
                     style={{ cursor: d.st === 'TRACK' && !d.confirmed ? 'pointer' : 'default' }}
                   >

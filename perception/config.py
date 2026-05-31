@@ -55,6 +55,14 @@ MAX_DISTANCE     = float(os.getenv("MAX_DISTANCE", "150"))
 # At 30 fps, the default of 30 gives ~1 s of occlusion tolerance.
 MAX_LOST_FRAMES  = int(os.getenv("MAX_LOST_FRAMES", "30"))
 
+# Consecutive frames a new detection must be seen before it becomes a visible track.
+# Eliminates single-frame ghost detections without delaying real targets noticeably.
+TRACK_INIT_DELAY = int(os.getenv("TRACK_INIT_DELAY", "3"))
+
+# EMA factor for bbox smoothing (0-1). Lower = smoother but more lag.
+# 0 disables smoothing; 0.35 is a good balance at 30 fps.
+BBOX_SMOOTH_ALPHA = float(os.getenv("BBOX_SMOOTH_ALPHA", "0.35"))
+
 # ---------------------------------------------------------------------------
 # WebSocket event bus
 # ---------------------------------------------------------------------------
@@ -136,6 +144,12 @@ REID_PREBUFFER_SIZE   = int(os.getenv("REID_PREBUFFER_SIZE",     "8"))
 # Frames between embedding samples for any given track.  At 30 fps the
 # default of 30 gives ~1 sample/second, balancing diversity vs. CPU load.
 REID_SAMPLE_INTERVAL  = int(os.getenv("REID_SAMPLE_INTERVAL",    "30"))
+
+# Run YOLO detection only every Nth frame; tracker interpolates in between.
+# 1 = detect every frame (slowest, most accurate).
+# 2 = detect every other frame (~1.4x throughput gain with minimal tracking error).
+# 3 = every 3rd frame (~1.8x gain, good for slow-moving targets).
+DETECT_EVERY = int(os.getenv("DETECT_EVERY", "1"))
 
 # Crops narrower or shorter than this (pixels) are skipped entirely; too
 # small to yield a reliable embedding.

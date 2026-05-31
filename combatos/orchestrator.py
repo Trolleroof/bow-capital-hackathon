@@ -78,19 +78,26 @@ async def main() -> None:
         ],
     ]
 
-    loop = asyncio.get_running_loop()
-
     def _shutdown() -> None:
         log.info("shutdown signal received — stopping all tasks")
         for t in tasks:
             t.cancel()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _shutdown)
+    # add_signal_handler is POSIX-only; use a KeyboardInterrupt wrapper on Windows
+    import sys
+    if sys.platform != "win32":
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _shutdown)
 
     log.info("all systems go — connect dashboard to ws://localhost:%d", config.BUS_PORT)
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        _shutdown()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
     for name, result in zip([t.get_name() for t in tasks], results):
         if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
             log.error("task [%s] exited with error: %s", name, result)

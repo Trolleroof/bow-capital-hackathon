@@ -169,9 +169,8 @@ def main() -> None:
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     _dbg("entering main loop")
-    frame_n   = 0
-    t_loop    = time.time()
-    t_slow_threshold = 0.5  # log any step that takes longer than this
+    frame_n        = 0
+    last_dets: list = []  # reused on non-detect frames
 
     recording    = False
     rec_dir      = None
@@ -179,27 +178,20 @@ def main() -> None:
     writer_hud   = None
 
     while True:
-        t0 = time.time()
-
         ret, frame = cap.read()
-        t_read = time.time()
         if not ret:
             _dbg(f"cap.read() returned False at frame {frame_n} -- end of stream or read error")
             break
-        if t_read - t0 > t_slow_threshold:
-            _dbg(f"frame {frame_n}: SLOW cap.read() {t_read-t0:.3f}s")
 
         if src_w != proc_w:
             frame = cv2.resize(frame, (proc_w, proc_h), interpolation=cv2.INTER_LINEAR)
 
-        detections = detector.run(frame)
-        t_det = time.time()
-        if t_det - t_read > t_slow_threshold:
-            _dbg(f"frame {frame_n}: SLOW detector.run() {t_det-t_read:.3f}s  detections={len(detections)}")
+        if frame_n % config.DETECT_EVERY == 0:
+            last_dets = detector.run(frame)
+        detections = last_dets
 
         objects    = tracker.update(detections)
         active_ids = {o.id for o in objects}
-        t_track = time.time()
 
         # Drain dashboard commands (non-blocking, batched since last frame)
         if publisher:
@@ -221,9 +213,6 @@ def main() -> None:
                     break
 
         gallery.prune(active_ids)
-        t_reid = time.time()
-        if t_reid - t_track > t_slow_threshold:
-            _dbg(f"frame {frame_n}: SLOW reid/sample {t_reid-t_track:.3f}s")
         # --------------------------------------------------------------
 
         candidate = buffer.update(objects)
@@ -232,7 +221,8 @@ def main() -> None:
         confirmed_obj = next((o for o in objects if o.confirmed), None)
 
         if publisher:
-            publisher.publish(objects)
+            publisher.publish(objects, proc_w, proc_h,
+                              candidate_id=candidate.id if candidate else None)
 
         raw_frame = frame.copy()
         frame = draw(frame, objects, candidate)
@@ -242,20 +232,11 @@ def main() -> None:
             writer_hud.write(frame)
 
         if publisher and frame_n % config.FPV_INTERVAL == 0:
-            publisher.publish_frame(frame, quality=config.FPV_QUALITY)
+            publisher.publish_frame(raw_frame, topic="fpv_raw", quality=config.FPV_QUALITY)
 
         cv2.imshow(WINDOW, frame)
-        t_draw = time.time()
 
-        # Periodic summary every 30 frames
         frame_n += 1
-        if frame_n % 30 == 0:
-            elapsed = time.time() - t_loop
-            fps = 30 / elapsed
-            _dbg(f"frame {frame_n}: {fps:.1f} fps  tracks={len(objects)}  "
-                 f"det={t_det-t_read:.3f}s  reid={t_reid-t_track:.3f}s  "
-                 f"draw={t_draw-t_reid:.3f}s")
-            t_loop = time.time()
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):

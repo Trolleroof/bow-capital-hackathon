@@ -31,9 +31,11 @@ class TargetTracker:
             distance_function="euclidean",
             distance_threshold=config.MAX_DISTANCE,
             hit_counter_max=config.MAX_LOST_FRAMES,
+            initialization_delay=config.TRACK_INIT_DELAY,
         )
         self._primary_id: int | None = None   # follow-mode locked ID
         self._confirmed_ids: set[int] = set() # operator-confirmed targets
+        self._smooth: dict[int, list[float]] = {}  # track_id → smoothed bbox
 
     # ------------------------------------------------------------------
     def update(self, detections: list[Detection]) -> list[TrackedObject]:
@@ -48,15 +50,37 @@ class TargetTracker:
         ]
         tracked = self._tracker.update(norfair_dets)
 
+        # Drop tracks that haven't yet cleared the initialization window
+        active_ids: set[int] = set()
         objects: list[TrackedObject] = []
         for t in tracked:
+            if getattr(t, 'is_initializing', False):
+                continue
             src_det: Detection = t.last_detection.data if t.last_detection else None
             if src_det is None:
                 continue
+
+            # EMA bbox smoothing to reduce per-frame jitter
+            alpha = config.BBOX_SMOOTH_ALPHA
+            raw = list(src_det.bbox)
+            if t.id in self._smooth and alpha > 0:
+                prev = self._smooth[t.id]
+                smoothed = [alpha * r + (1 - alpha) * p for r, p in zip(raw, prev)]
+            else:
+                smoothed = raw
+            self._smooth[t.id] = smoothed
+            src_det.bbox = [int(v) for v in smoothed]
+
+            active_ids.add(t.id)
             obj = TrackedObject(t.id, src_det)
             obj.confirmed = t.id in self._confirmed_ids
             obj.is_primary = t.id == self._primary_id
             objects.append(obj)
+
+        # Prune stale smooth entries
+        gone = set(self._smooth) - active_ids
+        for tid in gone:
+            del self._smooth[tid]
 
         return objects
 

@@ -8,7 +8,7 @@ import './combatos.css'
 type View = 'boot' | 'command' | 'optic'
 
 export function CombatOS() {
-  const { t, log, confirmTarget } = useCombatState()
+  const { t, log, followTarget, confirmTarget, releaseTarget } = useCombatState()
   const [view, setView] = useState<View>('boot')
   const [booted, setBooted] = useState(false)
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -53,7 +53,7 @@ export function CombatOS() {
               <CommandView t={t} log={log} onEnterOptic={enterOptic} onConfirm={confirmTarget} />
             </div>
             <div className={'cos-layer cos-layer--optic' + (view === 'optic' ? ' is-show' : '')}>
-              <OpticView t={t} onExit={exitOptic} onConfirm={confirmTarget} />
+              <OpticView t={t} onExit={exitOptic} onFollow={followTarget} onConfirm={confirmTarget} onRelease={releaseTarget} />
             </div>
           </>
         )}

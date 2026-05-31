@@ -38,23 +38,32 @@ from tracker import TrackedObject
 print("[import/bus] tracker ok", flush=True)
 
 
-def _serialize(objects: list[TrackedObject]) -> str:
-    payload: dict[str, Any] = {
+def _normalize_bbox(bbox: list[int], fw: int, fh: int) -> list[float]:
+    x, y, w, h = bbox
+    return [round(x/fw, 4), round(y/fh, 4), round(w/fw, 4), round(h/fh, 4)]
+
+
+def _serialize(objects: list[TrackedObject], fw: int, fh: int, candidate_id: int | None = None) -> str:
+    # Flat layout: orchestrator strips "topic" and re-publishes {"topic": ..., **rest},
+    # so objects must be top-level (not nested under "data") for the frontend to read msg.objects.
+    return json.dumps({
+        "topic": config.WS_TOPIC,
         "t": time.time(),
         "objects": [
             {
-                "id":        o.id,
-                "cls":       o.cls,
-                "conf":      round(o.conf, 3),
-                "bbox":      o.bbox,
-                "has_face":  o.has_face,
-                "is_target": o.is_primary or o.confirmed,
-                "confirmed": o.confirmed,
+                "id":           o.id,
+                "cls":          o.cls,
+                "conf":         round(o.conf, 3),
+                "bbox":         _normalize_bbox(o.bbox, fw, fh),
+                "has_face":     o.has_face,
+                "is_primary":   o.is_primary and not o.confirmed,
+                "is_candidate": (candidate_id is not None and o.id == candidate_id
+                                 and not o.is_primary and not o.confirmed),
+                "confirmed":    o.confirmed,
             }
             for o in objects
         ],
-    }
-    return json.dumps({"topic": config.WS_TOPIC, "data": payload})
+    })
 
 
 class BusPublisher:
@@ -95,23 +104,24 @@ class BusPublisher:
     # ------------------------------------------------------------------
     # Publish (non-blocking -- fire and forget)
 
-    def publish(self, objects: list[TrackedObject]) -> None:
-        if self._ws is None or self._ws.closed:
+    def _send(self, msg: str) -> None:
+        if self._ws is None:
             return
-        msg = _serialize(objects)
         asyncio.run_coroutine_threadsafe(self._ws.send(msg), self._loop)
-        # Do NOT await the future -- returns immediately to the main thread
 
-    def publish_frame(self, frame: np.ndarray, quality: int = 60) -> None:
-        """Encode frame as JPEG and broadcast as topic 'fpv'."""
-        if self._ws is None or self._ws.closed:
+    def publish(self, objects: list[TrackedObject], frame_w: int, frame_h: int,
+               candidate_id: int | None = None) -> None:
+        self._send(_serialize(objects, frame_w, frame_h, candidate_id))
+
+    def publish_frame(self, frame: np.ndarray, topic: str, quality: int = 60) -> None:
+        """Encode frame as JPEG and broadcast on the given topic."""
+        if self._ws is None:
             return
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if not ok:
             return
         b64 = base64.b64encode(buf).decode("ascii")
-        msg = json.dumps({"topic": "fpv", "data": b64})
-        asyncio.run_coroutine_threadsafe(self._ws.send(msg), self._loop)
+        self._send(json.dumps({"topic": topic, "data": b64}))
 
     # ------------------------------------------------------------------
     # Receive loop (runs inside the background asyncio loop)

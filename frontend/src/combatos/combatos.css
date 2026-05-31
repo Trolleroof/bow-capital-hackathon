@@ -674,6 +674,7 @@
   font-family: var(--mono);
 }
 .optic .feed-bg { position: absolute; inset: 0; color: #152433; }
+.optic img.feed-bg { object-fit: cover; width: 100%; height: 100%; display: block; }
 .optic .feed-bg::before {
   content: "";
   position: absolute;
@@ -913,31 +914,32 @@
 }
 .optic.is-locked .rt-scan { display: none; }
 
-.optic .lock-btn {
+.optic .op-strip {
   position: absolute;
-  top: calc(49% + 138px);
+  bottom: 72px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.optic .op-btn {
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: .14em;
   font-weight: 700;
-  padding: 9px 18px;
+  padding: 8px 20px;
   cursor: pointer;
-  color: #04121d;
-  background: var(--amber);
   border: 0;
   font-family: var(--mono);
-  transition: all .18s;
+  transition: all .15s;
 }
-.optic .lock-btn:hover { background: var(--amber-br); }
-.optic .lock-btn.is-locked {
-  background: transparent;
-  color: var(--green);
-  border: 1px solid var(--green);
-  cursor: default;
-  animation: lockflash .6s ease-out 1;
-}
+.optic .op-btn--follow  { background: #1a3a5c; color: #7ecfff; border: 1px solid #7ecfff55; }
+.optic .op-btn--follow:hover  { background: #7ecfff; color: #04121d; }
+.optic .op-btn--confirm { background: var(--amber); color: #04121d; }
+.optic .op-btn--confirm:hover { filter: brightness(1.15); }
+.optic .op-btn--release { background: transparent; color: #888; border: 1px solid #444; }
+.optic .op-btn--release:hover { color: #ccc; border-color: #888; }
 
 /* ============================================================
  * BOOT SCREEN (3D)

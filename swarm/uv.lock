@@ -48,6 +48,9 @@ drones = [
     { name = "imageio" },
     { name = "imageio-ffmpeg" },
 ]
+physics = [
+    { name = "pybullet" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -58,11 +61,12 @@ requires-dist = [
     { name = "onnx", specifier = ">=1.16" },
     { name = "onnxruntime", specifier = ">=1.18" },
     { name = "pettingzoo", specifier = ">=1.24" },
+    { name = "pybullet", marker = "extra == 'physics'", specifier = ">=3.2.6" },
     { name = "tensorboard", specifier = ">=2.16" },
     { name = "torch", specifier = ">=2.4" },
     { name = "websockets", specifier = ">=12.0" },
 ]
-provides-extras = ["drones"]
+provides-extras = ["physics", "drones"]
 
 [[package]]
 name = "cuda-bindings"
@@ -560,6 +564,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/ab/547fbd9e16d879dd13c167478f8ae0a83a428008ca07a5e06acdc23ad473/protobuf-7.35.0-cp310-abi3-win_amd64.whl", hash = "sha256:f05bcadf9a2a6b8dda047007075135fb7d08c73d9177aabc067e1be46881a201", size = 439996, upload-time = "2026-05-19T23:02:26.808Z" },
     { url = "https://files.pythonhosted.org/packages/b8/ef/50433d346c56657a70d27f156c7b349ac59a068b01de4eb796e747eecc43/protobuf-7.35.0-py3-none-any.whl", hash = "sha256:c13f325cf242bad135c350629eeb5d54b24228eb472fb3e2e9ebbd4c5dc20ca0", size = 171659, upload-time = "2026-05-19T23:02:27.842Z" },
 ]
+
+[[package]]
+name = "pybullet"
+version = "3.2.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/95/b9a98cd4ed948d4f25a7d0b13cb0c1f87e58dc6d113be9e18940641eb25f/pybullet-3.2.7.tar.gz", hash = "sha256:042879db8d101ac7590dee475fc6aded508b85fe1273fdbbfde1d88bd200e14f", size = 80508379, upload-time = "2025-01-30T00:34:00.527Z" }
 
 [[package]]
 name = "setuptools"

@@ -15,6 +15,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Runtime/demo physics stack for the 3D mission sim.
+physics = [
+    "pybullet>=3.2.6",
+]
+
 # stretch: B-roll capture tooling only. If PyBullet/gym-pybullet-drones is
 # installed in a compatible local env, drones_broll.py will use it automatically.
 drones = [

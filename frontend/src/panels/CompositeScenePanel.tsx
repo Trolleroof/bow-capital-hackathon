@@ -21,6 +21,8 @@ interface CompositeScenePanelProps {
   envId: string
   trajectoryUrl?: string
   missionName?: string
+  swarmStreamUrl?: string
+  cameraStreamUrl?: string
   policyEnabled?: boolean
   /**
    * Mock 3DGS point cloud by default. Swap-in seam for the REAL Gaussian splat
@@ -29,6 +31,22 @@ interface CompositeScenePanelProps {
    * this scene — swarm, trajectory, coverage, controls — needs to change.
    */
   splatPointsUrl?: string
+}
+
+interface SwarmStreamAgent {
+  id: number
+  x: number
+  y: number
+  z: number
+  yaw: number
+  role?: string
+  alive: boolean
+}
+
+interface SwarmStreamMessage {
+  topic?: string
+  t: number
+  agents: SwarmStreamAgent[]
 }
 
 const FRAME_MS = 100
@@ -47,6 +65,24 @@ interface Waypoint {
 // scene mapping: world (x,y,z) -> three (x = x, up = z, depth = -y)
 function scenePoint(x: number, y: number, z: number): THREE.Vector3 {
   return new THREE.Vector3(x, z, -y)
+}
+
+function worldToCell(x: number, y: number): [number, number] {
+  let cx = Math.floor((x + WORLD_HALF) / CELL)
+  let cy = Math.floor((y + WORLD_HALF) / CELL)
+  if (cx < 0) cx = 0
+  else if (cx > GRID - 1) cx = GRID - 1
+  if (cy < 0) cy = 0
+  else if (cy > GRID - 1) cy = GRID - 1
+  return [cx, cy]
+}
+
+function markCoveredCells(covered: Uint8Array, agents: SwarmStreamAgent[]) {
+  for (const agent of agents) {
+    if (!agent.alive) continue
+    const [cx, cy] = worldToCell(agent.x, agent.y)
+    covered[cx * GRID + cy] = 1
+  }
 }
 
 function clampWorldVector(point: THREE.Vector3, minY = WORLD_Y_MIN, maxY = WORLD_Y_MAX) {
@@ -357,6 +393,8 @@ export default function CompositeScenePanel({
   trajectoryUrl,
   splatPointsUrl,
   missionName = 'Land Coverage Survey',
+  swarmStreamUrl = 'ws://localhost:8765',
+  cameraStreamUrl = 'ws://localhost:8000',
   policyEnabled = false,
 }: CompositeScenePanelProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
@@ -371,9 +409,17 @@ export default function CompositeScenePanel({
   const [meanAction, setMeanAction] = useState(0)
   const [status, setStatus] = useState(NOMINAL)
   const [lost, setLost] = useState(false)
+  const [swarmLive, setSwarmLive] = useState(false)
+  const [fpvFrame, setFpvFrame] = useState<string | null>(null)
 
   // setStatus lives in React; the render loop signals via this ref.
   const statusRef = useRef<{ text: string; lost: boolean } | null>(null)
+  const liveSwarmRef = useRef<{
+    connected: boolean
+    lastUpdate: number
+    agents: SwarmStreamAgent[]
+  }>({ connected: false, lastUpdate: 0, agents: [] })
+  const liveCoverageRef = useRef(new Uint8Array(GRID * GRID))
 
   // Camera control state
   const [cameraMode, setCameraMode] = useState<'drone-orbit' | 'fpv'>('drone-orbit')
@@ -466,6 +512,8 @@ export default function CompositeScenePanel({
 
     missionActiveRef.current = true
     seedMissionEnv(envRef.current, envId)
+    liveCoverageRef.current.fill(0)
+    liveSwarmRef.current = { connected: false, lastUpdate: 0, agents: [] }
     setProvider('scripted')
     setAlive(envRef.current.nAlive())
     setCoverage(envRef.current.coverage())
@@ -473,6 +521,88 @@ export default function CompositeScenePanel({
     setStatus(NOMINAL)
     setLost(false)
   }, [envId, policyEnabled])
+
+  useEffect(() => {
+    if (!policyEnabled) return
+
+    let ws: WebSocket | null = null
+    let retry: number | null = null
+    let closed = false
+
+    const connect = () => {
+      ws = new WebSocket(swarmStreamUrl)
+      ws.onopen = () => {
+        liveCoverageRef.current.fill(0)
+        setSwarmLive(true)
+        setProvider('pybullet-live')
+        setStatus('pybullet swarm stream live · bus-authoritative motion')
+        setLost(false)
+      }
+      ws.onclose = () => {
+        liveSwarmRef.current.connected = false
+        setSwarmLive(false)
+        if (!closed) {
+          setProvider('scripted')
+          setStatus('waiting for pybullet swarm stream · local fallback active')
+          retry = window.setTimeout(connect, 1500)
+        }
+      }
+      ws.onerror = () => ws?.close()
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data as string) as SwarmStreamMessage
+          if (msg.topic && msg.topic !== 'swarm') return
+          if (!Array.isArray(msg.agents)) return
+          liveSwarmRef.current = {
+            connected: true,
+            lastUpdate: performance.now(),
+            agents: msg.agents,
+          }
+          markCoveredCells(liveCoverageRef.current, msg.agents)
+        } catch {
+          // ignore malformed frames
+        }
+      }
+    }
+
+    connect()
+    return () => {
+      closed = true
+      if (retry != null) window.clearTimeout(retry)
+      ws?.close()
+    }
+  }, [policyEnabled, swarmStreamUrl, envId])
+
+  useEffect(() => {
+    let ws: WebSocket | null = null
+    let retry: number | null = null
+    let closed = false
+
+    const connect = () => {
+      ws = new WebSocket(cameraStreamUrl)
+      ws.onclose = () => {
+        if (!closed) retry = window.setTimeout(connect, 2000)
+      }
+      ws.onerror = () => ws?.close()
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data as string) as { topic?: string; data?: string }
+          if (msg.topic !== 'fpv_raw' && msg.topic !== 'camera_frame') return
+          if (typeof msg.data !== 'string') return
+          setFpvFrame(`data:image/jpeg;base64,${msg.data}`)
+        } catch {
+          // ignore malformed frames
+        }
+      }
+    }
+
+    connect()
+    return () => {
+      closed = true
+      if (retry != null) window.clearTimeout(retry)
+      ws?.close()
+    }
+  }, [cameraStreamUrl])
 
   useEffect(() => {
     const mount = mountRef.current
@@ -567,8 +697,7 @@ export default function CompositeScenePanel({
     for (let idx = 0; idx < GRID * GRID; idx++) coverMesh.setMatrixAt(idx, HIDDEN)
     coverMesh.instanceMatrix.needsUpdate = true
     let lastCoveredCount = -1
-    const refreshCoverage = () => {
-      const covered = env0.coveredCells()
+    const refreshCoverage = (covered: Uint8Array) => {
       let count = 0
       for (let cx = 0; cx < GRID; cx++) {
         for (let cy = 0; cy < GRID; cy++) {
@@ -658,6 +787,12 @@ export default function CompositeScenePanel({
 
       const env = envRef.current
       const missionLaunched = missionActiveRef.current
+      const liveSwarmFresh =
+        missionLaunched &&
+        liveSwarmRef.current.connected &&
+        now - liveSwarmRef.current.lastUpdate < 1500 &&
+        liveSwarmRef.current.agents.length > 0
+      const liveAgents = liveSwarmFresh ? liveSwarmRef.current.agents : []
 
       coverMesh.visible = missionLaunched
       trajectoryLine.visible = missionLaunched
@@ -678,6 +813,7 @@ export default function CompositeScenePanel({
         seedMissionEnv(env, envId)
         trails.forEach((t) => t.clear())
         lastCoveredCount = -1
+        liveCoverageRef.current.fill(0)
         for (let idx = 0; idx < GRID * GRID; idx++) coverMesh.setMatrixAt(idx, HIDDEN)
         coverMesh.instanceMatrix.needsUpdate = true
         statusRef.current = missionLaunched
@@ -691,41 +827,52 @@ export default function CompositeScenePanel({
           ? { text: NOMINAL, lost: false }
           : { text: POLICY_REQUIRED, lost: true }
       }
-      if (frameTimer >= FRAME_MS && !stepping && missionLaunched) {
+      if (frameTimer >= FRAME_MS) {
         frameTimer = 0
-        stepping = true
-        const actions = scriptedMissionActions(env, envId, now - missionStartedAt)
-        env.step(actions)
-        setAlive(env.nAlive())
-        setCoverage(env.coverage())
-        let total = 0
-        for (let i = 0; i < env.n; i++) {
-          total += Math.hypot(actions[i * 2], actions[i * 2 + 1])
+        if (!stepping && missionLaunched && !liveSwarmFresh) {
+          stepping = true
+          const actions = scriptedMissionActions(env, envId, now - missionStartedAt)
+          env.step(actions)
+          setAlive(env.nAlive())
+          setCoverage(env.coverage())
+          let total = 0
+          for (let i = 0; i < env.n; i++) {
+            total += Math.hypot(actions[i * 2], actions[i * 2 + 1])
+          }
+          setMeanAction(total / env.n)
+          refreshCoverage(env.coveredCells())
+          stepping = false
+        } else if (missionLaunched && liveSwarmFresh) {
+          refreshCoverage(liveCoverageRef.current)
+          setAlive(liveAgents.filter((agent) => agent.alive).length)
+          const liveCovered = liveCoverageRef.current.reduce((sum, value) => sum + value, 0)
+          setCoverage(liveCovered / (GRID * GRID))
+          setMeanAction(0.45)
         }
-        setMeanAction(total / env.n)
-        refreshCoverage()
-        stepping = false
       }
 
       // drones: smooth toward target, then drone.ts handles spin + dead-state.
       // updateDrone(x, y, z) places at position.set(x, z, y), so we pass the
       // scene vector as (sx, sz, sy) to land at the intended (sx, sy, sz).
       if (missionLaunched) for (let i = 0; i < env.n; i++) {
-        const target = scenePoint(
-          env.pos[i * 2],
-          env.pos[i * 2 + 1],
-          ALTITUDE + Math.sin(now * 0.002 + i) * 0.18,
-        )
-        current[i].lerp(target, 0.26)
-        const yaw = -Math.atan2(env.vel[i * 2 + 1], env.vel[i * 2])
-        updateDrone(drones[i], current[i].x, current[i].z, current[i].y, yaw, env.alive[i], dt)
-        if (env.alive[i]) trails[i].push(current[i].x, current[i].z, current[i].y)
-        const speed = Math.hypot(env.vel[i * 2], env.vel[i * 2 + 1])
+        const liveAgent = liveAgents.find((agent) => agent.id === i)
+        const px = liveAgent ? liveAgent.x : env.pos[i * 2]
+        const py = liveAgent ? liveAgent.y : env.pos[i * 2 + 1]
+        const pz = liveAgent ? liveAgent.z : ALTITUDE + Math.sin(now * 0.002 + i) * 0.18
+        const target = scenePoint(px, py, pz)
+        current[i].lerp(target, liveSwarmFresh ? 0.34 : 0.26)
+        const yaw = liveAgent ? -liveAgent.yaw : -Math.atan2(env.vel[i * 2 + 1], env.vel[i * 2])
+        const droneAlive = liveAgent ? liveAgent.alive : env.alive[i]
+        updateDrone(drones[i], current[i].x, current[i].z, current[i].y, yaw, droneAlive, dt)
+        if (droneAlive) trails[i].push(current[i].x, current[i].z, current[i].y)
+        const vx = liveAgent ? Math.cos(liveAgent.yaw) : env.vel[i * 2]
+        const vy = liveAgent ? Math.sin(liveAgent.yaw) : env.vel[i * 2 + 1]
+        const speed = liveAgent ? 0.5 : Math.hypot(vx, vy)
         const arrow = actionArrows[i]
-        arrow.visible = env.alive[i] && speed > 0.03
+        arrow.visible = droneAlive && speed > 0.03
         arrow.position.set(current[i].x, current[i].y + 0.45, current[i].z)
         if (speed > 0.03) {
-          arrow.setDirection(new THREE.Vector3(env.vel[i * 2], 0, -env.vel[i * 2 + 1]).normalize())
+          arrow.setDirection(new THREE.Vector3(vx, 0, -vy).normalize())
           arrow.setLength(1.0 + speed * 1.4, 0.45, 0.22)
         }
       }
@@ -734,14 +881,23 @@ export default function CompositeScenePanel({
       if (now - lastUIUpdate > 80) {
         lastUIUpdate = now
         const states = missionLaunched
-          ? Array.from({ length: env.n }, (_, i) => ({
-              id: i,
-              alive: env.alive[i],
-              x: env.pos[i * 2],
-              y: env.pos[i * 2 + 1],
-              vx: env.vel[i * 2] * MAX_SPEED,
-              vy: env.vel[i * 2 + 1] * MAX_SPEED,
-            }))
+          ? liveSwarmFresh
+            ? liveAgents.map((agent) => ({
+                id: agent.id,
+                alive: agent.alive,
+                x: agent.x,
+                y: agent.y,
+                vx: Math.cos(agent.yaw) * MAX_SPEED * 0.45,
+                vy: Math.sin(agent.yaw) * MAX_SPEED * 0.45,
+              }))
+            : Array.from({ length: env.n }, (_, i) => ({
+                id: i,
+                alive: env.alive[i],
+                x: env.pos[i * 2],
+                y: env.pos[i * 2 + 1],
+                vx: env.vel[i * 2] * MAX_SPEED,
+                vy: env.vel[i * 2 + 1] * MAX_SPEED,
+              }))
           : []
         setDroneStates(states)
       }
@@ -753,8 +909,14 @@ export default function CompositeScenePanel({
         if (ctx) {
           const agents: MiniAgent[] = []
           if (missionLaunched) {
-            for (let i = 0; i < env.n; i++) {
-              agents.push({ x: env.pos[i * 2], y: env.pos[i * 2 + 1], alive: env.alive[i] })
+            if (liveSwarmFresh) {
+              for (const agent of liveAgents) {
+                agents.push({ x: agent.x, y: agent.y, alive: agent.alive })
+              }
+            } else {
+              for (let i = 0; i < env.n; i++) {
+                agents.push({ x: env.pos[i * 2], y: env.pos[i * 2 + 1], alive: env.alive[i] })
+              }
             }
           }
           drawMinimap(
@@ -762,7 +924,9 @@ export default function CompositeScenePanel({
             mini.width,
             WORLD_HALF,
             GRID,
-            missionLaunched ? env.coveredCells() : new Uint8Array(GRID * GRID),
+            missionLaunched
+              ? (liveSwarmFresh ? liveCoverageRef.current : env.coveredCells())
+              : new Uint8Array(GRID * GRID),
             agents,
           )
         }
@@ -876,8 +1040,10 @@ export default function CompositeScenePanel({
 
   const selectedDroneState = droneStates[selectedDroneIndex]
   const controlLegend = getControlLegend(cameraMode)
+  const localControlsDisabled = swarmLive
 
   const handleKillDrone = (idx: number) => {
+    if (localControlsDisabled) return
     const env = envRef.current
     if (env) {
       env.kill(idx)
@@ -887,6 +1053,7 @@ export default function CompositeScenePanel({
   }
 
   const handleReviveDrone = (idx: number) => {
+    if (localControlsDisabled) return
     const env = envRef.current
     if (env) {
       env.revive(idx)
@@ -969,6 +1136,12 @@ export default function CompositeScenePanel({
                 <div style={{ fontWeight: 'bold', color: '#89f4c7', marginBottom: 4, fontSize: 11 }}>
                   UAV-0{selectedDroneIndex + 1} TELEMETRY
                 </div>
+                {localControlsDisabled && (
+                  <div className="telemetry-row">
+                    <span>CONTROL:</span>
+                    <span>LIVE BUS</span>
+                  </div>
+                )}
                 <div className={`telemetry-row ${!selectedDroneState.alive ? 'warning' : ''}`}>
                   <span>STATUS:</span>
                   <span>{selectedDroneState.alive ? 'ONLINE' : 'LINK LOST'}</span>
@@ -996,6 +1169,8 @@ export default function CompositeScenePanel({
                       type="button"
                       className="btn-kill"
                       onClick={() => handleKillDrone(selectedDroneIndex)}
+                      disabled={localControlsDisabled}
+                      title={localControlsDisabled ? 'Kill is not wired into the live runtime yet.' : undefined}
                     >
                       KILL UAV
                     </button>
@@ -1004,6 +1179,8 @@ export default function CompositeScenePanel({
                       type="button"
                       className="btn-revive"
                       onClick={() => handleReviveDrone(selectedDroneIndex)}
+                      disabled={localControlsDisabled}
+                      title={localControlsDisabled ? 'Revive is not wired into the live runtime yet.' : undefined}
                     >
                       REVIVE UAV
                     </button>
@@ -1023,7 +1200,7 @@ export default function CompositeScenePanel({
           </div>
 
           <div className="mission-metrics" aria-label="Mission telemetry">
-            <span>POLICY: {provider.toUpperCase()}</span>
+            <span>BACKEND: {provider.toUpperCase()}</span>
             {provider !== 'loading' && provider !== 'required' && (
               <span>
                 EVAL: {Math.round(TRAINED_COVERAGE * 100)}% / RANDOM {Math.round(RANDOM_COVERAGE * 100)}%
@@ -1037,10 +1214,20 @@ export default function CompositeScenePanel({
 
         <footer className="composite-hud__footer">
           <div className="scene-actions">
-            <button type="button" onClick={() => { reviveNextRef.current = true }}>
+            <button
+              type="button"
+              onClick={() => { reviveNextRef.current = true }}
+              disabled={localControlsDisabled}
+              title={localControlsDisabled ? 'Live PyBullet stream is authoritative.' : undefined}
+            >
               Revive All
             </button>
-            <button type="button" onClick={() => { resetNextRef.current = true }}>
+            <button
+              type="button"
+              onClick={() => { resetNextRef.current = true }}
+              disabled={localControlsDisabled}
+              title={localControlsDisabled ? 'Live PyBullet stream is authoritative.' : undefined}
+            >
               Reset
             </button>
           </div>
@@ -1050,6 +1237,7 @@ export default function CompositeScenePanel({
       {/* FPV COCKPIT HUD OVERLAY */}
       {cameraMode === 'fpv' && (
         <div className="fpv-hud-overlay">
+          {fpvFrame && <img className="fpv-hud-frame" src={fpvFrame} alt="FPV stream" />}
           <div className="fpv-hud-glass" />
           
           {selectedDroneState && !selectedDroneState.alive ? (
@@ -1065,7 +1253,7 @@ export default function CompositeScenePanel({
                 <div>FEED: UAV-0{selectedDroneIndex + 1} // FPV COCKPIT</div>
                 <div className="rec-indicator">
                   <span className="rec-dot" />
-                  <span>REC</span>
+                  <span>{fpvFrame ? 'LIVE' : 'SIM'}</span>
                 </div>
               </div>
 
@@ -1109,7 +1297,7 @@ export default function CompositeScenePanel({
               <div className="fpv-hud-footer">
                 <div>GIMBAL PITCH: 0.0°</div>
                 <div>YAW: {selectedDroneState ? (Math.atan2(selectedDroneState.vy, selectedDroneState.vx) * (180 / Math.PI)).toFixed(0) : '0'}°</div>
-                <div>AUTONOMY STATUS: MAPPO_ACTIVE</div>
+                <div>AUTONOMY STATUS: {swarmLive ? 'PYBULLET_LIVE' : 'SCRIPTED_FALLBACK'}</div>
               </div>
             </>
           )}

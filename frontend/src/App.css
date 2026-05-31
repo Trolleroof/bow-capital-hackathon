@@ -2090,10 +2090,20 @@
   font-family: 'Fira Code', monospace;
 }
 
+.fpv-hud-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.92;
+  filter: saturate(0.96) contrast(1.04);
+}
+
 .fpv-hud-glass {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at center, transparent 28%, rgba(0, 0, 0, 0.26) 100%);
+  background: radial-gradient(ellipse at center, transparent 28%, rgba(0, 0, 0, 0.34) 100%);
   border: 1.5px solid rgba(110, 240, 163, 0.06);
 }
 

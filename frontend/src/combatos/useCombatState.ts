@@ -79,14 +79,6 @@ function fmtSec(s: number) {
   return 'T+' + String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0')
 }
 
-const MOCK_DETS: Detection[] = [
-  { id: 'TGT-01', numericId: 1, cls: 'SUBJECT', conf: 0.94, rng: 42.1, brg: 14,  bbox: null, st: 'TRACK',   tone: 'amber', confirmed: false },
-  { id: 'E-2207', numericId: 2, cls: 'PERSON',  conf: 0.71, rng: 58.3, brg: 331, bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'E-2208', numericId: 3, cls: 'PERSON',  conf: 0.66, rng: 61.0, brg: 337, bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'V-0714', numericId: 4, cls: 'VEHICLE', conf: 0.82, rng: 88.4, brg: 48,  bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'E-2209', numericId: 5, cls: 'PERSON',  conf: 0.58, rng: 73.9, brg: 9,   bbox: null, st: 'LOST',    tone: 'mute',  confirmed: false },
-]
-
 function initState(): TelemetryState {
   return {
     sec: 137,

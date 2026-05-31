@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
-import CompositeScenePanel from './panels/CompositeScenePanel'
+import PyBulletSimPanel from './panels/PyBulletSimPanel'
 import GymScenarioStage, { ScenarioMiniPreview } from './gym/GymScenarioStage'
 import { getScenarioById, scenarios } from './gym/scenarios'
+import { startPyBulletSim } from './gym/trainApi'
 import { CombatOS } from './combatos/CombatOS'
 import {
   checkPolicyExists,
@@ -57,6 +58,7 @@ export default function App() {
       ) as Record<string, PolicyStatus>,
   )
   const [toast, setToast] = useState<string | null>(null)
+  const [launchingSim, setLaunchingSim] = useState<string | null>(null)
   const toastTimer = useRef<number | null>(null)
 
   useEffect(() => {
@@ -117,9 +119,18 @@ export default function App() {
     setRoute({ view: 'gym', envId })
   }
 
-  const enterSim = (envId: string) => {
+  const enterSim = async (envId: string) => {
     if (!simAllowedFor(envId)) {
       showToast('Train this environment first to unlock PyBullet Sim.')
+      return
+    }
+
+    setLaunchingSim(envId)
+    const result = await startPyBulletSim(envId)
+    setLaunchingSim((current) => (current === envId ? null : current))
+
+    if (!result.ok) {
+      showToast(result.error ?? 'PyBullet Sim failed to start.')
       return
     }
 
@@ -164,11 +175,11 @@ export default function App() {
         <button
           type="button"
           className={`nav-pill ${active === 'sim' ? 'nav-pill--active' : ''}`}
-          onClick={() => enterSim(envId)}
-          disabled={simLocked}
+          onClick={() => void enterSim(envId)}
+          disabled={simLocked || launchingSim === envId}
           title={simLocked ? 'Train this environment first.' : undefined}
         >
-          PyBullet Sim
+          {launchingSim === envId ? 'Launching' : 'PyBullet Sim'}
         </button>
         <button type="button" className="nav-pill" onClick={enterCombatOS}>
           CombatOS
@@ -184,7 +195,6 @@ export default function App() {
   if (route.view === 'sim') {
     const env = getScenarioById(route.envId) ?? scenarios[0]
     const policyReady = policyStore[env.id] === 'ready'
-    const controllerActive = policyReady || ALLOW_HEURISTIC
 
     return (
       <main className="app-shell app-shell--sim">
@@ -199,25 +209,20 @@ export default function App() {
           {scopedNav(env.id, 'sim')}
           <div
             className={`sim-policy-badge ${
-              controllerActive ? 'sim-policy-badge--ready' : ''
+              policyReady ? 'sim-policy-badge--ready' : ''
             }`}
           >
             <span className="sim-policy-badge__kicker">Controller</span>
             <span>
-              {policyReady
-                ? 'Trained policy'
-                : ALLOW_HEURISTIC
-                  ? 'Task behavior'
-                  : 'Locked'}
+              {policyReady ? 'Trained policy' : 'Locked'}
             </span>
           </div>
         </div>
 
-        <CompositeScenePanel
+        <PyBulletSimPanel
           key={env.id}
           envId={env.id}
           missionName={`${env.name} PyBullet Sim`}
-          policyEnabled={controllerActive}
         />
       </main>
     )
@@ -252,7 +257,7 @@ export default function App() {
           key={env.id}
           scenario={env}
           canLaunchSim={policyReady}
-          onLaunchSim={() => enterSim(env.id)}
+          onLaunchSim={() => void enterSim(env.id)}
           onPolicyReady={handlePolicyReady}
           onTrainingStart={handleTrainingStart}
           onTrainingError={handleTrainingError}
@@ -270,8 +275,8 @@ export default function App() {
             <span className="menu-subtitle">Select training environment</span>
             <h1 className="menu-title">Training Gym</h1>
             <p className="menu-kicker">
-              Pick a scenario, train the controller, then open a dedicated
-              PyBullet sim with the same environment and policy context.
+              Pick a scenario, train the controller, then open the PyBullet sim
+              with the same policy context.
             </p>
           </div>
           <button
@@ -350,11 +355,11 @@ export default function App() {
                     className="menu-card-cta menu-card-cta--button"
                     onClick={(event) => {
                       event.stopPropagation()
-                      enterSim(scenario.id)
+                      void enterSim(scenario.id)
                     }}
-                    disabled={!simAllowedFor(scenario.id)}
+                    disabled={!simAllowedFor(scenario.id) || launchingSim === scenario.id}
                   >
-                    PyBullet Sim
+                    {launchingSim === scenario.id ? 'Launching' : 'PyBullet Sim'}
                   </button>
                 </div>
               </article>

@@ -17,7 +17,6 @@ interface Props {
 export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
   const [intel, setIntel] = useState<'det' | 'recon'>('det')
   const [frameMinimized, setFrameMinimized] = useState(false)
-  const [bridgeMinimized, setBridgeMinimized] = useState(false)
   const clock = 'T+' + String(Math.floor(t.sec / 60)).padStart(2, '0') + ':' + String(t.sec % 60).padStart(2, '0')
   const tracked = t.dets.filter(d => d.st !== 'LOST').length
   const liveFeed = t.cameraFrame
@@ -266,37 +265,6 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
               ) : (
                 <div className="hatch" data-cap={'WAITING\n/slam/tracked_image/compressed'} />
               )}
-            </div>
-          )}
-        </div>
-        <div className={`slam-window slam-window--diag${bridgeMinimized ? ' slam-window--collapsed' : ''}`}>
-          <div className="sw-head">
-            <span>SLAM BRIDGE</span>
-            <div className="sw-head-actions">
-              <em>{t.wsConnected ? 'BUS UP' : 'BUS DOWN'}</em>
-              <button
-                type="button"
-                className="sw-toggle"
-                onClick={() => setBridgeMinimized(v => !v)}
-                aria-expanded={!bridgeMinimized}
-                aria-label={bridgeMinimized ? 'Expand SLAM bridge panel' : 'Minimize SLAM bridge panel'}
-                title={bridgeMinimized ? 'Expand' : 'Minimize'}
-              >
-                {bridgeMinimized ? '+' : '-'}
-              </button>
-            </div>
-          </div>
-          {!bridgeMinimized && (
-            <div className="sw-diag-grid">
-              <div><span>TRACKING</span><b>{t.slamStatus}</b></div>
-              <div><span>CAM FRAMES</span><b>{t.slamDiagnostics.cameraFrames}</b></div>
-              <div><span>SLAM FRAMES</span><b>{t.slamDiagnostics.annotatedFrames}</b></div>
-              <div><span>DROPPED</span><b>{t.slamDiagnostics.droppedFrames}</b></div>
-              <div><span>QUEUE</span><b>{t.slamDiagnostics.queueDepth}</b></div>
-              <div><span>POSE</span><b>{t.pose.x.toFixed(1)}, {t.pose.y.toFixed(1)}, {t.pose.z.toFixed(1)}</b></div>
-              <div><span>ODOM SPEED</span><b>{t.vel.toFixed(2)} m/s</b></div>
-              <div><span>PATH POSES</span><b>{t.slamPath.length}</b></div>
-              <div><span>MAP POINTS</span><b>{t.slamPointCloudTotal || t.slamPointCloud.length}</b></div>
             </div>
           )}
         </div>

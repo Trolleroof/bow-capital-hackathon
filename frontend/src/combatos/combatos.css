@@ -234,7 +234,7 @@
 }
 .rail { grid-column: 1; grid-row: 1 / span 2; }
 .nav-col { grid-column: 2; grid-row: 1 / span 2; }
-.feed-col { grid-column: 3; grid-row: 1; }
+.feed-col { grid-column: 3; grid-row: 1; justify-content: center; }
 .intel-col { grid-column: 3; grid-row: 2; }
 
 .pnl {
@@ -488,7 +488,9 @@
 
 /* feed */
 .feed {
-  flex: 1;
+  flex: 0 1 auto;
+  width: 100%;
+  max-height: 100%;
   min-height: 0;
   position: relative;
   overflow: hidden;

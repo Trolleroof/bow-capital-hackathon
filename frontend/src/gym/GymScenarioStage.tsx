@@ -16,13 +16,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import BattlefieldParamsPanel from './BattlefieldParamsPanel'
-import { type BattlefieldParams, getScenarioDefaults } from './battlefieldParams'
+import { getScenarioDefaults } from './battlefieldParams'
 import { type ScenarioCard, type ScenarioTelemetry, getScenarioById } from './scenarios'
-import { SwarmEnv, GRID, WORLD_HALF } from '../swarm/sim'
 import {
   checkPolicyExists,
-  loadPolicy,
-  type Policy,
   type PolicyStatus,
 } from '../swarm/policy'
 import { TrainingStatsDrawer, useTraining } from './TrainingDashboard'
@@ -74,14 +71,6 @@ interface StageFrame {
   contour?: Point[]
 }
 
-interface RolloutSnapshot {
-  agents: Agent[]
-  covered: Uint8Array
-  coverage: number
-  nAlive: number
-  n: number
-}
-
 // ───────────────────────────────────────── scene animation helpers ─────────
 
 function clamp(value: number, min: number, max: number) {
@@ -93,6 +82,28 @@ function orbit(cx: number, cy: number, radius: number, angle: number, squash = 1
     x: cx + Math.cos(angle) * radius,
     y: cy + Math.sin(angle) * radius * squash,
   }
+}
+
+function waypointLoop(points: Point[], tick: number, speed = 1): Point {
+  if (points.length === 0) return { x: 50, y: 50 }
+  if (points.length === 1) return points[0]
+
+  const segment = (tick * speed) / 18
+  const rawIndex = Math.floor(segment)
+  const i = ((rawIndex % points.length) + points.length) % points.length
+  const a = points[i]
+  const b = points[(i + 1) % points.length]
+  const t = segment - rawIndex
+  const eased = t * t * (3 - 2 * t)
+
+  return {
+    x: a.x + (b.x - a.x) * eased,
+    y: a.y + (b.y - a.y) * eased,
+  }
+}
+
+function pathTrail(points: Point[], tick: number, length = 18, speed = 1): Point[] {
+  return Array.from({ length }, (_, i) => waypointLoop(points, tick - (length - i) * 1.8, speed))
 }
 
 function repelFromRect(point: Point, rect: Obstacle | Zone, padding: number): Point {
@@ -166,8 +177,16 @@ function withAvoidance(frame: StageFrame): StageFrame {
 // ─────────────────────────────────────────── per-scenario renderers ────────
 
 function renderDroneVsDrone(tick: number): StageFrame {
-  const blueAngles = [0.2, 1.15, 2.2]
-  const redAngles  = [3.5, 4.45, 5.2]
+  const blueRoutes = [
+    [{ x: 16, y: 36 }, { x: 34, y: 31 }, { x: 43, y: 44 }, { x: 39, y: 63 }, { x: 20, y: 66 }],
+    [{ x: 18, y: 50 }, { x: 35, y: 39 }, { x: 45, y: 50 }, { x: 35, y: 61 }],
+    [{ x: 16, y: 64 }, { x: 31, y: 70 }, { x: 43, y: 58 }, { x: 34, y: 40 }],
+  ]
+  const redRoutes = [
+    [{ x: 84, y: 36 }, { x: 66, y: 31 }, { x: 57, y: 44 }, { x: 61, y: 63 }, { x: 80, y: 66 }],
+    [{ x: 82, y: 50 }, { x: 65, y: 39 }, { x: 55, y: 50 }, { x: 65, y: 61 }],
+    [{ x: 84, y: 64 }, { x: 69, y: 70 }, { x: 57, y: 58 }, { x: 66, y: 40 }],
+  ]
   const aliveRed   = tick > 88 ? 2 : 3
   const control    = clamp(50 + Math.sin(tick / 12) * 24, 8, 92)
   return {
@@ -181,14 +200,18 @@ function renderDroneVsDrone(tick: number): StageFrame {
       { id: 'rf-denial-pocket', x: 50, y: 24, radius: 10, kind: 'jammer', avoid: true },
     ],
     assets: [{ id: 'control-zone', x: 50, y: 50, radius: 13 }],
+    paths: [
+      pathTrail(blueRoutes[0], tick, 16, 1.05),
+      pathTrail(redRoutes[0], tick + 9, 16, 1.05),
+    ],
     agents: [
-      ...blueAngles.map((angle, i) => ({
+      ...blueRoutes.map((route, i) => ({
         id: `blue-${i}`, team: 'blue' as const, alive: true,
-        ...orbit(33, 50, 12 + i * 2.2, angle + tick * 0.045, 0.9),
+        ...waypointLoop(route, tick + i * 10, 1.05),
       })),
-      ...redAngles.map((angle, i) => ({
+      ...redRoutes.map((route, i) => ({
         id: `red-${i}`, team: 'red' as const, alive: i < aliveRed,
-        ...orbit(67, 50, 12 + i * 2.4, angle - tick * 0.042, 0.85),
+        ...waypointLoop(route, tick + i * 10 + 9, 1.05),
       })),
     ],
     telemetry: [
@@ -239,10 +262,14 @@ function renderMovingTargetTrack(tick: number): StageFrame {
 }
 
 function renderSearchAndInterdict(tick: number): StageFrame {
-  const lead   = orbit(52, 48, 22, tick * 0.03, 0.85)
-  const wingA  = orbit(52, 48, 30, tick * 0.03 + 2.2, 0.75)
-  const wingB  = orbit(52, 48, 30, tick * 0.03 + 4.1, 0.75)
-  const closer = orbit(lead.x, lead.y, 10, tick * 0.06 + 0.6, 0.8)
+  const sweepA = [{ x: 16, y: 20 }, { x: 42, y: 20 }, { x: 60, y: 24 }, { x: 84, y: 24 }, { x: 84, y: 44 }, { x: 64, y: 46 }, { x: 34, y: 44 }, { x: 16, y: 46 }]
+  const sweepB = [{ x: 18, y: 72 }, { x: 42, y: 76 }, { x: 60, y: 69 }, { x: 84, y: 66 }, { x: 82, y: 84 }, { x: 55, y: 84 }, { x: 28, y: 82 }]
+  const pincer = [{ x: 18, y: 54 }, { x: 36, y: 52 }, { x: 47, y: 59 }, { x: 58, y: 58 }, { x: 68, y: 51 }, { x: 82, y: 51 }]
+  const threat = [{ x: 79, y: 79 }, { x: 73, y: 65 }, { x: 64, y: 58 }, { x: 58, y: 53 }, { x: 53, y: 50 }]
+  const lead   = waypointLoop(threat, tick, 0.86)
+  const wingA  = waypointLoop(sweepA, tick, 1.08)
+  const wingB  = waypointLoop(sweepB, tick + 10, 1)
+  const closer = waypointLoop(pincer, tick + 18, 1.14)
   const lock   = clamp(38 + tick * 1.4, 0, 96)
   return {
     obstacles: [
@@ -255,6 +282,12 @@ function renderSearchAndInterdict(tick: number): StageFrame {
     zones: [
       { id: 'search-box', x: 50, y: 50, width: 76, height: 72, kind: 'search' },
       { id: 'jammer-field', x: 52, y: 47, radius: 15, kind: 'jammer', avoid: true },
+    ],
+    paths: [
+      pathTrail(sweepA, tick, 22, 1.08),
+      pathTrail(sweepB, tick + 10, 20, 1),
+      pathTrail(pincer, tick + 18, 16, 1.14),
+      pathTrail(threat, tick, 14, 0.86),
     ],
     contour: [{ x: 12, y: 14 }, { x: 88, y: 14 }, { x: 88, y: 86 }, { x: 12, y: 86 }],
     agents: [
@@ -417,66 +450,6 @@ function emptyGrid(): number[][] {
   return Array.from({ length: HEATMAP_ROWS }, () => Array(HEATMAP_COLS).fill(0))
 }
 
-function worldToStage(value: number) {
-  return clamp(((value + WORLD_HALF) / (WORLD_HALF * 2)) * 100, 4, 96)
-}
-
-function makeRolloutSnapshot(env: SwarmEnv): RolloutSnapshot {
-  return {
-    agents: Array.from({ length: env.n }, (_, i) => ({
-      id: `policy-${i}`,
-      team: 'blue' as const,
-      alive: env.alive[i],
-      x: worldToStage(env.pos[i * 2]),
-      y: worldToStage(env.pos[i * 2 + 1]),
-      radius: 3.4,
-      vx: env.vel[i * 2] * 5,
-      vy: env.vel[i * 2 + 1] * 5,
-    })),
-    covered: new Uint8Array(env.coveredCells()),
-    coverage: env.coverage(),
-    nAlive: env.nAlive(),
-    n: env.n,
-  }
-}
-
-function applyPolicyRollout(base: StageFrame, snapshot: RolloutSnapshot): StageFrame {
-  return withAvoidance({
-    ...base,
-    agents: snapshot.agents,
-    telemetry: [
-      { label: 'Cells swept', value: `${Math.round(snapshot.coverage * 100)}%` },
-      { label: 'Policy rollout', value: `${snapshot.nAlive} / ${snapshot.n} active` },
-      { label: 'Controller', value: 'ONNX' },
-    ],
-  })
-}
-
-function coverageToHeatmap(snapshot: RolloutSnapshot): number[][] {
-  const grid = emptyGrid()
-
-  for (let cx = 0; cx < GRID; cx++) {
-    for (let cy = 0; cy < GRID; cy++) {
-      if (!snapshot.covered[cx * GRID + cy]) continue
-      const col = Math.min(Math.floor((cx / GRID) * HEATMAP_COLS), HEATMAP_COLS - 1)
-      const row = Math.min(Math.floor((cy / GRID) * HEATMAP_ROWS), HEATMAP_ROWS - 1)
-      grid[row][col] = Math.min(grid[row][col] + 0.28, 1)
-    }
-  }
-
-  return grid
-}
-
-function makeVisualizationParams(params: BattlefieldParams): BattlefieldParams {
-  return {
-    ...params,
-    logistics: {
-      ...params.logistics,
-      attritionInjectRate: 0,
-    },
-  }
-}
-
 // ─────────────────────────────────────────────── component ────────────────
 
 export interface GymScenarioStageProps {
@@ -515,80 +488,17 @@ export default function GymScenarioStage({
     onError: msg => onTrainingError?.(msg),
   })
   const isTraining = status === 'running'
-  const policyReady = policyStatus === 'ready' || status === 'completed'
+  void policyStatus
 
   const handleTrain = () => {
     onTrainingStart?.(scenario.id)
     void start()
   }
 
-  // ── post-training policy rollout ────────────────────────────────────────
-  const rolloutEnvRef = useRef<SwarmEnv | null>(null)
-  const rolloutPolicyRef = useRef<Policy | null>(null)
-  const rolloutSteppingRef = useRef(false)
-  const [rolloutSnapshot, setRolloutSnapshot] = useState<RolloutSnapshot | null>(null)
-
-  useEffect(() => {
-    rolloutEnvRef.current = new SwarmEnv(400, 11, makeVisualizationParams(params))
-    rolloutPolicyRef.current = null
-    rolloutSteppingRef.current = false
-    queueMicrotask(() => setRolloutSnapshot(null))
-  }, [scenario.id, params])
-
-  useEffect(() => {
-    if (!policyReady) {
-      rolloutPolicyRef.current = null
-      return
-    }
-
-    let cancelled = false
-    loadPolicy(scenario.id)
-      .then(policy => {
-        if (!cancelled) {
-          rolloutPolicyRef.current = policy
-          if (!rolloutEnvRef.current) {
-            rolloutEnvRef.current = new SwarmEnv(400, 11, makeVisualizationParams(params))
-          }
-          rolloutEnvRef.current.reset(11)
-          setRolloutSnapshot(makeRolloutSnapshot(rolloutEnvRef.current))
-        }
-      })
-      .catch(err => {
-        console.error('[gym] failed to load trained policy rollout:', err)
-        rolloutPolicyRef.current = null
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [policyReady, scenario.id, params])
-
-  useEffect(() => {
-    const env = rolloutEnvRef.current
-    const policy = rolloutPolicyRef.current
-    if (!policyReady || !env || !policy || rolloutSteppingRef.current) return
-
-    rolloutSteppingRef.current = true
-    void policy
-      .act(env.observe(), env.n)
-      .then(actions => {
-        env.step(actions)
-        if (env.steps >= env.maxSteps) env.reset(11 + tick)
-        setRolloutSnapshot(makeRolloutSnapshot(env))
-      })
-      .catch(err => {
-        console.error('[gym] trained policy rollout failed:', err)
-        rolloutPolicyRef.current = null
-      })
-      .finally(() => {
-        rolloutSteppingRef.current = false
-      })
-  }, [tick, policyReady])
-
   // ── overlay #1: coverage heatmap (#20) ──────────────────────────────────
   const heatmapRef = useRef<number[][]>(emptyGrid())
   const [heatmap, setHeatmap] = useState<readonly (readonly number[])[]>(emptyGrid)
-  const visibleHeatmap = rolloutSnapshot ? coverageToHeatmap(rolloutSnapshot) : heatmap
+  const visibleHeatmap = heatmap
 
   // Reset heatmap when a new training run starts
   const prevStatusRef = useRef(status)
@@ -619,12 +529,10 @@ export default function GymScenarioStage({
     setHeatmap(grid.map(row => [...row]))
   }, [tick, status, scenario])
 
-  let frame = rolloutSnapshot
-    ? applyPolicyRollout(renderFrame(scenario, tick % 120), rolloutSnapshot)
-    : renderFrame(scenario, tick % 120)
-  const showBehaviorOverlays = isTraining || Boolean(rolloutSnapshot)
+  let frame = renderFrame(scenario, tick % 120)
+  const showBehaviorOverlays = isTraining
 
-  if (!rolloutSnapshot && isTraining && params.weather.windSpeed > 0) {
+  if (isTraining && params.weather.windSpeed > 0) {
     const drift = params.weather.windSpeed * 0.04
     const dx = Math.cos(params.weather.windDirRad) * drift
     const dy = Math.sin(params.weather.windDirRad) * drift

@@ -131,14 +131,23 @@ function App() {
       <main className="app-shell app-shell--sim">
         <div className="app-backdrop" />
         <section className="sim-viewport-full" aria-label={`${env.name} mission simulation`}>
-          <div className="sim-viewport-nav">{scopedNav(route.envId, 'sim')}</div>
-          <div className="sim-policy-badge" aria-label="Active policy info">
-            <span className="sim-policy-badge__kicker">Mission</span>
-            <span className="sim-policy-env">{env.name}</span>
-            <em data-status={policyReady ? 'Ready' : 'Queued'}>
-              {policyReady ? 'ONNX' : 'Policy required'}
-            </em>
-          </div>
+          <header className="sim-top-bar">
+            <div className="sim-top-bar__left">
+              <div className="sim-policy-badge" aria-label="Active policy info">
+                <span className="sim-policy-badge__kicker">Mission</span>
+                <span className="sim-policy-env">{env.name}</span>
+                <em data-status={policyReady ? 'Ready' : 'Queued'}>
+                  {policyReady ? 'ONNX' : 'Policy required'}
+                </em>
+              </div>
+              <div className="sim-comms-badges" aria-label="Comms status">
+                <span>GPS: DENIED</span>
+                <span>LINK: NONE</span>
+                <span>LOCALIZED</span>
+              </div>
+            </div>
+            <div className="sim-viewport-nav">{scopedNav(route.envId, 'sim')}</div>
+          </header>
           <CompositeScenePanel
             key={route.envId}
             envId={route.envId}

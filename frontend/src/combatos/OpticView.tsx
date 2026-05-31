@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { LiveFrameCanvas } from './LiveFrameCanvas'
 import type { Detection, TelemetryState } from './useCombatState'
 
@@ -71,7 +71,7 @@ function drawLabel(
   color: string,
   bold = false,
 ) {
-  const fs = bold ? 40 : 36
+  const fs = bold ? 20 : 18
   ctx.font = `${bold ? 700 : 400} ${fs}px monospace`
   const tw = ctx.measureText(text).width
   const pad = 4
@@ -127,7 +127,7 @@ export function OpticView({ t, onExit, onFollow, onConfirm, onRelease }: Props) 
         const w = nw * width
         const h = nh * height
         const color = detColor(d)
-        const thick = d.confirmed || d.tone === 'amber' ? 4 : 3
+        const thick = d.confirmed || d.tone === 'amber' ? 8 : 6
         const frac = d.confirmed ? 0.3 : 0.24
 
         drawCorners(ctx, x, y, w, h, color, thick, frac)
@@ -168,6 +168,17 @@ export function OpticView({ t, onExit, onFollow, onConfirm, onRelease }: Props) 
     }
     onRelease()
   }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return
+      if (e.key === 'f' || e.key === 'F') handleFollow()
+      else if (e.key === 'c' || e.key === 'C') handleConfirm()
+      else if (e.key === 'r' || e.key === 'R') handleRelease()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   return (
     <div className={'optic' + (confirmedId != null ? ' is-locked' : '')}>
@@ -222,27 +233,10 @@ export function OpticView({ t, onExit, onFollow, onConfirm, onRelease }: Props) 
         </div>
       )}
 
-      <div className="op-strip">
-        {followedId == null && confirmedId == null && (
-          <button className="op-btn op-btn--follow" onClick={handleFollow} disabled={!candidate}>
-            FOLLOW {candidate ? candidate.id : 'TARGET'}
-          </button>
-        )}
-        {followedId != null && confirmedId == null && (
-          <>
-            <button className="op-btn op-btn--confirm" onClick={handleConfirm}>
-              CONFIRM TARGET
-            </button>
-            <button className="op-btn op-btn--release" onClick={handleRelease}>
-              RELEASE
-            </button>
-          </>
-        )}
-        {confirmedId != null && (
-          <button className="op-btn op-btn--release" onClick={handleRelease}>
-            RELEASE LOCK
-          </button>
-        )}
+      <div className="kbd-legend">
+        <div className="kbd-row"><span className="kbd-key">F</span><span className="kbd-desc">FOLLOW TARGET</span></div>
+        <div className="kbd-row"><span className="kbd-key">C</span><span className="kbd-desc">CONFIRM TARGET</span></div>
+        <div className="kbd-row"><span className="kbd-key">R</span><span className="kbd-desc">RELEASE</span></div>
       </div>
     </div>
   )

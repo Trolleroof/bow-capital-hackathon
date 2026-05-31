@@ -174,6 +174,10 @@ REID_PART_WEIGHTS: list[float] = [0.20, 0.50, 0.30]
 # RTSP/HTTP URL   → network stream.
 VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "0")
 
+# ROS2 topic names (used by camera_node.py and rosmain.py).
+# camera_node.py publishes here; rosmain.py subscribes here.
+ROS_CAMERA_TOPIC = os.getenv("ROS_CAMERA_TOPIC", "/camera/image_raw")
+
 # Frames are downscaled to this width (pixels) before detection and tracking;
 # height is derived automatically to preserve the source aspect ratio.
 # Smaller values improve throughput at the cost of small-target recall.

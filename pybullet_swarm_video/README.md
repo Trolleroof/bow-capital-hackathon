@@ -72,6 +72,61 @@ Current behavior:
 
 This keeps the sim runnable while using the new OBJ/MTL asset bundles directly.
 
+## First Run On Another Machine
+
+No, a new user does not need to manually unzip the asset files.
+
+The simulation reads the zip files directly from `pybullet_swarm_video/resources/` and automatically extracts what it needs into `pybullet_swarm_video/resources/.cache/` on first run.
+
+What another machine needs:
+
+- Python `3.12`
+- `uv`
+- the repo checked out with the zip files still present in `pybullet_swarm_video/resources/`
+
+Recommended first-run sequence from the repo root:
+
+```bash
+cd pybullet_swarm_video
+uv sync
+uv run python -m pybullet_swarm_video.run_demo --gui
+```
+
+Equivalent command from the repo root without changing directories:
+
+```bash
+uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_demo --gui
+```
+
+What happens on that first run:
+
+1. `uv sync` creates the environment and installs the project dependencies declared in `pyproject.toml`.
+2. the sim opens the zip files in `pybullet_swarm_video/resources/`
+3. extracted asset files are written into `pybullet_swarm_video/resources/.cache/`
+4. the sim loads the ground texture, soldier mesh parts, low-poly soldier fallback texture, sandbag mesh, and drone mesh from that cache
+5. output videos are written under `output/`
+
+If someone updates or replaces one of the zip files later:
+
+- the sim should re-extract automatically because it stamps extracted folders against the archive modification time
+- if the cache ever looks stale or corrupted, delete `pybullet_swarm_video/resources/.cache/` and run again
+
+Minimum quick-check command:
+
+```bash
+uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_demo \
+  --seconds 5 \
+  --fps 8 \
+  --output output/smoke_test.mp4
+```
+
+If they also want the orchestrated round-trip on another machine:
+
+```bash
+uv run --project combatos python -m combatos
+uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_orchestrated_demo --gui
+```
+
 ## Observation Modes
 
 - Headless recording mode:

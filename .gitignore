@@ -1,3 +1,4 @@
+.clean/
 .clean-agent/
 .clean-worktrees/
 
@@ -10,6 +11,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*/.venv/
 .venv/
 venv/
 .env

@@ -54,3 +54,14 @@ ROS_SLAM_ENABLE_ANNOTATED = os.getenv("COMBATOS_ROS_SLAM_ENABLE_ANNOTATED", "1")
 ROS_SLAM_VIDEO_FPS = float(os.getenv("COMBATOS_ROS_SLAM_VIDEO_FPS", "15.0"))
 ROS_SLAM_JPEG_QUALITY = int(os.getenv("COMBATOS_ROS_SLAM_JPEG_QUALITY", "70"))
 ROS_SLAM_PATH_MAX_POSES = int(os.getenv("COMBATOS_ROS_SLAM_PATH_MAX_POSES", "240"))
+
+# ── Desktop ROS2 perception bridge ──────────────────────────────────────────
+# The Jetson runs combatos_perception/yolox_node.py and publishes these ROS2
+# topics. The desktop orchestrator subscribes over DDS and relays the frontend
+# topics `detections`, `perception_frame`, and `perception_diagnostics`.
+ENABLE_ROS_PERCEPTION = os.getenv("COMBATOS_ROS_PERCEPTION", "1") == "1"
+ROS_PERCEPTION_DETECTIONS_TOPIC = os.getenv("COMBATOS_ROS_PERCEPTION_DETECTIONS_TOPIC", "/perception/detections")
+ROS_PERCEPTION_ANNOTATED_TOPIC = os.getenv("COMBATOS_ROS_PERCEPTION_ANNOTATED_TOPIC", "/perception/annotated_image")
+ROS_PERCEPTION_ENABLE_ANNOTATED = os.getenv("COMBATOS_ROS_PERCEPTION_ENABLE_ANNOTATED", "1") == "1"
+ROS_PERCEPTION_VIDEO_FPS = float(os.getenv("COMBATOS_ROS_PERCEPTION_VIDEO_FPS", "15.0"))
+ROS_PERCEPTION_JPEG_QUALITY = int(os.getenv("COMBATOS_ROS_PERCEPTION_JPEG_QUALITY", "70"))

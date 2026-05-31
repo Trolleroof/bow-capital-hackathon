@@ -149,12 +149,6 @@ function App() {
     setRoute(next)
   }
 
-  const goToCombatOS = () => {
-    const next: AppRoute = { view: 'combatos' }
-    pushHash(next)
-    setRoute(next)
-  }
-
   // ── Render: CombatOS (full takeover, no app-shell chrome) ────────────────
   if (route.view === 'combatos') {
     return <CombatOS />
@@ -194,16 +188,6 @@ function App() {
       </button>
     </nav>
   )
-
-  // ── Render: fullscreen gym environment ───────────────────────────────────
-  if (route.view === 'combatos') {
-    return (
-      <main className="app-shell app-shell--combatos">
-        <CombatOS />
-        <div className="combatos-nav">{nav}</div>
-      </main>
-    )
-  }
 
   // ── Render: fullscreen gym environment (#18) ─────────────────────────────
   if (route.view === 'gym-env') {

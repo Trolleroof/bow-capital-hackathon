@@ -1,7 +1,22 @@
 {
   "act_dim": 2,
-  "best_checkpoint_coverage": 0.068403,
-  "best_global_step": 12000,
+  "best_checkpoint_coverage": 0.090625,
+  "best_checkpoint_primary_value": 0.093333,
+  "best_checkpoint_task_metrics": {
+    "coverage": 0.090625,
+    "hostiles_alive": 2.6,
+    "hostiles_eliminated": 0.4,
+    "kill_rate": 0.13333333333333336,
+    "n_alive": 0.0,
+    "n_collisions": 0.0,
+    "n_hostile_alive": 2.6,
+    "new_cells": 0.0,
+    "orbit_score": 0.0,
+    "primary_value": 0.09333333333333334,
+    "task_score": 0.09333333333333334
+  },
+  "best_checkpoint_task_score": 0.093333,
+  "best_global_step": 78000,
   "checkpoint": "checkpoints/drone-vs-drone/policy.pt",
   "config": {
     "actor_hidden": 64,
@@ -16,32 +31,36 @@
     "max_grad_norm": 0.5,
     "num_minibatches": 4,
     "rollout_steps": 400,
-    "seed": 1,
+    "seed": 0,
     "update_epochs": 8,
     "vf_clip": 0.2,
     "vf_coef": 0.5
   },
   "env_id": "drone-vs-drone",
   "events": "checkpoints/drone-vs-drone/train-events.ndjson",
-  "final_coverage": 0.065625,
-  "global_step": 12000,
+  "final_coverage": 0.096181,
+  "final_primary_value": 0.0,
+  "final_task_score": 0.0,
+  "global_step": 100000,
   "losses_at_best": {
-    "approx_kl": 0.01659,
-    "entropy": 1.813071,
-    "pg_loss": -0.020508,
-    "v_loss": 0.008938
+    "approx_kl": 0.01624,
+    "entropy": 1.730174,
+    "pg_loss": -0.021814,
+    "v_loss": 0.033672
   },
-  "obs_dim": 48,
+  "obs_dim": 64,
   "onnx": {
     "checkpoint": "checkpoints/drone-vs-drone/policy.onnx",
     "frontend": "frontend/public/policies/drone-vs-drone/policy.onnx"
   },
   "params": "checkpoints/drone-vs-drone/params.json",
   "params_hash": "b9b5c65f8747",
+  "primary_metric": "task_score",
   "profile": "combat",
   "random_coverage": 0.090278,
+  "random_primary_value": 0.07,
   "rollout_steps": 400,
-  "run_name": "mappo_drone-vs-drone_combat_1780210373",
-  "seed": 1,
-  "timesteps": 12000
+  "run_name": "mappo_drone-vs-drone_combat_1780214673",
+  "seed": 0,
+  "timesteps": 100000
 }

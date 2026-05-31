@@ -145,7 +145,7 @@ SCENARIO_DEFAULTS: dict[str, BattlefieldConfig] = {
         ew=EWConfig(gps_denial_level=0.0, jam_duty_cycle=0.2),
         threat=ThreatConfig(hostile_uas_count=3),
         roe=ROEConfig(engagement_authority="weapons-tight", time_limit_sec=320),
-        logistics=LogisticsConfig(swarm_size=6, battery_envelope_sec=320, attrition_inject_rate=0.06),
+        logistics=LogisticsConfig(swarm_size=6, battery_envelope_sec=320, attrition_inject_rate=0.0),
     ),
     "moving-target-track": BattlefieldConfig(
         env_id="moving-target-track",
@@ -178,6 +178,14 @@ SCENARIO_DEFAULTS: dict[str, BattlefieldConfig] = {
         threat=ThreatConfig(hostile_uas_count=6, moving_target_speed=0.6),
         roe=ROEConfig(engagement_authority="weapons-free", time_limit_sec=320),
         logistics=LogisticsConfig(swarm_size=6, battery_envelope_sec=320, attrition_inject_rate=0.04),
+    ),
+    "navigate-to-target": BattlefieldConfig(
+        env_id="navigate-to-target",
+        weather=WeatherConfig(wind_speed=1.0, wind_dir_rad=_pi(0)),
+        ew=EWConfig(gps_denial_level=0.0, jam_duty_cycle=0.0),
+        threat=ThreatConfig(hostile_uas_count=0),
+        roe=ROEConfig(engagement_authority="weapons-tight", time_limit_sec=300),
+        logistics=LogisticsConfig(swarm_size=1, battery_envelope_sec=300, attrition_inject_rate=0.0),
     ),
 }
 

@@ -9,6 +9,13 @@ export interface MiniAgent {
   alive: boolean
 }
 
+export interface MiniMarker {
+  x: number
+  y: number
+  kind: 'target' | 'asset' | 'hostile' | 'rival'
+  active?: boolean
+}
+
 export function drawMinimap(
   ctx: CanvasRenderingContext2D,
   size: number,
@@ -16,6 +23,7 @@ export function drawMinimap(
   grid: number,
   covered: Uint8Array,
   agents: MiniAgent[],
+  markers: MiniMarker[] = [],
 ) {
   ctx.clearRect(0, 0, size, size)
 
@@ -49,7 +57,44 @@ export function drawMinimap(
 
   // agents — world (x,y) in [-worldHalf, worldHalf] -> canvas. y flipped so up
   // on screen = +y in world, matching the coverage tinting above.
-  const toPx = (w: number) => ((w + worldHalf) / (2 * worldHalf)) * size
+  const markerInset = 4
+  const toPx = (w: number) => {
+    const px = ((w + worldHalf) / (2 * worldHalf)) * size
+    return Math.max(markerInset, Math.min(size - markerInset, px))
+  }
+
+  for (const marker of markers) {
+    if (marker.active === false) continue
+    const px = toPx(marker.x)
+    const py = size - toPx(marker.y)
+
+    if (marker.kind === 'target') {
+      ctx.strokeStyle = '#ffcf66'
+      ctx.fillStyle = '#ffcf66'
+      ctx.lineWidth = 1.5
+      ctx.shadowColor = '#ffcf66'
+      ctx.shadowBlur = 8
+      ctx.beginPath()
+      ctx.arc(px, py, 5.2, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.moveTo(px - 7, py)
+      ctx.lineTo(px + 7, py)
+      ctx.moveTo(px, py - 7)
+      ctx.lineTo(px, py + 7)
+      ctx.stroke()
+      ctx.shadowBlur = 0
+    } else if (marker.kind === 'asset') {
+      ctx.fillStyle = '#71d7ff'
+      ctx.fillRect(px - 4, py - 4, 8, 8)
+    } else {
+      ctx.fillStyle = marker.kind === 'hostile' ? '#ff6b6b' : '#b48cff'
+      ctx.beginPath()
+      ctx.arc(px, py, 3.5, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+
   for (const a of agents) {
     const px = toPx(a.x)
     const py = size - toPx(a.y)

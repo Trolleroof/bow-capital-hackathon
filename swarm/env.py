@@ -109,9 +109,11 @@ import numpy as np
 try:
     from .env_config import BattlefieldConfig
     from .obstacles import Obstacle, obstacles_for
+    from .task_profiles import TASK_DIM, TaskProfile, get_task_profile
 except ImportError:  # when run as __main__ directly (python env.py)
     from env_config import BattlefieldConfig  # type: ignore[no-redef]
     from obstacles import Obstacle, obstacles_for  # type: ignore[no-redef]
+    from task_profiles import TASK_DIM, TaskProfile, get_task_profile  # type: ignore[no-redef]
 
 # ------------------------------------------------------------------ defaults ---
 N_AGENTS = 5
@@ -171,7 +173,7 @@ ROLES = ("scout", "scout", "scout", "scout", "scout")  # all scouts for Phase 0
 
 def obs_dim(k: int = K_NEIGHBORS, patch: int = PATCH, m_obstacles: int = M_OBSTACLES) -> int:
     """Compute the local observation vector length for a given K / patch size."""
-    return 4 + 2 * k + patch * patch + m_obstacles * OBSTACLE_FEATS + 1
+    return 4 + 2 * k + patch * patch + m_obstacles * OBSTACLE_FEATS + TASK_DIM + 1
 
 
 # Importable fixed dims for the default config (Phase 1/2 import these).
@@ -179,7 +181,8 @@ OWN_DIM = 4
 NEIGHBOR_DIM = 2 * K_NEIGHBORS
 PATCH_DIM = PATCH * PATCH
 ROLE_DIM = 1
-OBS_DIM = obs_dim()          # 48 for defaults (was 36 pre-obstacles)
+BASE_WITHOUT_ROLE_DIM = OWN_DIM + NEIGHBOR_DIM + PATCH_DIM + OBSTACLE_DIM
+OBS_DIM = obs_dim()          # 64 for defaults (48 base + 16 task feats)
 ACT_DIM = 2
 
 
@@ -241,8 +244,29 @@ class SwarmEnv:
         self.roles = np.zeros(self.n, dtype=np.int64)
         self.t = 0
         self.steps = 0
+        self.task_profile: TaskProfile = get_task_profile(scenario_id)
+        self.task_phase = self.task_profile.phase_names[0] if self.task_profile.phase_names else "coverage"
+        self.task_events: dict[str, int | float | bool] = {}
+        self.target_pos = np.zeros(2, dtype=np.float32)
+        self.target_vel = np.zeros(2, dtype=np.float32)
         self.hostile_pos = np.zeros((0, 2), dtype=np.float32)
+        self.hostile_vel = np.zeros((0, 2), dtype=np.float32)
         self.hostile_alive = np.zeros(0, dtype=bool)
+        self.rival_pos = np.zeros((0, 2), dtype=np.float32)
+        self.rival_vel = np.zeros((0, 2), dtype=np.float32)
+        self.contested_cells = np.zeros((0, 2), dtype=np.int64)
+        self.contested_owner = np.zeros(0, dtype=np.int8)
+        self.asset_pos = np.zeros(2, dtype=np.float32)
+        self.breaches = 0
+        self.intercepts = 0
+        self.custody_steps = 0
+        self.lost_track_steps = 0
+        self.contact_step: int | None = None
+        self.intercept_step: int | None = None
+        self.contested_score = 0
+        self.rival_score = 0
+        self._nav_prev_x: float = -self.world_half    # navigate-to-target x-progress tracker
+        self._nav_prev_dist: float = 2.0 * self.world_half  # navigate-to-target dist tracker
 
         # Scenario obstacles — real 3D props the policy must see + avoid.
         # Default to the registry for this scenario_id; can be overridden for tests.
@@ -265,66 +289,216 @@ class SwarmEnv:
             self._obs_is_circle = np.zeros(0, dtype=bool)
 
     def _hostile_count(self) -> int:
-        if self.scenario_id != "drone-vs-drone":
+        if self.scenario_id not in {"drone-vs-drone", "defend-asset"}:
             return 0
         if self.battlefield is not None:
             return max(1, int(self.battlefield.threat.hostile_uas_count))
-        return 3
+        return 3 if self.scenario_id == "drone-vs-drone" else 5
 
-    def _reset_hostiles(self) -> None:
-        n_hostile = self._hostile_count()
-        if n_hostile == 0:
-            self.hostile_pos = np.zeros((0, 2), dtype=np.float32)
-            self.hostile_alive = np.zeros(0, dtype=bool)
-            return
+    def _reset_task_entities(self) -> None:
         h = self.world_half
-        x = self.rng.uniform(0.6 * h, 0.92 * h, n_hostile)
-        y = self.rng.uniform(-0.7 * h, 0.7 * h, n_hostile)
-        self.hostile_pos = np.stack([x, y], axis=1).astype(np.float32)
-        self.hostile_alive = np.ones(n_hostile, dtype=bool)
+        self.task_phase = self.task_profile.phase_names[0] if self.task_profile.phase_names else "coverage"
+        self.task_events = {}
+        self.target_pos = np.array([0.45 * h, 0.35 * h], dtype=np.float32)
+        self.target_vel = np.zeros(2, dtype=np.float32)
+        self.hostile_pos = np.zeros((0, 2), dtype=np.float32)
+        self.hostile_vel = np.zeros((0, 2), dtype=np.float32)
+        self.hostile_alive = np.zeros(0, dtype=bool)
+        self.rival_pos = np.zeros((0, 2), dtype=np.float32)
+        self.rival_vel = np.zeros((0, 2), dtype=np.float32)
+        self.contested_cells = np.zeros((0, 2), dtype=np.int64)
+        self.contested_owner = np.zeros(0, dtype=np.int8)
+        self.asset_pos = np.zeros(2, dtype=np.float32)
+        self.breaches = 0
+        self.intercepts = 0
+        self.custody_steps = 0
+        self.lost_track_steps = 0
+        self.contact_step = None
+        self.intercept_step = None
+        self.contested_score = 0
+        self.rival_score = 0
 
-    def _update_hostiles(self) -> None:
-        """Patrol the contested center lane (matches PyBullet scripted reds)."""
-        if self.hostile_alive.size == 0:
-            return
-        h = self.world_half
-        cx, cy = 0.48 * h, 0.0
-        for i in range(self.hostile_alive.size):
-            if not self.hostile_alive[i]:
-                continue
-            r = 0.24 * h * (2.4 + i * 0.8)
-            ang = self.t * 0.5 + i * 2.1
-            self.hostile_pos[i, 0] = cx + r * math.cos(ang) * 0.85
-            self.hostile_pos[i, 1] = cy + r * math.sin(ang) * 0.85
-
-    def _drone_vs_drone_combat_reward(self, live_pos: np.ndarray, live: np.ndarray) -> float:
-        if live_pos.shape[0] == 0 or self.hostile_alive.size == 0:
-            return 0.0
-
-        reward = 0.0
-        h = self.world_half
-        live_hostile = self.hostile_pos[self.hostile_alive]
-        if live_hostile.shape[0] > 0:
-            dists = np.linalg.norm(
-                live_pos[:, None, :] - live_hostile[None, :, :],
-                axis=-1,
+        sid = self.scenario_id
+        if sid == "drone-vs-drone":
+            n_hostile = self._hostile_count()
+            x = self.rng.uniform(0.35 * h, 0.85 * h, n_hostile)
+            y = self.rng.uniform(-0.65 * h, 0.65 * h, n_hostile)
+            self.hostile_pos = np.stack([x, y], axis=1).astype(np.float32)
+            self.hostile_vel = np.zeros((n_hostile, 2), dtype=np.float32)
+            self.hostile_alive = np.ones(n_hostile, dtype=bool)
+        elif sid == "moving-target-track":
+            self.target_pos = np.array([-0.45 * h, -0.15 * h], dtype=np.float32)
+            speed = 0.6
+            if self.battlefield is not None:
+                speed = max(0.15, float(self.battlefield.threat.moving_target_speed))
+            self.target_vel = np.array([speed, speed * 0.45], dtype=np.float32)
+        elif sid == "search-and-interdict":
+            self.target_pos = np.array([0.35 * h, 0.45 * h], dtype=np.float32)
+            self.target_vel = np.array([-0.18, -0.08], dtype=np.float32)
+        elif sid == "defend-asset":
+            n_hostile = self._hostile_count()
+            angles = np.linspace(0.0, 2.0 * math.pi, n_hostile, endpoint=False)
+            radius = 0.95 * h
+            self.hostile_pos = np.stack(
+                [radius * np.cos(angles), radius * np.sin(angles)], axis=1
+            ).astype(np.float32)
+            inward = -self.hostile_pos / np.maximum(
+                np.linalg.norm(self.hostile_pos, axis=1, keepdims=True), 1e-6
             )
-            nearest = dists.min(axis=1) / (2.0 * h)
-            reward += HOSTILE_APPROACH_REWARD * float((1.0 - nearest).sum())
+            self.hostile_vel = (inward * 0.55).astype(np.float32)
+            self.hostile_alive = np.ones(n_hostile, dtype=bool)
+        elif sid == "swarm-vs-swarm-race":
+            n_rival = self.n
+            x = self.rng.uniform(0.15 * h, 0.9 * h, n_rival)
+            y = self.rng.uniform(-0.8 * h, 0.8 * h, n_rival)
+            self.rival_pos = np.stack([x, y], axis=1).astype(np.float32)
+            self.rival_vel = np.zeros((n_rival, 2), dtype=np.float32)
+            contested: list[tuple[int, int]] = []
+            for gx in range(self.grid // 2 - 2, self.grid - 2, 3):
+                for gy in range(3, self.grid - 3, 4):
+                    contested.append((gx, gy))
+            self.contested_cells = np.array(contested, dtype=np.int64)
+            self.contested_owner = np.zeros(len(contested), dtype=np.int8)
+        elif sid == "navigate-to-target":
+            # Static goal at the right end of the corridor.
+            self.target_pos = np.array([0.85 * h, 0.0], dtype=np.float32)
+            self.target_vel = np.zeros(2, dtype=np.float32)
+            # Track x and dist for per-step progress shaping.
+            self._nav_prev_x = float(self.pos[0, 0]) if self.pos.shape[0] > 0 else -h
+            self._nav_prev_dist = float(np.linalg.norm(self.pos[0] - self.target_pos)) if self.pos.shape[0] > 0 else 2.0 * h
 
+    def _update_task_entities(self) -> None:
+        h = self.world_half
+        sid = self.scenario_id
+        if sid == "drone-vs-drone" and self.hostile_alive.size:
+            center = np.array([0.45 * h, 0.0], dtype=np.float32)
+            for i in range(self.hostile_alive.size):
+                if not self.hostile_alive[i]:
+                    continue
+                radius = 0.16 * h + i * 0.08 * h
+                ang = self.t * 0.45 + i * 2.1
+                new_pos = center + np.array(
+                    [math.cos(ang) * radius, math.sin(ang) * radius], dtype=np.float32
+                )
+                self.hostile_vel[i] = (new_pos - self.hostile_pos[i]) / DT
+                self.hostile_pos[i] = new_pos
+        elif sid == "moving-target-track":
+            speed = 0.6
+            if self.battlefield is not None:
+                speed = max(0.15, float(self.battlefield.threat.moving_target_speed))
+            new_pos = np.array(
+                [
+                    0.62 * h * math.sin(self.t * 0.20 * speed),
+                    0.45 * h * math.sin(self.t * 0.37 * speed + 0.7),
+                ],
+                dtype=np.float32,
+            )
+            self.target_vel = (new_pos - self.target_pos) / DT
+            self.target_pos = new_pos
+        elif sid == "search-and-interdict":
+            new_pos = np.array(
+                [
+                    0.42 * h * math.sin(self.t * 0.16) + 0.18 * h,
+                    0.42 * h * math.cos(self.t * 0.23),
+                ],
+                dtype=np.float32,
+            )
+            self.target_vel = (new_pos - self.target_pos) / DT
+            self.target_pos = new_pos
+        elif sid == "defend-asset" and self.hostile_alive.size:
+            for i in range(self.hostile_alive.size):
+                if not self.hostile_alive[i]:
+                    continue
+                self.hostile_pos[i] += self.hostile_vel[i] * DT
+        elif sid == "swarm-vs-swarm-race" and self.rival_pos.shape[0]:
+            target = np.array([-0.05 * h, 0.0], dtype=np.float32)
+            rel = target - self.rival_pos
+            dist = np.maximum(np.linalg.norm(rel, axis=1, keepdims=True), 1e-6)
+            self.rival_vel = (rel / dist * 0.65).astype(np.float32)
+            self.rival_pos += self.rival_vel * DT
+            self.rival_pos = np.clip(self.rival_pos, -h, h)
+
+    def _nearest_live_hostile(self, point: np.ndarray) -> tuple[int | None, float]:
+        if self.hostile_alive.size == 0 or not self.hostile_alive.any():
+            return None, float("inf")
+        ids = np.where(self.hostile_alive)[0]
+        d = np.linalg.norm(self.hostile_pos[ids] - point, axis=1)
+        k = int(np.argmin(d))
+        return int(ids[k]), float(d[k])
+
+    def _compute_task_transitions(self, live_pos: np.ndarray) -> dict[str, float]:
+        events: dict[str, float] = {}
+        sid = self.scenario_id
+        if live_pos.shape[0] == 0:
+            return events
+
+        if sid in {"drone-vs-drone", "defend-asset"} and self.hostile_alive.size:
             for idx in np.where(self.hostile_alive)[0]:
-                if np.any(np.linalg.norm(live_pos - self.hostile_pos[idx], axis=1) < HOSTILE_ENGAGE_RADIUS):
+                d = np.linalg.norm(live_pos - self.hostile_pos[idx], axis=1)
+                if np.any(d < HOSTILE_ENGAGE_RADIUS):
                     self.hostile_alive[idx] = False
-                    reward += HOSTILE_KILL_REWARD
+                    self.intercepts += 1
+                    events["kills"] = events.get("kills", 0.0) + 1.0
 
-        if not self.hostile_alive.any():
-            dist_center = np.linalg.norm(live_pos, axis=1) / h
-            in_center = dist_center < HOVER_CENTER_FRAC
-            speeds = np.linalg.norm(self.vel[live], axis=1)
-            slow = speeds < HOVER_SPEED_MAX
-            reward += HOVER_REWARD * float((in_center & slow).sum()) / max(1, int(live.sum()))
-            reward += -OBJECTIVE_REWARD_POST_KILL * float(dist_center.mean())
-        return reward
+        if sid == "drone-vs-drone":
+            self.task_phase = "orbit" if self.hostile_alive.size and not self.hostile_alive.any() else "engage"
+        elif sid == "moving-target-track":
+            d = np.linalg.norm(live_pos - self.target_pos, axis=1)
+            in_custody = d < 2.8
+            if np.count_nonzero(in_custody) >= max(1, min(2, live_pos.shape[0])):
+                self.custody_steps += 1
+                events["custody"] = 1.0
+            else:
+                self.lost_track_steps += 1
+                events["lost_track"] = 1.0
+        elif sid == "search-and-interdict":
+            d = np.linalg.norm(live_pos - self.target_pos, axis=1)
+            if self.contact_step is None and float(d.min()) < 4.2:
+                self.contact_step = self.steps
+                events["contact"] = 1.0
+            if self.contact_step is not None:
+                self.task_phase = "contact"
+            if self.intercept_step is None and float(d.min()) < HOSTILE_ENGAGE_RADIUS:
+                self.intercept_step = self.steps
+                self.task_phase = "intercept"
+                events["intercept"] = 1.0
+        elif sid == "defend-asset":
+            if self.hostile_alive.size:
+                live_hostiles = np.where(self.hostile_alive)[0]
+                dist_asset = np.linalg.norm(self.hostile_pos[live_hostiles] - self.asset_pos, axis=1)
+                breached = live_hostiles[dist_asset < 1.4]
+                for idx in breached:
+                    self.hostile_alive[idx] = False
+                    self.breaches += 1
+                    events["breaches"] = events.get("breaches", 0.0) + 1.0
+        elif sid == "swarm-vs-swarm-race" and self.contested_cells.shape[0]:
+            for idx, (gx, gy) in enumerate(self.contested_cells):
+                if self.contested_owner[idx] != 0:
+                    continue
+                wx = (gx + 0.5) * self.cell - self.world_half
+                wy = (gy + 0.5) * self.cell - self.world_half
+                cell_pos = np.array([wx, wy], dtype=np.float32)
+                blue_hit = np.any(np.linalg.norm(live_pos - cell_pos, axis=1) < 1.2)
+                rival_hit = (
+                    self.rival_pos.shape[0] > 0
+                    and np.any(np.linalg.norm(self.rival_pos - cell_pos, axis=1) < 1.2)
+                )
+                if blue_hit and not rival_hit:
+                    self.contested_owner[idx] = 1
+                    self.contested_score += 1
+                    events["blue_claims"] = events.get("blue_claims", 0.0) + 1.0
+                elif rival_hit and not blue_hit:
+                    self.contested_owner[idx] = -1
+                    self.rival_score += 1
+                    events["rival_claims"] = events.get("rival_claims", 0.0) + 1.0
+        elif sid == "navigate-to-target":
+            if self.intercept_step is None and live_pos.shape[0] > 0:
+                d = np.linalg.norm(live_pos - self.target_pos, axis=1)
+                if float(d.min()) < 1.5:
+                    self.intercept_step = self.steps
+                    self.task_phase = "reached"
+                    events["reached"] = 1.0
+        return events
     def _resolve_obstacle_collisions(self, live_mask: np.ndarray) -> int:
         """Hard push every live agent out of any obstacle's expanded footprint.
 
@@ -428,6 +602,10 @@ class SwarmEnv:
             # blue holds and works the left territory
             x = rng.uniform(-0.9 * h, -0.15 * h, n)
             y = rng.uniform(-0.8 * h, 0.8 * h, n)
+        elif sid == "navigate-to-target":
+            # single drone starts at the left end of the corridor
+            x = rng.uniform(-0.92 * h, -0.75 * h, n)
+            y = rng.uniform(-0.3 * h, 0.3 * h, n)
         else:
             # default: spread across the arena (no tiny center cluster)
             x = rng.uniform(-0.75 * h, 0.75 * h, n)
@@ -460,6 +638,8 @@ class SwarmEnv:
             )
         if sid == "swarm-vs-swarm-race":
             return np.array([-0.5 * h, 0.0], dtype=np.float32)  # own territory
+        if sid == "navigate-to-target":
+            return self.target_pos.copy()
         return None
 
     def _objective_reward(self, live_pos: np.ndarray) -> float:
@@ -479,6 +659,308 @@ class SwarmEnv:
         dist = np.linalg.norm(live_pos - pt, axis=1) / (2.0 * h)  # ~[0, 0.7]
         return -OBJECTIVE_REWARD * float(dist.mean())
 
+    def _angle_spread_score(self, live_pos: np.ndarray, center: np.ndarray) -> float:
+        if live_pos.shape[0] < 2:
+            return 0.0
+        ang = np.arctan2(live_pos[:, 1] - center[1], live_pos[:, 0] - center[0])
+        return float(np.clip(np.std(np.unwrap(ang)) / math.pi, 0.0, 1.0))
+
+    def _task_metrics(self, live_pos: np.ndarray) -> dict[str, float | str]:
+        sid = self.scenario_id
+        steps = max(1, self.steps)
+        metrics: dict[str, float | str] = {
+            "task_score": self.coverage_fraction(),
+            "primary_metric": self.task_profile.primary_metric,
+            "primary_value": self.coverage_fraction(),
+            "task_phase": self.task_phase,
+        }
+
+        if sid == "drone-vs-drone":
+            total = max(1, int(self.hostile_alive.size))
+            alive = int(self.hostile_alive.sum()) if self.hostile_alive.size else 0
+            kill_rate = 1.0 - alive / total
+            orbit_score = 0.0
+            if live_pos.shape[0] > 0:
+                radius = np.linalg.norm(live_pos, axis=1) / self.world_half
+                radial = 1.0 - np.clip(np.abs(radius - 0.32) / 0.32, 0.0, 1.0)
+                speed = np.linalg.norm(self.vel[self.alive], axis=1)
+                slow = 1.0 - np.clip(speed / 1.0, 0.0, 1.0)
+                orbit_score = float(np.mean(radial * 0.7 + slow * 0.3))
+            task_score = 0.7 * kill_rate + 0.3 * orbit_score
+            metrics.update({
+                "hostiles_alive": float(alive),
+                "hostiles_eliminated": float(total - alive),
+                "kill_rate": float(kill_rate),
+                "orbit_score": float(orbit_score),
+                "task_score": float(task_score),
+                "primary_value": float(task_score),
+            })
+        elif sid == "moving-target-track":
+            custody_fraction = self.custody_steps / steps
+            lost_track_fraction = self.lost_track_steps / steps
+            mean_dist = 1.0
+            spread = 0.0
+            if live_pos.shape[0] > 0:
+                dist = np.linalg.norm(live_pos - self.target_pos, axis=1)
+                mean_dist = float(dist.mean() / (2.0 * self.world_half))
+                spread = self._angle_spread_score(live_pos, self.target_pos)
+            task_score = 0.75 * custody_fraction + 0.25 * spread
+            metrics.update({
+                "custody_fraction": float(custody_fraction),
+                "lost_track_fraction": float(lost_track_fraction),
+                "mean_target_distance": float(mean_dist),
+                "angle_spread_score": float(spread),
+                "task_score": float(task_score),
+                "primary_value": float(custody_fraction),
+            })
+        elif sid == "search-and-interdict":
+            contact_made = 1.0 if self.contact_step is not None else 0.0
+            intercept_success = 1.0 if self.intercept_step is not None else 0.0
+            contact_speed = 0.0 if self.contact_step is None else 1.0 - min(1.0, self.contact_step / self.max_steps)
+            intercept_speed = 0.0 if self.intercept_step is None else 1.0 - min(1.0, self.intercept_step / self.max_steps)
+            task_score = 0.35 * contact_made + 0.45 * intercept_success + 0.1 * contact_speed + 0.1 * intercept_speed
+            metrics.update({
+                "contact_made": contact_made,
+                "time_to_contact": float(self.max_steps if self.contact_step is None else self.contact_step),
+                "intercept_success": intercept_success,
+                "time_to_intercept": float(self.max_steps if self.intercept_step is None else self.intercept_step),
+                "task_score": float(task_score),
+                "primary_value": float(task_score),
+            })
+        elif sid == "defend-asset":
+            total = max(1, int(self.hostile_alive.size) + self.intercepts + self.breaches)
+            asset_integrity = max(0.0, 1.0 - self.breaches / total)
+            intercept_score = self.intercepts / total
+            ring_score = 0.0
+            if live_pos.shape[0] > 0:
+                radius = np.linalg.norm(live_pos - self.asset_pos, axis=1) / self.world_half
+                ring_score = float(np.mean(1.0 - np.clip(np.abs(radius - 0.48) / 0.48, 0.0, 1.0)))
+            task_score = 0.55 * asset_integrity + 0.3 * intercept_score + 0.15 * ring_score
+            metrics.update({
+                "breaches": float(self.breaches),
+                "intercepts": float(self.intercepts),
+                "asset_integrity": float(asset_integrity),
+                "ring_score": float(ring_score),
+                "task_score": float(task_score),
+                "primary_value": float(asset_integrity),
+            })
+        elif sid == "swarm-vs-swarm-race":
+            total = max(1, int(self.contested_cells.shape[0]))
+            blue = self.contested_score / total
+            rival = self.rival_score / total
+            margin = blue - rival
+            territory = float((self.contested_owner == 1).sum()) / total if total else 0.0
+            task_score = 0.7 * ((margin + 1.0) * 0.5) + 0.3 * territory
+            metrics.update({
+                "blue_contested_score": float(blue),
+                "rival_contested_score": float(rival),
+                "contested_margin": float(margin),
+                "territory_control": float(territory),
+                "task_score": float(task_score),
+                "primary_value": float(margin),
+            })
+        elif sid == "navigate-to-target":
+            reached = 1.0 if self.intercept_step is not None else 0.0
+            dist_norm = 1.0
+            if live_pos.shape[0] > 0:
+                dist_norm = float(np.linalg.norm(live_pos[0] - self.target_pos)) / (2.0 * self.world_half)
+            approach_score = 1.0 - np.clip(dist_norm, 0.0, 1.0)
+            task_score = 0.4 * approach_score + 0.6 * reached
+            speed_bonus = 0.0 if self.intercept_step is None else 1.0 - min(1.0, self.intercept_step / self.max_steps)
+            metrics.update({
+                "reached": reached,
+                "distance_to_target": float(dist_norm * 2.0 * self.world_half),
+                "approach_score": float(approach_score),
+                "speed_bonus": float(speed_bonus),
+                "task_score": float(task_score),
+                "primary_value": float(task_score),
+            })
+        return metrics
+
+    def _task_reward(self, live_pos: np.ndarray, events: dict[str, float]) -> float:
+        sid = self.scenario_id
+        weights = self.task_profile.reward_weights
+        if live_pos.shape[0] == 0:
+            return 0.0
+        reward = 0.0
+        if sid == "drone-vs-drone":
+            if self.hostile_alive.size and self.hostile_alive.any():
+                live_hostile = self.hostile_pos[self.hostile_alive]
+                dist_to_hostiles = np.linalg.norm(
+                    live_pos[:, None, :] - live_hostile[None, :, :],
+                    axis=-1,
+                )
+                nearest_hostile_idx = np.argmin(dist_to_hostiles, axis=1)
+                d = dist_to_hostiles[np.arange(live_pos.shape[0]), nearest_hostile_idx]
+                reward += weights.get("approach", 0.0) * float(
+                    (1.0 - np.clip(d / (2.0 * self.world_half), 0.0, 1.0)).mean()
+                )
+
+                hostile_d = dist_to_hostiles.min(axis=0)
+                reward += weights.get("pressure", 0.0) * float(
+                    (1.0 - np.clip(hostile_d / (0.75 * self.world_half), 0.0, 1.0)).mean()
+                )
+                covered_hostiles = np.count_nonzero(hostile_d < HOSTILE_ENGAGE_RADIUS * 2.5)
+                reward += weights.get("swarm", 0.0) * float(covered_hostiles / max(1, live_hostile.shape[0]))
+
+                nearest_hostile = live_hostile[nearest_hostile_idx]
+                to_hostile = nearest_hostile - live_pos
+                norm = np.maximum(np.linalg.norm(to_hostile, axis=1, keepdims=True), 1e-6)
+                closing = (self.vel[self.alive] * (to_hostile / norm)).sum(axis=1)
+                reward += weights.get("closing", 0.0) * float(np.clip(closing, -1.0, 1.0).mean())
+            reward += weights.get("kill", 0.0) * events.get("kills", 0.0)
+            if self.hostile_alive.size and not self.hostile_alive.any():
+                radius = np.linalg.norm(live_pos, axis=1) / self.world_half
+                orbit = np.mean(1.0 - np.clip(np.abs(radius - 0.32) / 0.32, 0.0, 1.0))
+                reward += weights.get("orbit", 0.0) * float(orbit)
+        elif sid == "moving-target-track":
+            d = np.linalg.norm(live_pos - self.target_pos, axis=1)
+            in_custody = float(np.count_nonzero(d < 2.8) / max(1, live_pos.shape[0]))
+            spread = self._angle_spread_score(live_pos, self.target_pos)
+            reward += weights.get("custody", 0.0) * in_custody
+            reward += weights.get("angle_spread", 0.0) * spread
+            reward -= weights.get("distance", 0.0) * float(np.mean(np.clip(d / self.world_half, 0.0, 2.0)))
+            reward -= weights.get("lost", 0.0) * events.get("lost_track", 0.0)
+        elif sid == "search-and-interdict":
+            d = np.linalg.norm(live_pos - self.target_pos, axis=1)
+            reward += weights.get("contact", 0.0) * events.get("contact", 0.0)
+            reward += weights.get("intercept", 0.0) * events.get("intercept", 0.0)
+            if self.contact_step is not None:
+                reward += weights.get("approach", 0.0) * (1.0 - float(np.clip(d.min() / self.world_half, 0.0, 1.0)))
+                reward -= weights.get("delay", 0.0) * min(1.0, (self.steps - self.contact_step) / max(1, self.max_steps))
+        elif sid == "defend-asset":
+            radius = np.linalg.norm(live_pos - self.asset_pos, axis=1) / self.world_half
+            ring = np.mean(1.0 - np.clip(np.abs(radius - 0.48) / 0.48, 0.0, 1.0))
+            reward += weights.get("ring", 0.0) * float(ring)
+            reward += weights.get("intercept", 0.0) * events.get("kills", 0.0)
+            reward -= weights.get("breach", 0.0) * events.get("breaches", 0.0)
+        elif sid == "swarm-vs-swarm-race":
+            total = max(1, int(self.contested_cells.shape[0]))
+            margin = (self.contested_score - self.rival_score) / total
+            reward += weights.get("claim", 0.0) * events.get("blue_claims", 0.0)
+            reward -= weights.get("rival", 0.0) * events.get("rival_claims", 0.0)
+            reward += weights.get("margin", 0.0) * margin
+        elif sid == "navigate-to-target":
+            if live_pos.shape[0] > 0:
+                d = float(np.linalg.norm(live_pos[0] - self.target_pos))
+                approach_w = weights.get("approach", 0.0)
+                # Potential-based shaping: reward Δdist (positive = getting closer).
+                # This avoids local minima — the only fixed point is the goal.
+                dist_progress = (self._nav_prev_dist - d) / (2.0 * self.world_half)
+                reward += approach_w * 3.0 * dist_progress
+                self._nav_prev_dist = d
+                # Dense approach reward keeps a goal-distance gradient in the value fn.
+                reward += approach_w * (1.0 - np.clip(d / (2.0 * self.world_half), 0.0, 1.0))
+                # x-progress bonus to break east-west symmetry and push past obstacles.
+                x_progress = float(live_pos[0, 0] - self._nav_prev_x) / self.world_half
+                self._nav_prev_x = float(live_pos[0, 0])
+                if x_progress > 0:
+                    reward += approach_w * 0.6 * x_progress
+                # Step-time penalty discourages oscillation.
+                if self.intercept_step is None:
+                    reward -= 0.008
+                reward += weights.get("reach", 0.0) * events.get("reached", 0.0)
+        else:
+            reward += self._objective_reward(live_pos)
+        return float(reward)
+
+    def _task_obs(self, agent_idx: int) -> np.ndarray:
+        feats = np.zeros(TASK_DIM, dtype=np.float32)
+        h = self.world_half
+        own = self.pos[agent_idx]
+        sid = self.scenario_id
+
+        if sid == "drone-vs-drone":
+            live_ids = np.where(self.hostile_alive)[0] if self.hostile_alive.size else np.array([], dtype=np.int64)
+            if live_ids.size:
+                d = np.linalg.norm(self.hostile_pos[live_ids] - own, axis=1)
+                for slot, k in enumerate(np.argsort(d)[:2]):
+                    hid = int(live_ids[k])
+                    base = slot * 3
+                    feats[base:base + 2] = (self.hostile_pos[hid] - own) / h
+                    feats[base + 2] = 1.0
+            total = max(1, int(self.hostile_alive.size))
+            feats[6] = float(self.hostile_alive.sum()) / total if self.hostile_alive.size else 0.0
+            feats[7:9] = -own / h
+            feats[9] = 1.0 if self.task_phase == "orbit" else 0.0
+            feats[10] = (np.linalg.norm(own) / h - 0.32)
+            feats[11] = np.linalg.norm(self.vel[agent_idx])
+        elif sid == "moving-target-track":
+            rel = self.target_pos - own
+            feats[0:2] = rel / h
+            feats[2:4] = np.clip(self.target_vel / MAX_SPEED, -1.0, 1.0)
+            dist = np.linalg.norm(rel)
+            feats[4] = 1.0 if dist < 2.8 else 0.0
+            if self.alive.any():
+                team_d = np.linalg.norm(self.pos[self.alive] - self.target_pos, axis=1)
+                feats[5] = 1.0 if np.count_nonzero(team_d < 2.8) >= 2 else 0.0
+            feats[6] = np.clip((dist - 2.8) / h, -1.0, 1.0)
+            desired = 2.0 * math.pi * (agent_idx / max(1, self.n))
+            actual = math.atan2(own[1] - self.target_pos[1], own[0] - self.target_pos[0])
+            feats[7] = math.sin(actual - desired)
+            feats[10] = min(1.0, float(np.linalg.norm(self.target_vel) / MAX_SPEED))
+            feats[11] = self.lost_track_steps / max(1, self.steps)
+        elif sid == "search-and-interdict":
+            phase_map = {"search": 0, "contact": 1, "intercept": 2}
+            feats[phase_map.get(self.task_phase, 0)] = 1.0
+            contact_known = self.contact_step is not None
+            if contact_known:
+                feats[3:5] = (self.target_pos - own) / h
+                feats[5] = 1.0
+                feats[6] = (self.steps - (self.contact_step or self.steps)) / max(1, self.max_steps)
+                feats[8] = np.linalg.norm(self.target_pos - own) / h
+            else:
+                feats[7] = (h - own[1]) / (2.0 * h)
+            feats[9] = 1.0 if self.intercept_step is not None else 0.0
+        elif sid == "defend-asset":
+            feats[0:2] = (self.asset_pos - own) / h
+            idx, dist = self._nearest_live_hostile(own)
+            if idx is not None:
+                feats[2:4] = (self.hostile_pos[idx] - own) / h
+                feats[4] = 1.0
+                feats[5:7] = np.clip(self.hostile_vel[idx] / MAX_SPEED, -1.0, 1.0)
+                asset_dist = np.linalg.norm(self.hostile_pos[idx] - self.asset_pos)
+                feats[7] = asset_dist / h
+                feats[8] = 1.0 - np.clip(asset_dist / h, 0.0, 1.0)
+            feats[9] = np.linalg.norm(own - self.asset_pos) / h - 0.48
+            desired = 2.0 * math.pi * (agent_idx / max(1, self.n))
+            actual = math.atan2(own[1], own[0])
+            feats[10] = math.sin(actual - desired)
+            feats[11] = self.breaches / max(1, self._hostile_count())
+        elif sid == "swarm-vs-swarm-race":
+            if self.rival_pos.shape[0]:
+                d = np.linalg.norm(self.rival_pos - own, axis=1)
+                rid = int(np.argmin(d))
+                feats[0:2] = (self.rival_pos[rid] - own) / h
+                feats[10] = 1.0 - np.clip(float(d[rid]) / h, 0.0, 1.0)
+            if self.contested_cells.shape[0]:
+                unclaimed = np.where(self.contested_owner == 0)[0]
+                ids = unclaimed if unclaimed.size else np.arange(self.contested_cells.shape[0])
+                world = (self.contested_cells[ids].astype(np.float32) + 0.5) * self.cell - h
+                d = np.linalg.norm(world - own, axis=1)
+                cid = int(ids[int(np.argmin(d))])
+                cell_world = (self.contested_cells[cid].astype(np.float32) + 0.5) * self.cell - h
+                feats[2:4] = (cell_world - own) / h
+                total = max(1, self.contested_cells.shape[0])
+                feats[4] = self.contested_score / total
+                feats[5] = self.rival_score / total
+                cx, cy = self._world_to_cell(own[None, :])
+                local = np.where((self.contested_cells[:, 0] == int(cx[0])) & (self.contested_cells[:, 1] == int(cy[0])))[0]
+                if local.size:
+                    owner = int(self.contested_owner[int(local[0])])
+                    feats[6] = 1.0
+                    feats[7] = 1.0 if owner == 1 else 0.0
+                    feats[8] = 1.0 if owner == -1 else 0.0
+            feats[9] = 1.0 if own[0] > 0.0 else -1.0
+        elif sid == "navigate-to-target":
+            rel = self.target_pos - own
+            dist = float(np.linalg.norm(rel))
+            feats[0:2] = rel / h                                              # bearing to goal
+            feats[2] = np.clip(dist / (2.0 * h), 0.0, 1.0)                   # normalized distance
+            feats[3] = 1.0 if self.intercept_step is not None else 0.0        # reached flag
+            feats[4] = math.atan2(float(rel[1]), float(rel[0])) / math.pi     # heading angle to goal
+        return np.clip(feats, -1.0, 1.0)
+
     # ------------------------------------------------------------------ reset ---
     def reset(self, seed: int | None = None) -> np.ndarray:
         """Reset world and return per-agent local obs, shape (n, obs_dim)."""
@@ -493,7 +975,7 @@ class SwarmEnv:
         self.roles = np.zeros(self.n, dtype=np.int64)
         self.t = 0.0
         self.steps = 0
-        self._reset_hostiles()
+        self._reset_task_entities()
         self._mark_covered()
         return self._obs()
 
@@ -538,17 +1020,16 @@ class SwarmEnv:
         if n_collisions:
             self.pos = np.clip(self.pos, -bound, bound)
 
-        new_cells = self._mark_covered()
-        self._update_hostiles()
-
-        coverage_scale = (
-            DRONE_VS_DRONE_COVERAGE_SCALE
-            if self.scenario_id == "drone-vs-drone"
-            else 1.0
-        )
-        reward = COVERAGE_REWARD * coverage_scale * new_cells
+        self._update_task_entities()
 
         live_pos = self.pos[live]
+        events = self._compute_task_transitions(live_pos)
+        new_cells = self._mark_covered()
+
+        coverage_scale = self.task_profile.coverage_weight
+        if self.scenario_id == "search-and-interdict" and self.contact_step is not None:
+            coverage_scale *= 0.15
+        reward = COVERAGE_REWARD * coverage_scale * new_cells
 
         # crowding: penalize close live pairs
         if live.sum() > 1:
@@ -564,12 +1045,7 @@ class SwarmEnv:
             edge_weight = 1.8 if self.scenario_id == "drone-vs-drone" else 1.0
             reward -= EDGE_GRADIENT_PENALTY * edge_weight * float((excess ** 2).sum())
 
-            if self.scenario_id == "drone-vs-drone":
-                reward += self._drone_vs_drone_combat_reward(live_pos, live)
-                if self.hostile_alive.any():
-                    reward += 0.5 * self._objective_reward(live_pos)
-            else:
-                reward += self._objective_reward(live_pos)
+            reward += self._task_reward(live_pos, events)
 
         if n_collisions:
             reward -= COLLISION_PENALTY * float(n_collisions)
@@ -587,6 +1063,12 @@ class SwarmEnv:
             "coverage": self.coverage_fraction(),
             "n_alive": int(self.alive.sum()),
             "n_collisions": n_collisions,
+        }
+        task_metrics = self._task_metrics(self.pos[self.alive])
+        info.update(task_metrics)
+        info["task_metrics"] = {
+            key: value for key, value in task_metrics.items()
+            if isinstance(value, (int, float, np.floating))
         }
         if self.hostile_alive.size:
             info["n_hostile_alive"] = int(self.hostile_alive.sum())
@@ -672,6 +1154,9 @@ class SwarmEnv:
                     out[i, base + 3] = self._obs_half[k, 1] / half
             o += OBSTACLE_DIM
 
+            out[i, o:o + TASK_DIM] = self._task_obs(i)
+            o += TASK_DIM
+
             # role flag normalized to [0, 1]
             out[i, o] = self.roles[i] / max(1, len(ROLES) - 1)
         return out
@@ -701,13 +1186,43 @@ class SwarmEnv:
                 bf.ew.gps_denial_level,
                 bf.logistics.attrition_inject_rate / 0.5,
             ], dtype=np.float32))
+        parts.append(self._global_task_state())
         return np.concatenate(parts).astype(np.float32)
+
+    def _global_task_state(self) -> np.ndarray:
+        feats = np.zeros(TASK_DIM, dtype=np.float32)
+        h = self.world_half
+        if self.scenario_id in {"moving-target-track", "search-and-interdict"}:
+            feats[0:2] = self.target_pos / h
+            feats[2:4] = np.clip(self.target_vel / MAX_SPEED, -1.0, 1.0)
+            feats[4] = 1.0 if self.contact_step is not None else 0.0
+            feats[5] = 1.0 if self.intercept_step is not None else 0.0
+        elif self.scenario_id in {"drone-vs-drone", "defend-asset"}:
+            if self.hostile_alive.size:
+                live_ids = np.where(self.hostile_alive)[0]
+                feats[0] = float(live_ids.size) / max(1, self.hostile_alive.size)
+                if live_ids.size:
+                    centroid = self.hostile_pos[live_ids].mean(axis=0)
+                    feats[1:3] = centroid / h
+            feats[3] = self.breaches / max(1, self._hostile_count())
+            feats[4] = self.intercepts / max(1, self._hostile_count())
+        elif self.scenario_id == "swarm-vs-swarm-race":
+            total = max(1, self.contested_cells.shape[0])
+            feats[0] = self.contested_score / total
+            feats[1] = self.rival_score / total
+            if self.rival_pos.shape[0]:
+                feats[2:4] = self.rival_pos.mean(axis=0) / h
+        elif self.scenario_id == "navigate-to-target":
+            feats[0:2] = self.target_pos / h
+            feats[2] = 1.0 if self.intercept_step is not None else 0.0
+        return np.clip(feats, -1.0, 1.0)
 
     @property
     def state_dim(self) -> int:
         base = self.n * 2 + self.n * 2 + self.n + self.grid * self.grid
         if self.battlefield is not None:
             base += 4  # 4 normalized P0 scalars appended to global state
+        base += TASK_DIM
         return base
 
     def battlefield_hash(self) -> str:

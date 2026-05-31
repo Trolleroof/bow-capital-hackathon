@@ -333,6 +333,17 @@ def _build_world(p, env_id: str) -> list[dict]:
 
             scripted.append({"body": body, "fn": fn})
 
+    elif env_id == "navigate-to-target":
+        # Static goal beacon at the far end of the obstacle corridor.
+        # SwarmEnv places it at [0.85 * world_half, 0.0] = [8.5, 0.0].
+        goal_x, goal_y = 8.5, 0.0
+        # Pulsing green ring on the ground marking the goal zone
+        _cylinder(p, 1.2, 0.02, [goal_x, goal_y, 0.02], GREEN_SOFT)
+        # Tall beacon post so it's visible from observer cam
+        _cylinder(p, 0.12, 3.0, [goal_x, goal_y, 1.5], GREEN)
+        # Small cap sphere (approximated as a flattened cylinder) on top
+        _cylinder(p, 0.45, 0.12, [goal_x, goal_y, 3.1], GREEN)
+
     return scripted
 
 
@@ -364,18 +375,18 @@ def _apply_drone_engagement(scripted: list[dict], agents: list[dict], t: float, 
                 break
 
 
-def _spawn_drone(p, position) -> int:
+def _spawn_drone(p, position, scale: float = 1.0) -> int:
     """Spawn a blue swarm drone ("us"). Colour is team-consistent, not per-id."""
-    return _drone_body(p, position, BLUE)
+    return _drone_body(p, position, BLUE, scale=scale)
 
 
-def _update_bodies(p, bodies: dict[int, int], agents: list[dict]) -> None:
+def _update_bodies(p, bodies: dict[int, int], agents: list[dict], scale: float = 1.0) -> None:
     for agent in agents:
         agent_id = int(agent["id"])
         pos = [float(agent["x"]), float(agent["y"]), float(agent["z"])]
         yaw = float(agent.get("yaw", 0.0))
         if agent_id not in bodies:
-            bodies[agent_id] = _spawn_drone(p, pos)
+            bodies[agent_id] = _spawn_drone(p, pos, scale=scale)
         quat = p.getQuaternionFromEuler([0.0, 0.0, yaw])
         p.resetBasePositionAndOrientation(bodies[agent_id], pos, quat)
 
@@ -512,6 +523,9 @@ def main() -> None:
     scripted = _build_world(p, args.env_id)
     bodies: dict[int, int] = {}
 
+    # Single-agent scenarios get a larger drone so it's visible from observer cam.
+    drone_scale = 2.0 if args.env_id == "navigate-to-target" else 1.0
+
     try:
         for raw in sys.stdin:
             if not raw.strip():
@@ -521,7 +535,7 @@ def main() -> None:
             t = float(message.get("t", 0.0))
             if args.env_id == "drone-vs-drone":
                 _apply_drone_engagement(scripted, agents, t)
-            _update_bodies(p, bodies, agents)
+            _update_bodies(p, bodies, agents, scale=drone_scale)
             _update_scripted(p, scripted, t)
             p.stepSimulation()
             frame = _render_frame(

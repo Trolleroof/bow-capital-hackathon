@@ -20,6 +20,9 @@ export interface TrainingMetrics {
   critic_loss: number
   entropy: number
   coverage: number
+  task_score: number
+  primary_metric: string
+  primary_value: number
   n_alive: number
   params_hash: string
 }
@@ -36,6 +39,9 @@ function eventToMetrics(event: TrainEvent, swarmSize: number): TrainingMetrics {
     critic_loss: losses.v_loss ?? 0,
     entropy: losses.entropy ?? 0,
     coverage: event.coverage ?? 0,
+    task_score: event.task_score ?? event.coverage ?? 0,
+    primary_metric: event.primary_metric ?? 'coverage',
+    primary_value: event.primary_value ?? event.task_score ?? event.coverage ?? 0,
     n_alive: swarmSize,
     params_hash: (event.params_hash ?? '').slice(0, 8).toUpperCase(),
   }
@@ -84,6 +90,9 @@ export function useTraining(
       const m = eventToMetrics(event, params.logistics.swarmSize)
       setMetrics(m)
       setHistory(prev => {
+        if (prev.length > 0 && prev[prev.length - 1]?.step === m.step) {
+          return prev
+        }
         const next = [...prev, m]
         return next.length > 80 ? next.slice(-80) : next
       })
@@ -108,37 +117,31 @@ export function useTraining(
     [envId, params.logistics.swarmSize, closeSocket],
   )
 
-  const attachSocket = useCallback(() => {
+  const attachSocket = useCallback((): Promise<WebSocket> => {
     closeSocket()
-    const ws = new WebSocket(TRAIN_WS_URL)
-    wsRef.current = ws
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(TRAIN_WS_URL)
+      wsRef.current = ws
 
-    ws.onmessage = (ev) => {
-      try {
-        const parsed = JSON.parse(String(ev.data)) as TrainEvent
-        if (parsed.topic === 'train') handleEvent(parsed)
-      } catch {
-        /* ignore malformed frames */
-      }
-    }
+      ws.onopen = () => resolve(ws)
 
-    ws.onerror = () => {
-      setStatus(prev => {
-        if (prev === 'running') {
-          Promise.resolve().then(() => {
-            optionsRef.current?.onError?.(
-              'WebSocket connection to training service failed',
-            )
-          })
-          return 'failed'
+      ws.onmessage = (ev) => {
+        try {
+          const parsed = JSON.parse(String(ev.data)) as TrainEvent
+          if (parsed.topic === 'train') handleEvent(parsed)
+        } catch {
+          /* ignore malformed frames */
         }
-        return prev
-      })
-    }
+      }
 
-    ws.onclose = () => {
-      wsRef.current = null
-    }
+      ws.onerror = () => {
+        reject(new Error('WebSocket connection to training service failed'))
+      }
+
+      ws.onclose = () => {
+        wsRef.current = null
+      }
+    })
   }, [closeSocket, handleEvent])
 
   const start = useCallback(async () => {
@@ -150,8 +153,17 @@ export function useTraining(
       setStatus('running')
       closeSocket()
 
+      // Connect metrics socket in parallel — never block training on WS.
+      // train_service replays the latest event when a client connects late.
+      void attachSocket().catch(() => {
+        console.warn(
+          `[training] WebSocket unavailable (${TRAIN_WS_URL}); falling back to status polling.`,
+        )
+      })
+
       const { ok, error } = await startTraining(envId, 'combat')
       if (!ok) {
+        closeSocket()
         setStatus('failed')
         Promise.resolve().then(() => {
           optionsRef.current?.onError?.(
@@ -161,8 +173,6 @@ export function useTraining(
         })
         return
       }
-
-      attachSocket()
     } finally {
       startingRef.current = false
     }
@@ -181,17 +191,61 @@ export function useTraining(
       if (canceled || !running) return
       setStatus('running')
       if (last?.topic === 'train') {
-        const m = eventToMetrics(last, params.logistics.swarmSize)
-        setMetrics(m)
-        setHistory([m])
+        handleEvent(last)
       }
-      attachSocket()
+      void attachSocket().catch(() => {
+        /* status polling covers metrics if WebSocket fails */
+      })
     })
 
     return () => {
       canceled = true
     }
-  }, [envId, params.logistics.swarmSize, attachSocket])
+  }, [envId, attachSocket, handleEvent])
+
+  // Poll status while training so metrics still update if WebSocket drops.
+  // Also poll in non-running states to detect new runs started externally.
+  useEffect(() => {
+    const interval = status === 'running' ? 2000 : 3000
+
+    const poll = () => {
+      void fetchTrainStatus(envId).then(({ running, last, status: jobStatus }) => {
+        if (running && status !== 'running') {
+          // New run detected while dashboard was idle/completed/stopped.
+          setStatus('running')
+          if (last?.topic === 'train') handleEvent(last)
+          void attachSocket().catch(() => { /* polling fallback */ })
+          return
+        }
+
+        if (last?.topic === 'train') {
+          handleEvent(last)
+        }
+        if (status === 'running' && !running) {
+          closeSocket()
+          if (
+            last?.phase === 'final' ||
+            last?.phase === 'exported' ||
+            last?.phase === 'export_failed'
+          ) {
+            return
+          }
+          if (jobStatus === 'completed') {
+            setStatus('completed')
+            optionsRef.current?.onComplete?.(envId)
+          } else if (jobStatus === 'failed') {
+            setStatus('failed')
+          } else {
+            setStatus('stopped')
+          }
+        }
+      })
+    }
+
+    poll()
+    const id = window.setInterval(poll, interval)
+    return () => window.clearInterval(id)
+  }, [status, envId, handleEvent, closeSocket, attachSocket])
 
   useEffect(() => () => closeSocket(), [closeSocket])
 
@@ -219,6 +273,8 @@ export function TrainingStatsDrawer({ metrics, status }: TrainingStatsDrawerProp
     { label: 'Step', value: metrics.step.toLocaleString() },
     { label: 'Episode', value: String(metrics.episode) },
     { label: 'Reward', value: metrics.reward.toFixed(2), accent: metrics.reward > 0 },
+    { label: 'Task', value: metrics.task_score.toFixed(2), accent: true },
+    { label: metrics.primary_metric.replaceAll('_', ' '), value: metrics.primary_value.toFixed(2), accent: true },
     { label: 'Actor ℒ', value: metrics.actor_loss.toFixed(3) },
     { label: 'Critic ℒ', value: metrics.critic_loss.toFixed(3) },
     { label: 'Coverage', value: `${Math.round(metrics.coverage * 100)}%`, accent: true },

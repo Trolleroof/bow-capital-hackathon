@@ -29,8 +29,8 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from swarm.env_config import config_to_json_dict, make_profile_config
+from swarm.eval import EvalResult, eval_policy, is_better
 from swarm.mappo import MAPPO, MAPPOConfig
-from swarm.models import Actor
 from swarm.scenarios import make_scenario_env
 
 # ----------------------------------------------------------- HYPERPARAMETERS ---
@@ -77,39 +77,6 @@ def emit_train_event(path: str, payload: dict) -> None:
     print(encoded, flush=True)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(encoded + "\n")
-
-
-def eval_policy(
-    actor: Actor | None,
-    *,
-    env_id: str,
-    battlefield,
-    n_episodes: int = 10,
-    seed: int = 1234,
-    deterministic: bool = True,
-) -> float:
-    """Mean final coverage over n_episodes. actor=None => random policy."""
-    env = make_scenario_env(env_id, battlefield=battlefield, seed=seed)
-    covs = []
-    for ep in range(n_episodes):
-        obs = env.reset(seed=seed + ep)
-        done = False
-        info = {"coverage": 0.0}
-        while not done:
-            if actor is None:
-                a = env.rng.uniform(-1, 1, size=(env.n, env.act_dim)).astype(np.float32)
-            else:
-                with torch.no_grad():
-                    obs_t = torch.as_tensor(obs)
-                    if deterministic:
-                        a = actor(obs_t).numpy().astype(np.float32)
-                    else:
-                        a, _ = actor.sample(obs_t)
-                        a = a.numpy().astype(np.float32)
-            obs, _, dones, info = env.step(a)
-            done = bool(dones.any())
-        covs.append(info["coverage"])
-    return float(np.mean(covs))
 
 
 def save_json(path: str, payload: dict) -> None:
@@ -170,19 +137,27 @@ def main():
             "step": 0,
             "reward_mean": 0.0,
             "coverage": 0.0,
+            "task_score": 0.0,
+            "primary_metric": env.task_profile.primary_metric,
+            "primary_value": 0.0,
+            "task_metrics": {},
             "losses": {},
             "params_hash": params_hash,
         },
     )
 
-    random_cov = eval_policy(
+    random_eval = eval_policy(
         None,
         env_id=args.env_id,
         battlefield=battlefield,
         n_episodes=10,
     )
-    print(f"[baseline] random policy mean coverage = {random_cov:.3f}")
-    writer.add_scalar("eval/random_coverage", random_cov, 0)
+    print(
+        f"[baseline] random policy {random_eval.primary_metric} = "
+        f"{random_eval.primary_value:.3f} | coverage = {random_eval.coverage:.3f}"
+    )
+    writer.add_scalar("eval/random_coverage", random_eval.coverage, 0)
+    writer.add_scalar(f"eval/random_{random_eval.primary_metric}", random_eval.primary_value, 0)
     emit_train_event(
         paths["events"],
         {
@@ -191,7 +166,11 @@ def main():
             "phase": "baseline",
             "step": 0,
             "reward_mean": 0.0,
-            "coverage": round(random_cov, 6),
+            "coverage": round(random_eval.coverage, 6),
+            "task_score": round(random_eval.task_score, 6),
+            "primary_metric": random_eval.primary_metric,
+            "primary_value": round(random_eval.primary_value, 6),
+            "task_metrics": random_eval.metrics,
             "losses": {},
             "params_hash": params_hash,
         },
@@ -200,7 +179,7 @@ def main():
     obs = env.reset(seed=args.seed)
     n_updates = max(1, args.timesteps // cfg.rollout_steps)
     global_step = 0
-    best_cov = -1.0
+    best_eval: EvalResult | None = None
     best_global_step = 0
     best_train_stats: dict[str, float] = {}
     t0 = time.time()
@@ -212,9 +191,13 @@ def main():
 
         ep_rew = float(np.mean(stats["ep_rewards"])) if stats["ep_rewards"] else 0.0
         ep_cov = float(np.mean(stats["ep_coverage"])) if stats["ep_coverage"] else 0.0
+        ep_task = float(np.mean(stats["ep_task_score"])) if stats["ep_task_score"] else 0.0
+        ep_primary = float(np.mean(stats["ep_primary_value"])) if stats["ep_primary_value"] else ep_task
 
         writer.add_scalar("charts/episode_reward", ep_rew, global_step)
         writer.add_scalar("charts/episode_coverage", ep_cov, global_step)
+        writer.add_scalar("charts/task_score", ep_task, global_step)
+        writer.add_scalar(f"charts/{env.task_profile.primary_metric}", ep_primary, global_step)
         writer.add_scalar("losses/pg_loss", train["pg_loss"], global_step)
         writer.add_scalar("losses/v_loss", train["v_loss"], global_step)
         writer.add_scalar("losses/entropy", train["entropy"], global_step)
@@ -235,6 +218,13 @@ def main():
                 "step": global_step,
                 "reward_mean": round(ep_rew, 6),
                 "coverage": round(ep_cov, 6),
+                "task_score": round(ep_task, 6),
+                "primary_metric": env.task_profile.primary_metric,
+                "primary_value": round(ep_primary, 6),
+                "task_metrics": {
+                    "task_score": round(ep_task, 6),
+                    env.task_profile.primary_metric: round(ep_primary, 6),
+                },
                 "losses": losses,
                 "params_hash": params_hash,
             },
@@ -251,13 +241,15 @@ def main():
             )
 
         if update % 5 == 0 or update == n_updates:
-            det_cov = eval_policy(
+            det_eval = eval_policy(
                 algo.actor,
                 env_id=args.env_id,
                 battlefield=battlefield,
                 n_episodes=5,
             )
-            writer.add_scalar("eval/coverage", det_cov, global_step)
+            writer.add_scalar("eval/coverage", det_eval.coverage, global_step)
+            writer.add_scalar("eval/task_score", det_eval.task_score, global_step)
+            writer.add_scalar(f"eval/{det_eval.primary_metric}", det_eval.primary_value, global_step)
             emit_train_event(
                 paths["events"],
                 {
@@ -266,13 +258,17 @@ def main():
                     "phase": "eval",
                     "step": global_step,
                     "reward_mean": round(ep_rew, 6),
-                    "coverage": round(det_cov, 6),
+                    "coverage": round(det_eval.coverage, 6),
+                    "task_score": round(det_eval.task_score, 6),
+                    "primary_metric": det_eval.primary_metric,
+                    "primary_value": round(det_eval.primary_value, 6),
+                    "task_metrics": det_eval.metrics,
                     "losses": losses,
                     "params_hash": params_hash,
                 },
             )
-            if det_cov > best_cov:
-                best_cov = det_cov
+            if is_better(det_eval, best_eval, args.env_id):
+                best_eval = det_eval
                 best_global_step = global_step
                 best_train_stats = losses
                 torch.save(
@@ -286,7 +282,11 @@ def main():
                         "act_dim": env.act_dim,
                         "actor_hidden": cfg.actor_hidden,
                         "log_std_init": cfg.log_std_init,
-                        "coverage": det_cov,
+                        "coverage": det_eval.coverage,
+                        "task_score": det_eval.task_score,
+                        "primary_metric": det_eval.primary_metric,
+                        "primary_value": det_eval.primary_value,
+                        "task_metrics": det_eval.metrics,
                         "global_step": global_step,
                     },
                     paths["policy"],
@@ -299,25 +299,33 @@ def main():
                         "phase": "checkpoint",
                         "step": global_step,
                         "reward_mean": round(ep_rew, 6),
-                        "coverage": round(det_cov, 6),
+                        "coverage": round(det_eval.coverage, 6),
+                        "task_score": round(det_eval.task_score, 6),
+                        "primary_metric": det_eval.primary_metric,
+                        "primary_value": round(det_eval.primary_value, 6),
+                        "task_metrics": det_eval.metrics,
                         "losses": losses,
                         "params_hash": params_hash,
                     },
                 )
 
-    final_cov = eval_policy(
+    final_eval = eval_policy(
         algo.actor,
         env_id=args.env_id,
         battlefield=battlefield,
         n_episodes=10,
     )
+    if best_eval is None:
+        best_eval = final_eval
     print(
-        f"\n[result] random coverage = {random_cov:.3f} | "
-        f"trained (final) coverage = {final_cov:.3f} | "
-        f"best checkpoint coverage = {best_cov:.3f}"
+        f"\n[result] random {random_eval.primary_metric} = {random_eval.primary_value:.3f} | "
+        f"trained final {final_eval.primary_metric} = {final_eval.primary_value:.3f} | "
+        f"best checkpoint {best_eval.primary_metric} = {best_eval.primary_value:.3f}"
     )
     print(f"[checkpoint] saved best policy -> {paths['policy']}")
-    writer.add_scalar("eval/final_coverage", final_cov, global_step)
+    writer.add_scalar("eval/final_coverage", final_eval.coverage, global_step)
+    writer.add_scalar("eval/final_task_score", final_eval.task_score, global_step)
+    writer.add_scalar(f"eval/final_{final_eval.primary_metric}", final_eval.primary_value, global_step)
     writer.close()
 
     meta = {
@@ -330,9 +338,16 @@ def main():
         "rollout_steps": cfg.rollout_steps,
         "global_step": global_step,
         "best_global_step": best_global_step,
-        "random_coverage": round(random_cov, 6),
-        "final_coverage": round(final_cov, 6),
-        "best_checkpoint_coverage": round(best_cov, 6),
+        "primary_metric": best_eval.primary_metric,
+        "random_primary_value": round(random_eval.primary_value, 6),
+        "final_primary_value": round(final_eval.primary_value, 6),
+        "best_checkpoint_primary_value": round(best_eval.primary_value, 6),
+        "random_coverage": round(random_eval.coverage, 6),
+        "final_coverage": round(final_eval.coverage, 6),
+        "best_checkpoint_coverage": round(best_eval.coverage, 6),
+        "final_task_score": round(final_eval.task_score, 6),
+        "best_checkpoint_task_score": round(best_eval.task_score, 6),
+        "best_checkpoint_task_metrics": best_eval.metrics,
         "obs_dim": env.obs_dim,
         "act_dim": env.act_dim,
         "checkpoint": os.path.relpath(paths["policy"], HERE),
@@ -349,8 +364,12 @@ def main():
             "profile": args.profile,
             "phase": "final",
             "step": global_step,
-            "reward_mean": round(final_cov, 6),
-            "coverage": round(best_cov, 6),
+            "reward_mean": round(final_eval.task_score, 6),
+            "coverage": round(best_eval.coverage, 6),
+            "task_score": round(best_eval.task_score, 6),
+            "primary_metric": best_eval.primary_metric,
+            "primary_value": round(best_eval.primary_value, 6),
+            "task_metrics": best_eval.metrics,
             "losses": best_train_stats,
             "params_hash": params_hash,
         },

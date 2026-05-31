@@ -7,7 +7,7 @@
     - generic "Scenario navigation" [ref=e9]:
       - button "Gym" [ref=e10] [cursor=pointer]
       - button "PyBullet Sim" [ref=e11] [cursor=pointer]
-      - button "CombatOS" [ref=e12] [cursor=pointer]
+      - button "Outcast Virus" [ref=e12] [cursor=pointer]
     - generic:
       - generic: Controller
       - generic: Trained policy

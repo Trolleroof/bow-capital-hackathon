@@ -1,13 +1,13 @@
 # Battlefield Parameters — General's Decision Log
 
 **Classification:** HACKATHON WORKING DOCUMENT  
-**Author:** Five-Star General Planning Cell × CombatOS LM Chief of Staff  
+**Author:** Five-Star General Planning Cell × Outcast Virus LM Chief of Staff  
 **Date:** 2026-05-30  
 **Status:** P0 set LOCKED for demo build  
 
 > **FRAGO Annex C — Swarm Sim Parameter Governance**  
 > This document is the authoritative record of which environmental knobs are wired into
-> the CombatOS point-mass swarm sim, which are operator-facing UI-only, and which are
+> the Outcast Virus point-mass swarm sim, which are operator-facing UI-only, and which are
 > deferred post-demo. It binds `swarm/env_config.py`, `frontend/src/gym/battlefieldParams.ts`,
 > and `swarm/env.py` to a single truth.
 

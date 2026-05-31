@@ -1,4 +1,4 @@
-"""Scenario registry for hard-coded CombatOS gym environments.
+"""Scenario registry for hard-coded Outcast Virus gym environments.
 
 The current RL core is still the point-mass `SwarmEnv`, but issue #7 needs
 operator-facing scenarios that can be selected consistently across the frontend,

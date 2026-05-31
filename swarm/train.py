@@ -1,4 +1,4 @@
-"""MAPPO/CTDE training entrypoint for the CombatOS swarm.
+"""MAPPO/CTDE training entrypoint for the Outcast Virus swarm.
 
 Run:
     uv run --project swarm python -m swarm.train --env-id search-and-interdict

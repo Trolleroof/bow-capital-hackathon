@@ -1,6 +1,6 @@
 ---
 name: Task-realistic RL policy improvement
-overview: Make the 5 CombatOS gym policies optimize scenario-specific mission behavior instead of generic coverage. This is the reference implementation plan for changing observations, rewards, evaluation, checkpoint selection, frontend parity, and retraining/export so every Mission Sim performs visibly better for its selected gym environment.
+overview: Make the 5 Outcast Virus gym policies optimize scenario-specific mission behavior instead of generic coverage. This is the reference implementation plan for changing observations, rewards, evaluation, checkpoint selection, frontend parity, and retraining/export so every Mission Sim performs visibly better for its selected gym environment.
 todos:
   - id: task-profiles
     content: Add swarm/task_profiles.py with per-scenario reward weights, entities, task observation layout, metrics, and checkpoint primary score

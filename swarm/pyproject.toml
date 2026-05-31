@@ -1,7 +1,7 @@
 [project]
-name = "combatos-swarm"
+name = "outcast-virus-swarm"
 version = "0.1.0"
-description = "Decentralized multi-agent RL (MAPPO/CTDE) for the CombatOS swarm vertical"
+description = "Decentralized multi-agent RL (MAPPO/CTDE) for the Outcast Virus swarm vertical"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "torch>=2.4",

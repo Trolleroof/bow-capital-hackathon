@@ -85,7 +85,7 @@ BBOX_SMOOTH_ALPHA = float(os.getenv("BBOX_SMOOTH_ALPHA", "0.35"))
 # Hostname of the downstream consumer (dashboard / swarm integrator).
 WS_HOST  = os.getenv("WS_HOST", "localhost")
 
-# Port the perception node publishes to. This should be the CombatOS
+# Port the perception node publishes to. This should be the Outcast Virus
 # orchestrator control bus, not the old standalone perception bus.
 WS_PORT  = int(os.getenv("WS_PORT", "8000"))
 IMAGE_WS_PORT = int(os.getenv("IMAGE_WS_PORT", "8001"))

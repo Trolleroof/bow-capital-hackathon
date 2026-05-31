@@ -1,4 +1,4 @@
-"""Task profiles for CombatOS swarm gym scenarios.
+"""Task profiles for Outcast Virus swarm gym scenarios.
 
 Profiles keep scenario-specific reward weights, phases, and checkpoint metrics out
 of the shared environment implementation. Runtime entity state still lives in

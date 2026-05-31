@@ -1,4 +1,4 @@
-"""env_config.py — Battlefield parameter schema for the CombatOS swarm sim.
+"""env_config.py — Battlefield parameter schema for the Outcast Virus swarm sim.
 
 This is the Python mirror of frontend/src/gym/battlefieldParams.ts.
 Field names, ranges, and defaults are kept in sync across both files.

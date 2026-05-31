@@ -1,4 +1,4 @@
-"""Point-mass multi-agent coverage/search environment for the CombatOS swarm.
+"""Point-mass multi-agent coverage/search environment for the Outcast Virus swarm.
 
 This is a self-contained vectorized environment (NOT a PettingZoo wrapper) chosen
 for a clean, fast MAPPO/CTDE training loop in Phase 1: a shared-parameter actor

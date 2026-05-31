@@ -1,4 +1,4 @@
-"""WebSocket bus for the CombatOS swarm vertical (Phase 0).
+"""WebSocket bus for the Outcast Virus swarm vertical (Phase 0).
 
 A tiny broadcast server: every connected client receives JSON frames tagged with a
 topic. This Phase-0 entrypoint drives `SwarmEnv` with a RANDOM policy and streams
@@ -418,7 +418,7 @@ async def run_random(host: str = HOST, port: int = PORT, hz: float = HZ) -> None
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="CombatOS swarm WebSocket bus")
+    p = argparse.ArgumentParser(description="Outcast Virus swarm WebSocket bus")
     p.add_argument(
         "--backend",
         choices=["pointmass", "pybullet"],

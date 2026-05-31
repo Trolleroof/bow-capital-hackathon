@@ -1,5 +1,5 @@
 """
-perception/rosmain.py -- CombatOS Targeting Loop (ROS2 input)
+perception/rosmain.py -- Outcast Virus Targeting Loop (ROS2 input)
 
 Drop-in equivalent of main.py.  The only difference is the frame source:
 instead of cv2.VideoCapture the frames arrive via a ROS2 subscription to
@@ -76,7 +76,7 @@ print("[import] visualizer ok", flush=True)
 def _dbg(msg: str) -> None:
     print(f"[rosmain][{time.time():.3f}] {msg}", flush=True)
 
-WINDOW = "CombatOS - Targeting"
+WINDOW = "Outcast Virus - Targeting"
 
 
 # ── Helpers (identical to main.py) ───────────────────────────────────────────
@@ -152,7 +152,7 @@ class PerceptionNode(Node):
         buffer: CandidateBuffer,
         gallery: ReIDGallery,
     ) -> None:
-        super().__init__("combatos_perception")
+        super().__init__("outcast_virus_perception")
         self._bridge    = CvBridge()
         self._publisher = publisher
         self._detector  = detector

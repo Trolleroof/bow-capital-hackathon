@@ -1,5 +1,5 @@
 /**
- * battlefieldParams.ts — Typed schema for CombatOS battlefield simulation parameters.
+ * battlefieldParams.ts — Typed schema for Outcast Virus battlefield simulation parameters.
  *
  * Priority tiers (see docs/battlefield-parameters.md §2):
  *   P0  — wired into sim dynamics / obs / rewards (swarm/env.py + sim.ts)

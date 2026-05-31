@@ -4,7 +4,7 @@ import PyBulletSimPanel from './panels/PyBulletSimPanel'
 import GymScenarioStage, { ScenarioMiniPreview } from './gym/GymScenarioStage'
 import { getScenarioById, scenarios } from './gym/scenarios'
 import { startPyBulletSim } from './gym/trainApi'
-import { CombatOS } from './combatos/CombatOS'
+import { OutcastVirus } from './outcast-virus/OutcastVirus'
 import {
   checkPolicyExists,
   setActiveEnvId,
@@ -17,7 +17,7 @@ type AppRoute =
   | { view: 'menu' }
   | { view: 'gym'; envId: string }
   | { view: 'sim'; envId: string }
-  | { view: 'combatos' }
+  | { view: 'outcast-virus' }
 
 const scenarioExists = (envId: string) => getScenarioById(envId) != null
 
@@ -25,7 +25,7 @@ const parseRoute = (): AppRoute => {
   const hash = window.location.hash.replace(/^#\/?/, '')
   const [view, envId] = hash.split('/')
 
-  if (view === 'combatos') return { view: 'combatos' }
+  if (view === 'outcast-virus') return { view: 'outcast-virus' }
 
   if (view === 'gym' && envId && scenarioExists(envId)) {
     return { view: 'gym', envId }
@@ -143,9 +143,9 @@ export default function App() {
     enterGym(envId)
   }
 
-  const enterCombatOS = () => {
-    setHashRoute('combatos')
-    setRoute({ view: 'combatos' })
+  const enterOutcastVirus = () => {
+    setHashRoute('outcast-virus')
+    setRoute({ view: 'outcast-virus' })
   }
 
   const handlePolicyReady = (envId: string) => {
@@ -181,15 +181,15 @@ export default function App() {
         >
           {launchingSim === envId ? 'Launching' : 'PyBullet Sim'}
         </button>
-        <button type="button" className="nav-pill" onClick={enterCombatOS}>
-          CombatOS
+        <button type="button" className="nav-pill" onClick={enterOutcastVirus}>
+          Outcast Virus
         </button>
       </div>
     )
   }
 
-  if (route.view === 'combatos') {
-    return <CombatOS />
+  if (route.view === 'outcast-virus') {
+    return <OutcastVirus />
   }
 
   if (route.view === 'sim') {
@@ -278,9 +278,9 @@ export default function App() {
           <button
             type="button"
             className="menu-action"
-            onClick={enterCombatOS}
+            onClick={enterOutcastVirus}
           >
-            CombatOS
+            Outcast Virus
           </button>
         </div>
 

@@ -1,4 +1,4 @@
-"""Task-aligned policy evaluation for CombatOS swarm scenarios."""
+"""Task-aligned policy evaluation for Outcast Virus swarm scenarios."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Persistent backend API for the CombatOS gym UI.
+"""Persistent backend API for the Outcast Virus gym UI.
 
 Starting this process does not train a policy. It only serves HTTP/WebSocket
 endpoints. Training is spawned on demand when the frontend calls
@@ -540,7 +540,7 @@ async def lifespan(app: FastAPI):
     print("[train-service] stopped", flush=True)
 
 
-app = FastAPI(title="CombatOS Train Service", lifespan=lifespan)
+app = FastAPI(title="Outcast Virus Train Service", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

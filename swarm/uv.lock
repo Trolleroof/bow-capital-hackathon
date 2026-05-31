@@ -81,7 +81,7 @@ wheels = [
 ]
 
 [[package]]
-name = "combatos-swarm"
+name = "outcast-virus-swarm"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

@@ -228,7 +228,7 @@ def record(out: Path, trajectory_out: Path, seconds: float, fps: int, n: int) ->
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Record CombatOS Phase-6 drone B-roll")
+    parser = argparse.ArgumentParser(description="Record Outcast Virus Phase-6 drone B-roll")
     parser.add_argument("--out", type=Path, default=Path("artifacts/drones_broll.mp4"))
     parser.add_argument("--trajectory-out", type=Path, default=Path("artifacts/drones_broll_trajectory.json"))
     parser.add_argument("--seconds", type=float, default=12.0)

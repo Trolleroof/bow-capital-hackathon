@@ -1,9 +1,9 @@
-# CombatOS -- Team Execution Plan
+# Outcast Virus -- Team Execution Plan
 
 **Bow Capital × DS3 × SIC Defense Hackathon · May 29–31, 2026 · UCSD DIB**
 **Track:** Autonomous Navigation & Edge AI (Hardware+) · **Team size:** 4
 
-> **One line:** CombatOS is the GPS-denied autonomy OS for unmanned platforms -- it
+> **One line:** Outcast Virus is the GPS-denied autonomy OS for unmanned platforms -- it
 > localizes from stereo vision alone, identifies and tracks targets at the edge,
 > reconstructs the battlefield in 3D, and coordinates a swarm with the network down.
 > One OS, swap the body (RC car today → drone tomorrow).
@@ -21,7 +21,7 @@ can operate with little to no internet."* We are not adapting to the rubric -- w
 
 Two judge audiences -- tailor every panel and every slide to both:
 - **Track judges (Autonomous Nav & Edge AI):** GPS-denied VSLAM running on-device, edge inference, offline operation.
-- **Challenge judges (FireStorm = loitering munitions/payloads, Qualcomm = edge silicon, TargetX = unmanned systems):** "CombatOS is a *payload/augment OS* that drops onto any unmanned platform and runs with zero connectivity."
+- **Challenge judges (FireStorm = loitering munitions/payloads, Qualcomm = edge silicon, TargetX = unmanned systems):** "Outcast Virus is a *payload/augment OS* that drops onto any unmanned platform and runs with zero connectivity."
 
 ---
 
@@ -81,7 +81,7 @@ from first principles. GREEN = an implementation choice we can swap if something
                         └──────────────┬────────────────┘
                           WebSocket bus │  (JSON topics, defined in §5)
                         ┌───────────────▼───────────────┐
-                        │   CombatOS DASHBOARD (React)   │  ← owner ⓸ owns the shell
+                        │   Outcast Virus DASHBOARD (React)   │  ← owner ⓸ owns the shell
                         │  Banner: GPS DENIED · LINK NONE│     each owner ships 1 panel
                         │  [traj] [detections] [splat] [swarm]
                         └────────────────────────────────┘
@@ -114,7 +114,7 @@ Alex? Dashboard? Maybe @alexgaoth look here
 **zero GPS**, plus the spoofed flight-controller harness that feeds it sensor data.
 
 - Stand up **stereo VSLAM** on the Jetson Nano -- **ORB-SLAM3 (stereo, optionally stereo-inertial)**. Output = **trajectory only** (pose over time). **No dense mapping.**
-- Build the **FC-spoof harness**: replay the dataset's IMU/telemetry over a MAVLink-style stream (`pymavlink` or a simple ZMQ feed) so the story is "the flight controller streams sensor data to CombatOS exactly like on a real drone."
+- Build the **FC-spoof harness**: replay the dataset's IMU/telemetry over a MAVLink-style stream (`pymavlink` or a simple ZMQ feed) so the story is "the flight controller streams sensor data to Outcast Virus exactly like on a real drone."
 - Own the footage ingestion (EuRoC MAV primary).
 - Publish `pose` messages to the bus (§5). Ship the **trajectory panel** + the **`GPS: DENIED`** hero banner in the dashboard.
 - **Hand your poses to ⓷** so 3DGS skips COLMAP.
@@ -158,7 +158,7 @@ let judges fly through it -- with ⓵'s trajectory overlaid inside the scene.
 
 ---
 
-### ⓸ Swarm + Integration Lead -- Offline Coordination + the CombatOS spine  🔴 *concept*
+### ⓸ Swarm + Integration Lead -- Offline Coordination + the Outcast Virus spine  🔴 *concept*
 
 **Scope (yours alone):** A decentralized multi-agent swarm in sim, **plus** the
 connective tissue that makes four verticals look like one OS. (You own integration
@@ -172,7 +172,7 @@ because PPO training runs unattended -- you have the spare cycles.)
   - The **`frontend/` dashboard shell** (React 19 + Vite + Bun, already scaffolded): layout, the `GPS DENIED · LINK NONE` hero banner, and the 4 panel slots others fill.
   - The **pitch deck + narrative** for both judge audiences. Attend the **Pitching Workshop (Sat 5–6 PM)**.
 
-**Done =** N agents coordinating with comms off in the dashboard, and all four panels live in one CombatOS view streaming over the bus.
+**Done =** N agents coordinating with comms off in the dashboard, and all four panels live in one Outcast Virus view streaming over the bus.
 **Stack:** MuJoCo, SB3/CleanRL, PettingZoo, Python WS server (`websockets`/FastAPI), React/Vite/Bun, three.js.
 **Risk you own:** integration cliff. Enforce a **daily integrated build** -- modules talk over the contract from Phase 1, not Sunday.
 
@@ -213,7 +213,7 @@ bbox convention (xywh vs xyxy), how VSLAM poses are exported to 3DGS, dataset/cl
 
 ---
 
-## 5a. Orchestrator -- CombatOS integration spine
+## 5a. Orchestrator -- Outcast Virus integration spine
 
 > **Owner: ⓸** · Built Phase 0 (stubs) → Phase 2 (real modules) · Single entry point: `python orchestrator.py`
 
@@ -222,7 +222,7 @@ The orchestrator is the single process that boots all four verticals, runs the W
 ### Directory layout
 
 ```
-combatos/
+outcast_virus/
 ├── orchestrator.py           # entry point — boots everything, runs event loop
 ├── bus/
 │   ├── ws_server.py         # FastAPI WebSocket broker (pub/sub by topic)
@@ -306,7 +306,7 @@ DIB closes ~11 PM Fri and ~10 PM Sat; it is **not** overnight. Real working hour
 | **0 -- Foundations** | Fri 8–11 PM | Repo skeleton (`nav/ perception/ recon/ swarm/ frontend/`), **freeze the §5 contract**, Jetson flashed, dataset downloaded, dashboard shell + 4 empty panels, MuJoCo + Colab smoke tests. | Everyone unblocks their own pipeline + mocks the bus. |
 | **1 -- Verticals solo** | Sat 9 AM–1 PM | Each vertical works in isolation on the dataset. **Kick off the long-runners now:** ⓷ Colab 3DGS training, ⓸ PPO training. | ⓵ trajectory out · ⓶ boxes on feed · ⓷ training + viewer · ⓸ PPO + shell. |
 | **2 -- Integrate** | Sat 1–6 PM | Wire all four to the bus → dashboard shows trajectory + detections live together. VSLAM→3DGS pose handoff. ⓸ at Pitch Workshop 5–6. | Daily integrated build #1. |
-| **3 -- MVP lock + polish** | Sat 6–10 PM | End-to-end demo runs in one CombatOS view. Splat + trajectory overlay. Swarm viz polished. **Record a backup demo run before the building closes.** | Freeze MVP. |
+| **3 -- MVP lock + polish** | Sat 6–10 PM | End-to-end demo runs in one Outcast Virus view. Splat + trajectory overlay. Swarm viz polished. **Record a backup demo run before the building closes.** | Freeze MVP. |
 | **4 -- Ship** | Sun 9–11 AM | Record the **5-min video** (inspiration / development / demo), Devpost, GitHub README, slides final. Submit by 10 AM. | ⓷ leads video, ⓸ leads deck. |
 
 ---
@@ -330,13 +330,13 @@ DIB closes ~11 PM Fri and ~10 PM Sat; it is **not** overnight. Real working hour
 2. **Autonomy.** Detections light up; a target is proposed and an operator confirms it -- "the platform perceives and prioritizes itself; the human stays in the loop."
 3. **Surveillance.** Fly through the 3D Gaussian Splat of the battlefield with the drone's path threaded through it.
 4. **Scale.** Cut to the swarm coordinating with comms denied. "One policy, no server, no link."
-5. **Close -- the OS thesis.** "CombatOS is a payload OS. RC car today, drone tomorrow -- same stack, swap the body. Built for the day the network goes dark." (Aim this line straight at FireStorm / TargetX / Qualcomm.)
+5. **Close -- the OS thesis.** "Outcast Virus is a payload OS. RC car today, drone tomorrow -- same stack, swap the body. Built for the day the network goes dark." (Aim this line straight at FireStorm / TargetX / Qualcomm.)
 
 ---
 
 ## 9. Definition of done
 
-**MVP (must demo):** ⓵ live GPS-denied trajectory on Jetson · ⓶ live detection + operator-confirmed target lock · ⓸ swarm coordinating in sim, all in **one** CombatOS dashboard over the bus.
+**MVP (must demo):** ⓵ live GPS-denied trajectory on Jetson · ⓶ live detection + operator-confirmed target lock · ⓸ swarm coordinating in sim, all in **one** Outcast Virus dashboard over the bus.
 **Stretch (green):** ⓷ 3DGS field with trajectory overlay · VSLAM→3DGS pose handoff · on-device YOLO+VSLAM simultaneously · bring-your-own drone footage.
 
-**Submission checklist:** GitHub repo (clean READMEs per module) · 5-min demo video · Devpost (team, name "CombatOS", repo link) · slides tailored to track **and** challenge judges. **Submit by Sun 10 AM soft / 11 AM hard -- no late submissions, ever.**
+**Submission checklist:** GitHub repo (clean READMEs per module) · 5-min demo video · Devpost (team, name "Outcast Virus", repo link) · slides tailored to track **and** challenge judges. **Submit by Sun 10 AM soft / 11 AM hard -- no late submissions, ever.**

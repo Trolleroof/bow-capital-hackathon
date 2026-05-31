@@ -1,4 +1,4 @@
-"""Canonical uvicorn entrypoint for the CombatOS backend.
+"""Canonical uvicorn entrypoint for the Outcast Virus backend.
 
 Run:
     uv run --project swarm uvicorn swarm.backend:app --host 127.0.0.1 --port 8787

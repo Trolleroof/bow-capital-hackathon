@@ -89,7 +89,7 @@ export function trainServicePlugin(): Plugin {
   }
 
   return {
-    name: 'combatos-train-service',
+    name: 'outcast-virus-train-service',
     apply: 'serve',
     async configureServer() {
       if (process.env.VITE_AUTO_TRAIN_SERVICE !== '1') {

@@ -1,4 +1,4 @@
-# CombatOS
+# Outcast Virus
 
 GPS-denied autonomy OS for unmanned platforms -- stereo VSLAM, edge targeting, 3D battlefield reconstruction, offline swarm coordination.
 

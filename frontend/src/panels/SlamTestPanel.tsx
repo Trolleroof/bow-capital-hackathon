@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { LiveFrameCanvas } from '../combatos/LiveFrameCanvas'
+import { LiveFrameCanvas } from '../outcast-virus/LiveFrameCanvas'
 
 interface PoseMessage {
   topic: 'pose'
@@ -53,8 +53,8 @@ interface StatusMessage {
 
 type BusMessage = PoseMessage | SlamStatusMessage | SlamDiagnosticsMessage | SlamFrameMessage | StatusMessage
 
-const BUS_URL = import.meta.env.VITE_COMBATOS_WS_URL ?? 'ws://localhost:8000'
-const IMAGE_URL = import.meta.env.VITE_COMBATOS_IMAGE_WS_URL ?? 'ws://localhost:8001'
+const BUS_URL = import.meta.env.VITE_OUTCAST_VIRUS_WS_URL ?? 'ws://localhost:8000'
+const IMAGE_URL = import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL ?? 'ws://localhost:8001'
 
 function base64ToBlob(data: string, mime = 'image/jpeg') {
   const binary = atob(data)

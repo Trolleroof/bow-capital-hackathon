@@ -69,7 +69,11 @@ async def main() -> None:
         )
     )
 
-    modules = [NavModule(), PerceptionModule(), ReconModule(), SwarmModule(), RosSlamModule()]
+    modules = [NavModule(), PerceptionModule(), ReconModule(), RosSlamModule()]
+    if config.ENABLE_SWARM:
+        modules.append(SwarmModule())
+    else:
+        log.info("[swarm] disabled; set COMBATOS_SWARM=1 to enable swarm relay")
 
     tasks = [
         asyncio.create_task(ws_server.serve(),        name="bus"),

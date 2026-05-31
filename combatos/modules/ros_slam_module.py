@@ -2,8 +2,8 @@
 
 This module runs inside the CombatOS orchestrator on the desktop. It subscribes
 to ROS2 topics over DDS from the Jetson and publishes normalized CombatOS bus
-topics for the browser. The expensive image encoding and JSON/base64 work stays
-off the Jetson.
+topics for the browser. By default it consumes ROS compressed image streams and
+passes their JPEG bytes through to the browser bus.
 """
 from __future__ import annotations
 
@@ -46,6 +46,7 @@ class RosSlamModule(AbstractModule):
         self._path_max = max(1, config.ROS_SLAM_PATH_MAX_POSES)
         self._video_period = 1.0 / max(0.1, config.ROS_SLAM_VIDEO_FPS)
         self._jpeg_quality = max(20, min(95, config.ROS_SLAM_JPEG_QUALITY))
+        self._image_transport = config.ROS_SLAM_IMAGE_TRANSPORT.lower()
         self._stats = {
             "camera_frame": _StreamStats(),
             "slam_frame": _StreamStats(),
@@ -96,14 +97,12 @@ class RosSlamModule(AbstractModule):
 
     def _spin_ros(self) -> None:
         try:
-            import cv2
             import rclpy
-            from cv_bridge import CvBridge, CvBridgeError
             from geometry_msgs.msg import PoseStamped
             from nav_msgs.msg import Odometry, Path
             from rclpy.node import Node
             from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-            from sensor_msgs.msg import Image
+            from sensor_msgs.msg import CompressedImage, Image
             from std_msgs.msg import String
         except Exception as exc:
             log.error("[ros_slam] ROS2 dependencies unavailable: %s", exc)
@@ -114,7 +113,6 @@ class RosSlamModule(AbstractModule):
             rclpy.init(args=None)
 
         node = Node("combatos_orchestrator_slam_bridge")
-        bridge = CvBridge()
         reliable_qos = QoSProfile(depth=10)
         image_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -180,24 +178,52 @@ class RosSlamModule(AbstractModule):
             self._tracking = msg.data or "NO_LOCK"
             self._enqueue_status()
 
-        def on_image(msg: Image, topic: str, source: str) -> None:
+        def throttle(topic: str) -> bool:
             now = time.monotonic()
             stats = self._stats[topic]
             if now - stats.last_sent < self._video_period:
                 stats.dropped += 1
-                return
+                return False
             stats.last_sent = now
+            return True
 
+        def on_compressed_image(msg: CompressedImage, topic: str, source: str) -> None:
+            if not throttle(topic):
+                return
+            stats = self._stats[topic]
+            stats.sent += 1
+            self._enqueue(topic, {
+                "t": _stamp_seconds(msg.header.stamp),
+                "frame_id": msg.header.frame_id,
+                "source": source,
+                "encoding": "jpeg",
+                "width": 0,
+                "height": 0,
+                "seq": stats.sent,
+                "data": base64.b64encode(bytes(msg.data)).decode("ascii"),
+            })
+
+        def on_raw_image(msg: Image, topic: str, source: str) -> None:
+            if not throttle(topic):
+                return
             try:
+                import cv2
+                from cv_bridge import CvBridge, CvBridgeError
+
+                bridge = CvBridge()
                 image = bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
                 ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality])
             except (CvBridgeError, ValueError) as exc:
                 log.warning("[ros_slam] image encode failed for %s: %s", source, exc)
                 return
+            except Exception as exc:
+                log.warning("[ros_slam] raw image transport needs cv2/cv_bridge: %s", exc)
+                return
             if not ok:
                 log.warning("[ros_slam] image encode failed for %s", source)
                 return
 
+            stats = self._stats[topic]
             stats.sent += 1
             self._enqueue(topic, {
                 "t": _stamp_seconds(msg.header.stamp),
@@ -214,27 +240,30 @@ class RosSlamModule(AbstractModule):
         node.create_subscription(Odometry, config.ROS_SLAM_ODOM_TOPIC, on_odom, reliable_qos)
         node.create_subscription(Path, config.ROS_SLAM_PATH_TOPIC, on_path, reliable_qos)
         node.create_subscription(String, config.ROS_SLAM_STATUS_TOPIC, on_status, reliable_qos)
+        image_msg_type = CompressedImage if self._image_transport == "compressed" else Image
+        image_callback = on_compressed_image if self._image_transport == "compressed" else on_raw_image
         if config.ROS_SLAM_ENABLE_CAMERA:
             node.create_subscription(
-                Image,
+                image_msg_type,
                 config.ROS_SLAM_CAMERA_TOPIC,
-                lambda msg: on_image(msg, "camera_frame", config.ROS_SLAM_CAMERA_TOPIC),
+                lambda msg: image_callback(msg, "camera_frame", config.ROS_SLAM_CAMERA_TOPIC),
                 image_qos,
             )
         if config.ROS_SLAM_ENABLE_ANNOTATED:
             node.create_subscription(
-                Image,
+                image_msg_type,
                 config.ROS_SLAM_ANNOTATED_TOPIC,
-                lambda msg: on_image(msg, "slam_frame", config.ROS_SLAM_ANNOTATED_TOPIC),
+                lambda msg: image_callback(msg, "slam_frame", config.ROS_SLAM_ANNOTATED_TOPIC),
                 image_qos,
             )
         node.create_timer(1.0, self._enqueue_status)
 
         log.info(
-            "[ros_slam] subscribed pose=%s camera=%s annotated=%s",
+            "[ros_slam] subscribed pose=%s camera=%s annotated=%s transport=%s",
             config.ROS_SLAM_POSE_TOPIC,
             config.ROS_SLAM_CAMERA_TOPIC,
             config.ROS_SLAM_ANNOTATED_TOPIC,
+            self._image_transport,
         )
 
         try:

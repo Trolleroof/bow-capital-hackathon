@@ -185,7 +185,9 @@ All values are set via environment variables or `.env` (loaded by `python-dotenv
 | `ROS_CAMERA_TOPIC` | `/camera/image_raw` | ROS2 topic camera_node publishes to / rosmain subscribes from |
 | `YOLO_MODEL` | `yolo11n.pt` | `.pt` (PyTorch), `.onnx`, or `.engine` (TensorRT) |
 | `YOLO_CONF` | `0.4` | Per-box confidence threshold |
-| `DEVICE` | `cpu` | `cpu`, `0`, or `cuda:0` |
+| `YOLO_IMGSZ` | `640` | YOLO inference resolution (px). Try `416` or `320` on Jetson Nano to reduce VRAM |
+| `DEVICE` | `cpu` | YOLO device: `cpu`, `0`, or `cuda:0` |
+| `REID_DEVICE` | `cpu` | ReID extractor device. Keep `cpu` on Jetson so YOLO gets the full GPU budget |
 | `WS_HOST` | `localhost` | Orchestrator hostname |
 | `WS_PORT` | `8000` | Orchestrator control bus port |
 | `IMAGE_WS_PORT` | `8001` | Orchestrator image bus port |

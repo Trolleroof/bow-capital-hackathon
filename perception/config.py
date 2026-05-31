@@ -35,6 +35,21 @@ YOLO_IOU   = float(os.getenv("YOLO_IOU",  "0.5"))
 # On Jetson use "0" to hit the TensorRT engine via the CUDA provider.
 DEVICE     = os.getenv("DEVICE", "cpu")
 
+# YOLO inference image size (pixels, square). Smaller = faster + less VRAM.
+# 640 is the default; on Jetson Nano try 320 or 416 if hitting OOM.
+YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "640"))
+
+# Device for the ReID embedding extractor.
+# CPU is preferred on memory-constrained hardware: CUDA allocations are pinned
+# in physical RAM and cannot be swapped out, while CPU allocations can spill to
+# swap. ReID runs on small crops every ~30 frames so swap latency is acceptable.
+REID_DEVICE = os.getenv("REID_DEVICE", "cpu")
+
+# Set to "0" to skip loading the ReID model entirely (~150 MB saved).
+# The gallery will silently no-op; operator confirm/follow still works,
+# but identity is not preserved across tracker ID changes.
+REID_ENABLED = os.getenv("REID_ENABLED", "1") == "1"
+
 # ---------------------------------------------------------------------------
 # Face detection (Haar cascade run inside each troop bounding box)
 # ---------------------------------------------------------------------------

@@ -103,7 +103,11 @@ class BusPublisher:
 
     async def _connect(self) -> None:
         self._ws = await websockets.connect(self._uri)
-        self._image_ws = await websockets.connect(self._image_uri)
+        try:
+            self._image_ws = await websockets.connect(self._image_uri)
+        except OSError as exc:
+            print(f"[bus] image bus unavailable ({exc}); detections still publish on {self._uri}", flush=True)
+            self._image_ws = None
         self._loop.create_task(self._receive_loop())
 
     # ------------------------------------------------------------------
@@ -125,7 +129,7 @@ class BusPublisher:
 
     def publish_frame(self, frame: np.ndarray, topic: str, quality: int = 60) -> None:
         """Encode frame as JPEG and broadcast on the given topic."""
-        if self._ws is None:
+        if self._image_ws is None:
             return
         if config.GRAYSCALE_STREAM:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

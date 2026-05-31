@@ -16,6 +16,8 @@ build/
 venv/
 .env
 .env.*
+!.env.laptop
+!.env.jetson
 !.env.example
 .python-version
 

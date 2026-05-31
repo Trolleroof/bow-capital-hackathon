@@ -1,0 +1,36 @@
+/oak:
+  ros__parameters:
+    camera:
+      i_pipeline_type: RGBD
+      i_nn_type: none
+      i_enable_ir: false
+      i_usb_speed: SUPER_PLUS
+
+    pipeline_gen:
+      i_enable_imu: false
+      i_enable_sync: false
+
+    left:
+      i_publish_topic: true
+      i_publish_compressed: false
+      i_enable_nn: false
+      i_fps: 15.0
+      i_resolution: "480p"
+
+    right:
+      i_publish_topic: true
+      i_publish_compressed: false
+      i_enable_nn: false
+      i_fps: 15.0
+      i_resolution: "480p"
+
+    rgb:
+      i_publish_topic: true
+      i_publish_compressed: false
+      i_enable_nn: false
+      i_fps: 15.0
+      i_resolution: "1080p"
+      i_set_isp_scale: true
+      i_isp_scale_num: 1
+      i_isp_scale_den: 3
+      i_disable_node: false

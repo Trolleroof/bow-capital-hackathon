@@ -423,7 +423,13 @@ def _start_sim(env_id: str, policy: str, camera_mode: str, selected_drone: int) 
     with _LOCK:
         existing = _SIM_JOB
         if existing and existing.get("proc") and existing["proc"].poll() is None:
-            if existing.get("env_id") == env_id and existing.get("policy") == policy:
+            same_renderer = (
+                existing.get("env_id") == env_id
+                and existing.get("policy") == policy
+                and existing.get("camera_mode") == camera_mode
+                and int(existing.get("selected_drone", 0)) == int(selected_drone)
+            )
+            if same_renderer:
                 return {
                     "ok": True,
                     "env_id": env_id,

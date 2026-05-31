@@ -65,6 +65,15 @@ export const SCENARIO_OBSTACLES: Record<string, Obstacle[]> = {
     box(0.0, -4.6, 2.0, 0.6, 0.5, 0.5),
   ],
   'swarm-vs-swarm-race': [],
+  'navigate-to-target': [
+    box(-4.0, 2.5, 0.5, 1.2, 0.6, 1.2),
+    box(-4.0, -2.5, 0.5, 1.2, 0.6, 1.2),
+    cyl(-1.5, 1.8, 0.7, 0.75, 1.5),
+    cyl(-1.5, -1.8, 0.7, 0.75, 1.5),
+    box(1.5, 3.2, 0.5, 1.0, 0.5, 1.0),
+    box(1.5, -3.2, 0.5, 1.0, 0.5, 1.0),
+    cyl(4.2, 0.0, 0.8, 0.9, 1.8),
+  ],
 }
 
 export function obstaclesFor(scenarioId: string | null | undefined): Obstacle[] {

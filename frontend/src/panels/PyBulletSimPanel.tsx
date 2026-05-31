@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getScenarioById } from '../gym/scenarios'
 import { PYBULLET_WS_URL, startPyBulletSim } from '../gym/trainApi'
 
 interface AgentPose {
@@ -140,7 +141,7 @@ export default function PyBulletSimPanel({
     [agents],
   )
 
-  const switchCamera = async (nextMode: CameraMode, nextDrone = selectedDrone) => {
+  const switchCamera = useCallback(async (nextMode: CameraMode, nextDrone = selectedDrone) => {
     setSwitchingCamera(true)
     setCameraMode(nextMode)
     setSelectedDrone(nextDrone)
@@ -150,7 +151,37 @@ export default function PyBulletSimPanel({
     } finally {
       setSwitchingCamera(false)
     }
-  }
+  }, [envId, selectedDrone])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return
+      const key = event.key.toLowerCase()
+      if (key === 'c') {
+        const modes: CameraMode[] = ['observer', 'chase', 'fpv']
+        const nextMode = modes[(modes.indexOf(cameraMode) + 1) % modes.length]
+        void switchCamera(nextMode)
+      }
+      if (key === 'b') void switchCamera('observer')
+      if (key === 'h') void switchCamera('chase')
+      if (key === 'f') void switchCamera('fpv')
+      const digit = Number(key)
+      if (Number.isInteger(digit) && digit >= 1 && digit <= 9) {
+        void switchCamera(cameraMode === 'observer' ? 'chase' : cameraMode, digit - 1)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [cameraMode, selectedDrone, switchCamera])
+
+  const scenario = getScenarioById(envId)
+  const selectedAgent = agents.find((agent) => agent.id === selectedDrone)
+  const speed = selectedAgent
+    ? Math.hypot(Math.cos(selectedAgent.yaw), Math.sin(selectedAgent.yaw)) * 4.2
+    : 0
+  const modeLabel = cameraMode === 'fpv' ? 'FPV' : cameraMode.toUpperCase()
+  const visibleAgents = agents.length ? agents : [{ id: 0, alive: true } as AgentPose]
 
   return (
     <section className="pybullet-sim" aria-label={`${missionName} PyBullet simulation`}>
@@ -176,14 +207,17 @@ export default function PyBulletSimPanel({
         )}
       </div>
 
-      <div className="pybullet-hud pybullet-hud--left">
-        <span className="pybullet-hud__kicker">Environment</span>
-        <strong>{missionName}</strong>
-        <div className="pybullet-stat-grid">
+      <div className="pybullet-video-treatment" aria-hidden="true" />
+
+      <div className="pybullet-topline">
+        <div className="pybullet-title-stack">
+          <span>{scenario.label}</span>
+          <strong>{scenario.name}</strong>
+        </div>
+        <div className="pybullet-live-cluster" aria-label="Live simulation status">
           <span data-state={connection}>WS {connection}</span>
-          <span>Policy {policy}</span>
-          <span>Alive {alive || agents.length}</span>
-          <span>Frame {frameTime.toFixed(1)}s</span>
+          <span>{modeLabel}</span>
+          <span>{frameTime.toFixed(1)}s</span>
         </div>
       </div>
 
@@ -196,32 +230,46 @@ export default function PyBulletSimPanel({
             disabled={switchingCamera}
             onClick={() => void switchCamera(mode)}
           >
-            {mode === 'fpv' ? 'FPV' : mode}
+            {mode === 'fpv' ? 'FPV' : mode.toUpperCase()}
           </button>
         ))}
-        <select
-          aria-label="Selected drone camera"
-          value={selectedDrone}
-          disabled={switchingCamera || agents.length === 0}
-          onChange={(event) => {
-            const nextDrone = Number(event.target.value)
-            void switchCamera(cameraMode === 'observer' ? 'chase' : cameraMode, nextDrone)
-          }}
-        >
-          {(agents.length ? agents : [{ id: 0 } as AgentPose]).map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              UAV {agent.id + 1}
-            </option>
-          ))}
-        </select>
       </div>
 
-      <div className="pybullet-hud pybullet-hud--right">
-        <span className="pybullet-hud__kicker">Coordination</span>
-        <div className="pybullet-map" aria-hidden="true">
+      <div className="pybullet-feed-rail" aria-label="Drone feeds">
+        {visibleAgents.map((agent) => (
+          <button
+            key={agent.id}
+            type="button"
+            className={selectedDrone === agent.id ? 'is-active' : ''}
+            disabled={switchingCamera}
+            onClick={() => void switchCamera(cameraMode === 'observer' ? 'chase' : cameraMode, agent.id)}
+          >
+            <span>UAV-{String(agent.id + 1).padStart(2, '0')}</span>
+            <i data-alive={agent.alive} />
+          </button>
+        ))}
+      </div>
+
+      <div className="pybullet-sidecar" aria-label="Mission telemetry">
+        <div className="pybullet-stat-grid">
+          <span>Policy {policy}</span>
+          <span>Alive {alive || agents.length}</span>
+          <span>Coverage {(coverage * 100).toFixed(0)}%</span>
+          <span>Frame {frameTime.toFixed(1)}s</span>
+        </div>
+
+        <div className="pybullet-asset-strip" aria-label="Rendered scene assets">
+          <span>Terrain</span>
+          <span>Troops</span>
+          <span>Sandbags</span>
+          <span>Drone mesh</span>
+        </div>
+
+        <div className="pybullet-map" aria-label="Coordination map">
           {agents.map((agent) => (
             <i
               key={agent.id}
+              data-alive={agent.alive}
               style={{
                 left: `${Math.min(100, Math.max(0, (agent.x + 10) * 5))}%`,
                 top: `${Math.min(100, Math.max(0, 100 - (agent.y + 10) * 5))}%`,
@@ -229,9 +277,28 @@ export default function PyBulletSimPanel({
             />
           ))}
         </div>
-        <span className="pybullet-coverage">
-          Coverage {(coverage * 100).toFixed(0)}%
-        </span>
+      </div>
+
+      <div className={`pybullet-fpv-overlay ${cameraMode === 'fpv' ? 'is-active' : ''}`} aria-hidden="true">
+        <div className="pybullet-reticle">
+          <i />
+          <i />
+          <i />
+          <i />
+        </div>
+        <div className="pybullet-tape pybullet-tape--left">
+          <span>ALT</span>
+          <strong>{selectedAgent ? selectedAgent.z.toFixed(1) : '0.0'}</strong>
+        </div>
+        <div className="pybullet-tape pybullet-tape--right">
+          <span>SPD</span>
+          <strong>{speed.toFixed(1)}</strong>
+        </div>
+        <div className="pybullet-fpv-footer">
+          <span>FEED UAV-{String(selectedDrone + 1).padStart(2, '0')}</span>
+          <span>YAW {selectedAgent ? Math.round(selectedAgent.yaw * (180 / Math.PI)) : 0} DEG</span>
+          <span>MAPPO ACTIVE</span>
+        </div>
       </div>
     </section>
   )

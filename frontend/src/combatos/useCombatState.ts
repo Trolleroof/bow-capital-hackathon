@@ -146,6 +146,13 @@ export function useCombatState() {
     })
   }, [])
 
+  useEffect(() => {
+    const id = setInterval(() => {
+      setT(p => ({ ...p, sec: p.sec + 1 }))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
+
   // orchestrator WebSocket — real data when available
   useEffect(() => {
     let ws: WebSocket | null = null

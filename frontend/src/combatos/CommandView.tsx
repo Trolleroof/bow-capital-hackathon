@@ -20,6 +20,8 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
   const tracked = t.dets.filter(d => d.st !== 'LOST').length
   const liveFeed = t.cameraFrame
   const annotatedFeed = t.slamFrame
+  const slamLabel = t.slamStatus !== '--' ? t.slamStatus : t.tracking
+  const slamOk = slamLabel === 'OK' || slamLabel === 'LOCALIZED'
 
   return (
     <div className="cmd">
@@ -38,22 +40,19 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           ))}
         </nav>
         <div className="hero-status">
-          <div className={'pill pill--deny'}>
-            <i /><span>GPS</span><b>DENIED</b>
+          <div className={`pill ${t.wsConnected ? 'pill--ok' : 'pill--alert'}`}>
+            <i /><span>ORCH</span><b>{t.wsConnected ? 'UP' : 'DOWN'}</b>
           </div>
-          <div className={'pill pill--deny'}>
-            <i /><span>LINK</span><b>NONE</b>
+          <div className={`pill ${slamOk ? 'pill--ok' : 'pill--alert'}`}>
+            <i /><span>SLAM</span><b>{slamLabel}</b>
           </div>
-          <div className={`pill ${t.tracking === 'OK' ? 'pill--ok' : 'pill--alert'}`}>
-            <i /><span>STATE</span><b>{t.tracking === 'OK' ? 'LOCALIZED' : t.tracking}</b>
-          </div>
-          {t.wsConnected && (
+          {tracked > 0 && (
             <div className="pill pill--ok">
-              <i /><b>LIVE</b>
+              <i /><span>TARGETS</span><b>{tracked}</b>
             </div>
           )}
           <div className="clk">
-            <span className="ck">MISSION</span>
+            <span className="ck">UPTIME</span>
             <span className="cv">{clock}</span>
           </div>
         </div>
@@ -128,7 +127,9 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           </div>
 
           <div className="rail-foot">
-            <span className="rf-dot" /> ALL SUBSYSTEMS NOMINAL
+            <span className="rf-dot" />
+            {t.wsConnected ? 'Orchestrator connected' : 'Orchestrator offline'}
+            {liveFeed ? ` · camera #${liveFeed.seq}` : ' · no camera feed'}
           </div>
         </div>
 
@@ -140,7 +141,11 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
             <TrajPlot points={t.traj} w={420} h={620} />
             <div className="corner tl" /><div className="corner tr" />
             <div className="corner bl" /><div className="corner br" />
-            <div className="fig-val">● LIVE · NO GPS FIX</div>
+            <div className="fig-val">
+              {t.wsConnected
+                ? `● ${slamLabel} · ${t.loops} loop closures`
+                : '● waiting for pose stream'}
+            </div>
             <div className="fig-cap">TRAJECTORY · TOP-DOWN · {t.loops} LOOP CLOSURES</div>
             <div className="fig-legend">
               <span><i className="lg" />FLOWN PATH</span>

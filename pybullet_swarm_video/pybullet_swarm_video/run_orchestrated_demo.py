@@ -66,7 +66,8 @@ async def main_async() -> None:
 
     total_frames = max(1, int(sim_cfg.duration_sec * rec_cfg.fps))
     frame_dt = 1.0 / rec_cfg.fps
-    steps_per_frame = max(1, round(frame_dt / sim_cfg.time_step))
+    next_capture_time = 0.0
+    captured_frames = 0
 
     perception_node = GroundTruthPerceptionNode(orch_cfg)
     if args.spawn_ground_truth_perception:
@@ -80,18 +81,19 @@ async def main_async() -> None:
                 with TiledVideoRecorder(rec_cfg.output_path, rec_cfg.fps) as recorder:
                     with MultiVideoRecorder(rec_cfg.per_drone_dir, rec_cfg.fps) as per_drone:
                         try:
-                            for seq in range(total_frames):
-                                for _ in range(steps_per_frame):
-                                    sim.step()
+                            while captured_frames < total_frames:
+                                sim.step()
+                                if sim.sim_time + sim_cfg.time_step * 0.5 < next_capture_time:
+                                    continue
 
                                 raw_frames = sim.render_all_drone_cameras()
                                 for drone_id, raw_frame in enumerate(raw_frames):
-                                    frame_id = make_frame_id(drone_id, seq)
+                                    frame_id = make_frame_id(drone_id, captured_frames)
                                     camera = sim.camera_pose(drone_id)
                                     source = f"drone:{drone_id}"
                                     frame_payload = {
                                         "t": round(sim.sim_time, 3),
-                                        "seq": seq,
+                                        "seq": captured_frames,
                                         "frame_id": frame_id,
                                         "drone_id": drone_id,
                                         "source": source,
@@ -110,7 +112,7 @@ async def main_async() -> None:
                                         orch_cfg.state_topic,
                                         {
                                             "t": round(sim.sim_time, 3),
-                                            "seq": seq,
+                                            "seq": captured_frames,
                                             "frame_id": frame_id,
                                             "drone_id": drone_id,
                                             "source": source,
@@ -126,7 +128,7 @@ async def main_async() -> None:
 
                                 hud_frames = await _collect_hud_frames(
                                     bus,
-                                    seq=seq,
+                                    seq=captured_frames,
                                     num_drones=sim_cfg.num_drones,
                                     timeout=max(0.35, frame_dt * 2.5),
                                 )
@@ -143,8 +145,10 @@ async def main_async() -> None:
                                         background_rgb=rec_cfg.background_rgb,
                                     )
                                 )
-                                if seq % max(1, rec_cfg.fps) == 0:
-                                    print(f"frame {seq + 1}/{total_frames}")
+                                captured_frames += 1
+                                next_capture_time += frame_dt
+                                if captured_frames % max(1, rec_cfg.fps) == 0:
+                                    print(f"frame {captured_frames}/{total_frames}")
                         except SimulationDisconnectedError:
                             print("[sim] PyBullet connection closed; ending run cleanly")
         finally:

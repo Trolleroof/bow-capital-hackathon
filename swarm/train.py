@@ -323,6 +323,30 @@ def main():
     best_eval: EvalResult | None = None
     best_global_step = 0
     best_train_stats: dict[str, float] = {}
+    if (
+        args.env_id == "hunt-and-seek"
+        and args.hunt_stage == "standard"
+        and args.pursuit_assist == 0.0
+        and os.path.exists(paths["policy"])
+    ):
+        incumbent = torch.load(paths["policy"], map_location="cpu", weights_only=False)
+        if incumbent.get("params_hash") == params_hash:
+            metrics = dict(incumbent.get("task_metrics") or {})
+            primary_metric = str(incumbent.get("primary_metric", env.task_profile.primary_metric))
+            primary_value = float(incumbent.get("primary_value", metrics.get(primary_metric, 0.0)))
+            best_eval = EvalResult(
+                primary_metric=primary_metric,
+                primary_value=primary_value,
+                task_score=float(incumbent.get("task_score", metrics.get("task_score", 0.0))),
+                coverage=float(incumbent.get("coverage", metrics.get("coverage", 0.0))),
+                metrics=metrics,
+            )
+            best_global_step = int(incumbent.get("global_step", 0))
+            print(
+                f"[checkpoint] preserving incumbent standard hunt policy "
+                f"{primary_metric}={primary_value:.3f}; new evals must beat it",
+                flush=True,
+            )
     t0 = time.time()
 
     for update in range(1, n_updates + 1):

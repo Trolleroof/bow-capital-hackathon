@@ -94,11 +94,11 @@ PROFILES: dict[str, TaskProfile] = {
     ),
     "hunt-and-seek": TaskProfile(
         env_id="hunt-and-seek",
-        primary_metric="captures",
+        primary_metric="safe_captures",
         primary_mode="max",
         coverage_weight=0.0,  # 3D hunt env owns its own search/coverage shaping
         phase_names=("search", "pursue", "capture"),
-        metric_label="Captures",
+        metric_label="Safe captures",
         reward_weights={},  # reward shaping lives in swarm/hunt_env.py
     ),
     "navigate-to-target": TaskProfile(

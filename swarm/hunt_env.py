@@ -63,6 +63,7 @@ TARGET_SPEED_FRAC = 0.38  # target is deliberately SLOWER than the drones (~2.6x
 TARGET_SPEED = MAX_SPEED * TARGET_SPEED_FRAC
 
 AGENT_RADIUS = 0.4       # body half-extent used for collision push-out
+OBSTACLE_CLEARANCE = 0.35
 SENSOR_RANGE = 7.0       # a drone detects the target within this range + LOS
 CAPTURE_RADIUS = 2.3     # a drone "on" the target within this range
 CAPTURE_MIN_DRONES = 1   # one drone reaching the target counts as a catch
@@ -76,7 +77,7 @@ CAPTURE_REWARD = 25.0     # big team payoff for boxing the target in
 LOST_CONTACT_PENALTY = 0.5
 CROWD_PENALTY = 0.04
 CROWD_RADIUS = 1.4
-COLLISION_PENALTY = 0.5
+COLLISION_PENALTY = 5.0
 BOUNDS_PENALTY = 0.4      # smooth penalty for pushing past the soft boundary
 EDGE_SOFT_FRAC = 0.85
 SEARCH_REWARD = 0.15      # light pre-contact coverage shaping so they spread to search
@@ -110,7 +111,7 @@ HUNT_STAGE_CONFIGS: dict[str, HuntStageConfig] = {
         target_speed_frac=0.22,
         flee_radius=4.2,
         sensor_range=8.5,
-        capture_radius=2.9,
+        capture_radius=2.0,
         target_x=(-0.20, 0.35),
         target_y=(-0.45, 0.45),
         target_z=(Z_MIN + 0.3, Z_MAX - 1.2),
@@ -128,7 +129,7 @@ HUNT_STAGE_CONFIGS: dict[str, HuntStageConfig] = {
         target_speed_frac=0.30,
         flee_radius=5.0,
         sensor_range=7.8,
-        capture_radius=2.6,
+        capture_radius=1.7,
         target_x=(0.15, 0.70),
         target_y=(-0.65, 0.65),
         target_z=(Z_MIN + 0.35, Z_MAX - 1.35),
@@ -146,7 +147,7 @@ HUNT_STAGE_CONFIGS: dict[str, HuntStageConfig] = {
         target_speed_frac=TARGET_SPEED_FRAC,
         flee_radius=FLEE_RADIUS,
         sensor_range=SENSOR_RANGE,
-        capture_radius=CAPTURE_RADIUS,
+        capture_radius=1.35,
         target_x=(0.30, 0.80),
         target_y=(-0.70, 0.70),
         target_z=(Z_MIN + 0.4, Z_MAX - 1.5),
@@ -246,6 +247,8 @@ class Hunt3DEnv:
         self.last_seen = np.zeros(3, dtype=np.float32)
         self.last_seen_age = 0           # steps since last seen (capped)
         self.captures = 0
+        self.collision_count = 0
+        self.obstacle_avoidance_count = 0
         self.contact_step: int | None = None
         self._prev_min_dist = 2.0 * self.world_half
 
@@ -290,6 +293,8 @@ class Hunt3DEnv:
         self.last_seen = self.target_pos.copy()
         self.last_seen_age = 0
         self.captures = 0
+        self.collision_count = 0
+        self.obstacle_avoidance_count = 0
         self.contact_step = None
         self._prev_min_dist = self._min_dist_to_target()
         self._mark_covered()
@@ -333,12 +338,18 @@ class Hunt3DEnv:
                 -1.0,
                 1.0,
             ).astype(np.float32)
+        actions, n_avoidance = self._apply_obstacle_clearance(actions)
+        if n_avoidance:
+            self.obstacle_avoidance_count += int(n_avoidance)
         self.vel = actions  # record applied command (used in obs/yaw)
 
         live = self.alive
         start = self.pos.copy()
         self.pos[live] += actions[live] * MAX_SPEED * DT
         self._clip_to_world()
+        n_projected = self._enforce_obstacle_clearance(live, OBSTACLE_CLEARANCE)
+        if n_projected:
+            self.obstacle_avoidance_count += int(n_projected)
         n_collisions = self._resolve_collisions(live, start)
 
         self._update_target()
@@ -409,6 +420,7 @@ class Hunt3DEnv:
             reward -= BOUNDS_PENALTY * float((excess ** 2).sum())
 
         if n_collisions:
+            self.collision_count += int(n_collisions)
             reward -= COLLISION_PENALTY * float(n_collisions)
 
         self._prev_min_dist = cur_min
@@ -423,14 +435,20 @@ class Hunt3DEnv:
             "coverage": self.coverage_fraction(),
             "n_alive": int(self.alive.sum()),
             "n_collisions": int(n_collisions),
+            "collision_count": int(self.collision_count),
+            "obstacle_avoidance_count": int(self.obstacle_avoidance_count),
             "contact": bool(self.contact),
             "captures": int(self.captures),
+            "safe_captures": float(self.captures) - 0.03 * float(self.collision_count),
             "min_dist": float(cur_min),
             "hunt_stage": self.curriculum_stage,
             "pursuit_assist": self.pursuit_assist,
             "task_metrics": {
                 "min_dist": float(cur_min),
                 "captures": float(self.captures),
+                "safe_captures": float(self.captures) - 0.03 * float(self.collision_count),
+                "collision_count": float(self.collision_count),
+                "obstacle_avoidance_count": float(self.obstacle_avoidance_count),
                 "contact": 1.0 if self.contact else 0.0,
                 "capture_pressure": float(
                     np.clip((max(self.stage.capture_radius * 2.5, 1e-6) - cur_min) / max(self.stage.capture_radius * 2.5, 1e-6), 0.0, 1.0)
@@ -491,11 +509,14 @@ class Hunt3DEnv:
             if not self._z_overlaps(point[2], k):
                 continue
             d2 = point[:2] - self._obs_centers[k]
-            reach = float(self._obs_half[k].max()) + 1.6
+            reach = float(self._obs_half[k].max()) + 2.4
             dist = float(np.linalg.norm(d2))
             if dist < reach:
                 away = d2 / (dist + 1e-6)
-                steer[:2] += (reach - dist) / reach * away * 1.5
+                steer[:2] += (reach - dist) / reach * away * 3.0
+                top = float(self._obs_zc[k] + self._obs_zh[k])
+                if point[2] < top + 0.8 and top + 0.9 < Z_MAX:
+                    steer[2] += (reach - dist) / reach * 1.4
         return steer
 
     # ----------------------------------------------------------- observations ---
@@ -622,7 +643,7 @@ class Hunt3DEnv:
                     out[i] = vec / norm
             return out
 
-        radius = max(self.stage.capture_radius * 0.78, 1.25)
+        radius = max(self.stage.capture_radius * 0.45, 0.65)
         for order, i in enumerate(live_ids):
             angle = (2.0 * math.pi * order) / max(1, live_ids.shape[0])
             flank = np.array(
@@ -634,8 +655,8 @@ class Hunt3DEnv:
             desired[1] = float(np.clip(desired[1], -self.world_half, self.world_half))
             desired[2] = float(np.clip(desired[2], Z_MIN + 0.2, Z_MAX - 0.2))
             vec = desired - self.pos[i]
-            vec += 0.20 * (goal - self.pos[i])
-            vec += 0.18 * center_pull[i]
+            vec += 0.55 * (goal - self.pos[i])
+            vec += 0.12 * center_pull[i]
             vec = self._avoid_obstacles(self.pos[i], vec)
             norm = float(np.linalg.norm(vec))
             if norm > 1e-6:
@@ -700,15 +721,61 @@ class Hunt3DEnv:
         return lo <= z <= hi
 
     def _point_inside(self, x: float, y: float, z: float, k: int) -> bool:
+        return self._point_inside_with_margin(x, y, z, k, 0.0)
+
+    def _point_inside_with_margin(self, x: float, y: float, z: float, k: int, margin: float) -> bool:
         if not self._z_overlaps(z, k):
             return False  # flying over (or under) the obstacle — no collision
         cx, cy = float(self._obs_centers[k, 0]), float(self._obs_centers[k, 1])
         if self._obs_is_circle[k]:
-            r = float(self._obs_half[k, 0]) + AGENT_RADIUS
+            r = float(self._obs_half[k, 0]) + AGENT_RADIUS + margin
             return (x - cx) ** 2 + (y - cy) ** 2 < r * r
-        hx = float(self._obs_half[k, 0]) + AGENT_RADIUS
-        hy = float(self._obs_half[k, 1]) + AGENT_RADIUS
+        hx = float(self._obs_half[k, 0]) + AGENT_RADIUS + margin
+        hy = float(self._obs_half[k, 1]) + AGENT_RADIUS + margin
         return abs(x - cx) < hx and abs(y - cy) < hy
+
+    def _apply_obstacle_clearance(self, actions: np.ndarray) -> tuple[np.ndarray, int]:
+        if not self.obstacles:
+            return actions, 0
+        safe = actions.copy()
+        n_adjusted = 0
+        for i in range(self.n):
+            if not self.alive[i]:
+                continue
+            nxt = self.pos[i] + safe[i] * MAX_SPEED * DT
+            nxt[0] = float(np.clip(nxt[0], -self.world_half, self.world_half))
+            nxt[1] = float(np.clip(nxt[1], -self.world_half, self.world_half))
+            nxt[2] = float(np.clip(nxt[2], Z_MIN, Z_MAX))
+            adjusted = False
+            for k in range(len(self.obstacles)):
+                if self._point_inside_with_margin(float(nxt[0]), float(nxt[1]), float(nxt[2]), k, OBSTACLE_CLEARANCE):
+                    nxt[0], nxt[1] = self._push_out_xy_with_margin(
+                        float(nxt[0]), float(nxt[1]), k, OBSTACLE_CLEARANCE
+                    )
+                    adjusted = True
+            if adjusted:
+                safe[i] = np.clip((nxt - self.pos[i]) / (MAX_SPEED * DT), -1.0, 1.0)
+                n_adjusted += 1
+        return safe.astype(np.float32), n_adjusted
+
+    def _enforce_obstacle_clearance(self, live_mask: np.ndarray, margin: float) -> int:
+        n_adjusted = 0
+        for i in range(self.n):
+            if not live_mask[i]:
+                continue
+            x, y, z = float(self.pos[i, 0]), float(self.pos[i, 1]), float(self.pos[i, 2])
+            adjusted = False
+            for k in range(len(self.obstacles)):
+                if self._point_inside_with_margin(x, y, z, k, margin):
+                    x, y = self._push_out_xy_with_margin(x, y, k, margin)
+                    adjusted = True
+            if adjusted:
+                self.pos[i, 0] = x
+                self.pos[i, 1] = y
+                n_adjusted += 1
+        if n_adjusted:
+            self._clip_to_world()
+        return n_adjusted
 
     def _resolve_collisions(self, live_mask: np.ndarray, start_pos: np.ndarray) -> int:
         n_hits = 0
@@ -726,16 +793,19 @@ class Hunt3DEnv:
         return n_hits
 
     def _push_out_xy(self, x: float, y: float, k: int) -> tuple[float, float]:
+        return self._push_out_xy_with_margin(x, y, k, 0.0)
+
+    def _push_out_xy_with_margin(self, x: float, y: float, k: int, margin: float) -> tuple[float, float]:
         cx, cy = float(self._obs_centers[k, 0]), float(self._obs_centers[k, 1])
         if self._obs_is_circle[k]:
-            r = float(self._obs_half[k, 0]) + AGENT_RADIUS + 1e-3
+            r = float(self._obs_half[k, 0]) + AGENT_RADIUS + margin + 1e-3
             dx, dy = x - cx, y - cy
             d = math.hypot(dx, dy)
             if d < 1e-6:
                 dx, dy, d = 1.0, 0.0, 1.0
             return cx + dx / d * r, cy + dy / d * r
-        hx = float(self._obs_half[k, 0]) + AGENT_RADIUS + 1e-3
-        hy = float(self._obs_half[k, 1]) + AGENT_RADIUS + 1e-3
+        hx = float(self._obs_half[k, 0]) + AGENT_RADIUS + margin + 1e-3
+        hy = float(self._obs_half[k, 1]) + AGENT_RADIUS + margin + 1e-3
         dx, dy = x - cx, y - cy
         # push out along the axis of least penetration
         pen_x = hx - abs(dx)
@@ -818,12 +888,25 @@ class Hunt3DEnv:
     def battlefield_hash(self) -> str:
         stage_tag = f"{self.curriculum_stage}-assist{self.pursuit_assist:.2f}"
         if self.battlefield is None:
-            return f"hunt-3d-{stage_tag}"
+            raw = json.dumps(
+                {
+                    "hunt_stage": self.curriculum_stage,
+                    "stage_config": self.stage.__dict__,
+                    "collision_penalty": COLLISION_PENALTY,
+                    "obstacle_clearance": OBSTACLE_CLEARANCE,
+                    "pursuit_assist": round(self.pursuit_assist, 4),
+                },
+                sort_keys=True,
+            )
+            return "hunt-3d-" + hashlib.sha256(raw.encode()).hexdigest()[:12]
         from dataclasses import asdict
         raw = json.dumps(
             {
                 "battlefield": asdict(self.battlefield),
                 "hunt_stage": self.curriculum_stage,
+                "stage_config": asdict(self.stage),
+                "collision_penalty": COLLISION_PENALTY,
+                "obstacle_clearance": OBSTACLE_CLEARANCE,
                 "pursuit_assist": round(self.pursuit_assist, 4),
             },
             sort_keys=True,

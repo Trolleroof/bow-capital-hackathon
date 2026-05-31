@@ -71,6 +71,10 @@ node_modules/
 
 # ── Design handoff zips (large binary, committed src is the canonical form) ───
 *.zip
+!pybullet_swarm_video/resources/*.zip
+
+# ── PyBullet swarm extracted asset cache ──────────────────────────────────────
+pybullet_swarm_video/resources/.cache/
 
 # ── Editor / OS ───────────────────────────────────────────────────────────────
 .DS_Store

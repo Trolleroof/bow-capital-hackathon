@@ -58,15 +58,17 @@ def main() -> None:
 
     total_frames = max(1, int(sim_cfg.duration_sec * rec_cfg.fps))
     frame_dt = 1.0 / rec_cfg.fps
-    steps_per_frame = max(1, round(frame_dt / sim_cfg.time_step))
+    next_capture_time = 0.0
+    captured_frames = 0
 
     with DroneSurveillanceSimulation(sim_cfg, gui=args.gui) as sim:
         with TiledVideoRecorder(rec_cfg.output_path, rec_cfg.fps) as recorder:
             with MultiVideoRecorder(rec_cfg.per_drone_dir, rec_cfg.fps) as per_drone:
                 try:
-                    for frame_idx in range(total_frames):
-                        for _ in range(steps_per_frame):
-                            sim.step()
+                    while captured_frames < total_frames:
+                        sim.step()
+                        if sim.sim_time + sim_cfg.time_step * 0.5 < next_capture_time:
+                            continue
                         frames = sim.render_all_drone_cameras()
                         per_drone.append(frames)
                         tiled = tile_frames(
@@ -76,8 +78,10 @@ def main() -> None:
                             background_rgb=rec_cfg.background_rgb,
                         )
                         recorder.append(tiled)
-                        if frame_idx % max(1, rec_cfg.fps) == 0:
-                            print(f"frame {frame_idx + 1}/{total_frames}")
+                        captured_frames += 1
+                        next_capture_time += frame_dt
+                        if captured_frames % max(1, rec_cfg.fps) == 0:
+                            print(f"frame {captured_frames}/{total_frames}")
                 except SimulationDisconnectedError:
                     print("[sim] PyBullet connection closed; ending run cleanly")
 

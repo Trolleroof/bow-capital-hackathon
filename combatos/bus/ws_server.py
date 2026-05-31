@@ -39,8 +39,6 @@ _TOPIC_MODULE: dict[str, str] = {
     "slam_path": "nav",
     "slam_diagnostics": "nav",
     "detections": "perception",
-    "perception_frame": "perception",
-    "perception_diagnostics": "perception",
     "drone_detections": "perception",
     "drone_fpv_state": "swarm",
     "swarm": "swarm",

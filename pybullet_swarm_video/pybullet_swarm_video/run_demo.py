@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 from .config import DroneCameraConfig, RecordingConfig, SimulationConfig
@@ -21,8 +22,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--time-step", type=float, default=1.0 / 30.0)
     parser.add_argument("--drones", type=int, default=5)
     parser.add_argument("--troops", type=int, default=6)
-    parser.add_argument("--width", type=int, default=320)
-    parser.add_argument("--height", type=int, default=180)
+    parser.add_argument("--width", type=int, default=240)
+    parser.add_argument("--height", type=int, default=135)
     parser.add_argument("--gui", action="store_true")
     parser.add_argument(
         "--per-drone-dir",
@@ -64,10 +65,16 @@ def main() -> None:
     with DroneSurveillanceSimulation(sim_cfg, gui=args.gui) as sim:
         with TiledVideoRecorder(rec_cfg.output_path, rec_cfg.fps) as recorder:
             with MultiVideoRecorder(rec_cfg.per_drone_dir, rec_cfg.fps) as per_drone:
+                step_deadline = time.monotonic()
                 try:
                     while captured_frames < total_frames:
+                        step_deadline += sim_cfg.time_step
                         sim.step()
                         if sim.sim_time + sim_cfg.time_step * 0.5 < next_capture_time:
+                            if args.gui:
+                                remaining = step_deadline - time.monotonic()
+                                if remaining > 0.0:
+                                    time.sleep(remaining)
                             continue
                         frames = sim.render_all_drone_cameras()
                         per_drone.append(frames)
@@ -80,6 +87,10 @@ def main() -> None:
                         recorder.append(tiled)
                         captured_frames += 1
                         next_capture_time += frame_dt
+                        if args.gui:
+                            remaining = step_deadline - time.monotonic()
+                            if remaining > 0.0:
+                                time.sleep(remaining)
                         if captured_frames % max(1, rec_cfg.fps) == 0:
                             print(f"frame {captured_frames}/{total_frames}")
                 except SimulationDisconnectedError:

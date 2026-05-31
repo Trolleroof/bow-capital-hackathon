@@ -15,8 +15,7 @@ log = logging.getLogger(__name__)
 
 
 async def _handler(ws: WebSocketServerProtocol) -> None:
-    q: asyncio.Queue[str] = asyncio.Queue(maxsize=64)
-    image_router.subscribe(q, topics=None)
+    q: asyncio.Queue[str] = asyncio.Queue(maxsize=4)
 
     async def _sender() -> None:
         while True:

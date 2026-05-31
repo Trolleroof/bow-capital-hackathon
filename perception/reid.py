@@ -170,7 +170,11 @@ def _is_diverse(emb: np.ndarray, existing: deque[np.ndarray], threshold: float =
 
 class ReIDGallery:
     def __init__(self) -> None:
-        self._extractor = _build_extractor(config.DEVICE)
+        if config.REID_ENABLED:
+            self._extractor = _build_extractor(config.REID_DEVICE)
+        else:
+            self._extractor = None
+            print("[reid] ReID disabled (REID_ENABLED=0) -- identity not preserved across tracker resets")
 
         # Pre-buffers: track_id → rolling deque of embeddings (unconfirmed targets)
         self._pre: dict[int, deque[np.ndarray]] = {}
@@ -185,12 +189,15 @@ class ReIDGallery:
         # Streak counters for match()
         self._streaks: dict[int, int] = defaultdict(int)
 
-        print("[reid] ReID gallery ready (passive pre-buffering, part-based embedding)")
+        if config.REID_ENABLED:
+            print("[reid] ReID gallery ready (passive pre-buffering, part-based embedding)")
 
     # ------------------------------------------------------------------
     # Per-frame sampling -- call for every tracked object
 
     def sample(self, track_id: int, crop: np.ndarray) -> None:
+        if not config.REID_ENABLED:
+            return
         """
         Rate-limited embedding extraction for any visible track.
         - Confirmed target    → feeds into confirmed gallery
@@ -296,7 +303,7 @@ class ReIDGallery:
         Returns the original confirmed track_id after REID_CONSECUTIVE consecutive
         frames above REID_THRESHOLD, otherwise None.
         """
-        if not self._gallery or self._origin_id is None:
+        if not config.REID_ENABLED or not self._gallery or self._origin_id is None:
             return None
         emb = _embed(self._extractor, crop)
         if emb is None:

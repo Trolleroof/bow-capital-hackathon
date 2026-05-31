@@ -245,7 +245,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
                 className="sw-toggle"
                 onClick={() => setFrameMinimized(v => !v)}
                 aria-expanded={!frameMinimized}
-                aria-label={frameMinimized ? 'Expand Annotated SLAM frame panel' : 'Minimize Annotated SLAM frame panel'}
+                aria-label={frameMinimized ? 'Expand annotated SLAM frame panel' : 'Minimize annotated SLAM frame panel'}
                 title={frameMinimized ? 'Expand' : 'Minimize'}
               >
                 {frameMinimized ? '+' : '-'}
@@ -257,7 +257,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
               {annotatedFeed ? (
                 <LiveFrameCanvas frame={annotatedFeed} className="sw-canvas" fit="contain" />
               ) : (
-                <div className="hatch" data-cap={'WAITING\n/slam/tracked_image'} />
+                <div className="hatch" data-cap={'WAITING\n/slam/tracked_image/compressed'} />
               )}
             </div>
           )}

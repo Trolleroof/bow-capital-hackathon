@@ -35,6 +35,7 @@ class Detector:
             frame,
             conf=config.YOLO_CONF,
             iou=config.YOLO_IOU,
+            imgsz=config.YOLO_IMGSZ,
             verbose=False,
             show=False,
         )[0]

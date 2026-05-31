@@ -241,6 +241,12 @@ export function useCombatState() {
                   queueDepth: msg.queue_depth ?? p.slamDiagnostics.queueDepth,
                 },
               }))
+            } else if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
+              const frame = toFrame(msg)
+              if (frame) setT(p => ({ ...p, cameraFrame: frame }))
+            } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
+              const frame = toFrame(msg)
+              if (frame) setT(p => ({ ...p, slamFrame: frame }))
             }
           } catch {
             // ignore parse errors

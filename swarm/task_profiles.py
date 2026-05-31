@@ -31,12 +31,19 @@ PROFILES: dict[str, TaskProfile] = {
         env_id="drone-vs-drone",
         primary_metric="task_score",
         primary_mode="max",
-        coverage_weight=0.03,
+        # Coverage is a competing objective for a pure combat task (it pays the
+        # agent to patrol instead of chasing hostiles), so zero it out — the only
+        # gradient should be engagement.
+        coverage_weight=0.0,
         phase_names=("engage", "orbit"),
         metric_label="Kill + orbit score",
         reward_weights={
             "approach": 0.18,
             "closing": 0.22,
+            # Potential-based Δdistance-to-nearest-hostile shaping (mirrors the
+            # navigate-to-target progress term): a clean monotone gradient toward
+            # contact. Fixes the flat "kind of near a hostile" plateau.
+            "progress": 0.6,
             "kill": 6.0,
             "orbit": 0.35,
             "pressure": 0.45,
@@ -83,19 +90,6 @@ PROFILES: dict[str, TaskProfile] = {
             "ring": 0.45,
             "sector": 0.2,
             "breach": 4.0,
-        },
-    ),
-    "swarm-vs-swarm-race": TaskProfile(
-        env_id="swarm-vs-swarm-race",
-        primary_metric="contested_margin",
-        primary_mode="max",
-        coverage_weight=0.2,
-        phase_names=("contest",),
-        metric_label="Contested margin",
-        reward_weights={
-            "claim": 1.0,
-            "margin": 0.45,
-            "rival": 0.25,
         },
     ),
     "navigate-to-target": TaskProfile(

@@ -38,7 +38,7 @@ At the end of this work, each gym environment should train and replay a policy t
 | `moving-target-track` | Drones maintain custody around a moving target with separation and multi-angle coverage instead of maximizing grid coverage. |
 | `search-and-interdict` | Drones search until contact, then switch from coverage to intercept behavior. |
 | `defend-asset` | Drones hold an asset perimeter, intercept inbound hostiles, and avoid breach paths. |
-| `swarm-vs-swarm-race` | Drones prioritize contested cells and rival pressure instead of pure left-to-right coverage. |
+| `navigate-to-target` | A single drone follows the corridor route, avoids obstacle push-out, and reaches the target zone. |
 
 This document is the coding reference. Do not treat it as a loose roadmap: every implementation PR should map to the phases and acceptance criteria below.
 
@@ -479,55 +479,6 @@ Acceptance:
 - Drones move toward inbound hostiles before breach.
 - Breach count trends down during training.
 
-### 2.5 `swarm-vs-swarm-race`
-
-Goal: win contested territory against a rival swarm.
-
-State:
-
-- rival agent positions
-- rival deterministic potential-field behavior
-- contested cells on center/right side
-- first-touch ownership map
-- blue/rival contested score
-
-Task observation block:
-
-| Slot | Feature |
-|---:|---|
-| 0-1 | nearest rival relative `dx`, `dy` |
-| 2-3 | nearest unclaimed contested cell `dx`, `dy` |
-| 4 | blue contested score fraction |
-| 5 | rival contested score fraction |
-| 6 | local cell contested flag |
-| 7 | local cell owned-by-blue flag |
-| 8 | local cell owned-by-rival flag |
-| 9 | own half/right half flag |
-| 10 | rival pressure near agent |
-| 11-15 | reserved zero |
-
-Rewards:
-
-- first-touch contested cell reward
-- territory-control reward
-- penalty when rival claims contested cells
-- separation/collision penalty
-- coverage reward only for relevant half/contested areas
-
-Metrics:
-
-- `blue_contested_score`
-- `rival_contested_score`
-- `contested_margin`
-- `territory_control`
-- `task_score = contested_margin + territory_control`
-
-Acceptance:
-
-- Drones move toward contested cells.
-- Rival pressure changes blue behavior.
-- Mission Sim shows a race/contest rather than simple sweep.
-
 ---
 
 ## Phase 3 — Task evaluation and checkpointing
@@ -673,7 +624,7 @@ Mission Sim should display the task entities the policy sees:
 - `moving-target-track`: moving ground target and custody radius
 - `search-and-interdict`: contact marker / last-seen marker after discovery
 - `defend-asset`: defended asset, breach radius, inbound hostiles
-- `swarm-vs-swarm-race`: rival drones and contested cells
+- `navigate-to-target`: goal zone, corridor obstacles, and reach state
 
 This is necessary for debugging. If the user cannot see the target/entity, policy behavior will look random.
 
@@ -706,7 +657,7 @@ Recommended dashboard labels:
 | `moving-target-track` | Custody % |
 | `search-and-interdict` | Contact/intercept score |
 | `defend-asset` | Asset integrity |
-| `swarm-vs-swarm-race` | Contested margin |
+| `navigate-to-target` | Navigation score |
 
 The chart should not imply coverage is the main success metric for every env.
 
@@ -748,7 +699,7 @@ Repeat for:
 - `moving-target-track`
 - `search-and-interdict`
 - `defend-asset`
-- `swarm-vs-swarm-race`
+- `navigate-to-target`
 
 If time is constrained, prioritize:
 
@@ -756,7 +707,7 @@ If time is constrained, prioritize:
 2. `defend-asset`
 3. `moving-target-track`
 4. `search-and-interdict`
-5. `swarm-vs-swarm-race`
+5. `navigate-to-target`
 
 ---
 
@@ -797,7 +748,7 @@ Use short rollouts first. Do not wait for full training to catch obvious defects
 | `moving-target-track` | Blue drones react to target movement. |
 | `search-and-interdict` | Phase changes from search to contact when target is found. |
 | `defend-asset` | Blue drones react to inbound hostile distance from asset. |
-| `swarm-vs-swarm-race` | Blue drones prioritize contested cells over random coverage. |
+| `navigate-to-target` | The drone moves through the obstacle corridor and reaches the goal zone. |
 
 ---
 

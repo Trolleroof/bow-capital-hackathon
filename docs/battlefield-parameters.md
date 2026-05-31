@@ -113,14 +113,14 @@ Require non-trivial obs/reward redesign. Deferred.
 Which P0 parameters are **active** (non-default) in each scenario's preset. Non-listed
 parameters use garrison defaults.
 
-| Parameter | `drone-vs-drone` | `moving-target-track` | `search-and-interdict` | `defend-asset` | `swarm-vs-swarm-race` |
+| Parameter | `drone-vs-drone` | `moving-target-track` | `search-and-interdict` | `defend-asset` | `navigate-to-target` |
 |---|:---:|:---:|:---:|:---:|:---:|
-| `wind_speed` | 3.0 | 2.0 | 4.0 | 2.0 | 5.0 |
-| `wind_dir_rad` | π/6 | π/3 | π/4 | π/2 | π/4 |
-| `gps_denial_level` | 0.0 | 0.0 | 0.7 | 0.0 | 0.5 |
-| `jam_duty_cycle` | 0.2 | 0.0 | 0.4 | 0.1 | 0.4 |
-| `attrition_inject_rate` | 0.06 | 0.02 | 0.02 | 0.05 | 0.04 |
-| `max_steps` | 320 | 300 | 360 | 280 | 320 |
+| `wind_speed` | 3.0 | 2.0 | 4.0 | 2.0 | 1.0 |
+| `wind_dir_rad` | π/6 | π/3 | π/4 | π/2 | 0 |
+| `gps_denial_level` | 0.0 | 0.0 | 0.7 | 0.0 | 0.0 |
+| `jam_duty_cycle` | 0.2 | 0.0 | 0.4 | 0.1 | 0.0 |
+| `attrition_inject_rate` | 0.0 | 0.02 | 0.02 | 0.05 | 0.0 |
+| `max_steps` | 320 | 300 | 360 | 280 | 300 |
 
 ---
 

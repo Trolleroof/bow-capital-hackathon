@@ -61,15 +61,6 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
         action="Continuous 2D velocity command around a fixed defended asset.",
         reward="Reward keeping hostiles outside the ring and intercepting early.",
     ),
-    "swarm-vs-swarm-race": ScenarioDefinition(
-        id="swarm-vs-swarm-race",
-        name="Swarm vs Swarm Coverage Race",
-        summary="Competitive coverage under jamming where first-touch scoring matters.",
-        env_kwargs={"n_agents": 6, "grid": 26, "max_steps": 320},
-        observation="Coverage patch, nearest rival offset, nearest contested cell, ownership flags, and rival pressure.",
-        action="Continuous 2D velocity command using the same point-mass dynamics.",
-        reward="Reward first-touch coverage and zone control; penalize collisions.",
-    ),
     "navigate-to-target": ScenarioDefinition(
         id="navigate-to-target",
         name="Navigate to Target",

@@ -318,21 +318,6 @@ def _build_world(p, env_id: str) -> list[dict]:
 
             scripted.append({"body": body, "fn": fn})
 
-    elif env_id == "swarm-vs-swarm-race":
-        # blue vs red territories with score gates; RED rival swarm sweeps the right
-        for x in (-6.0, -2.0, 2.0, 6.0):
-            _box(p, [1.25, 0.25, 0.018], [x, 0, 0.03], [0.13, 0.38, 0.26, 1])
-        _box(p, [0.04, 9.5, 0.02], [0, 0, 0.04], [0.45, 0.45, 0.5, 1])
-        for i in range(3):
-            body = _drone_body(p, [5.0, 0, 1.0], RED)
-
-            def fn(t, i=i):
-                ang = -t * 0.45 + i * 2.1
-                x, y = _orbit(5.0, 0.0, 2.0 + i * 1.4, ang, 0.9)
-                return [x, y, 1.0 + 0.12 * math.sin(t + i)], ang + math.pi / 2
-
-            scripted.append({"body": body, "fn": fn})
-
     elif env_id == "navigate-to-target":
         # Static goal beacon at the far end of the obstacle corridor.
         # SwarmEnv places it at [0.85 * world_half, 0.0] = [8.5, 0.0].

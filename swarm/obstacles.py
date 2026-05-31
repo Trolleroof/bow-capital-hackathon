@@ -76,10 +76,6 @@ SCENARIO_OBSTACLES: dict[str, list[Obstacle]] = {
         _box(0.0,  4.6, 2.0, 0.6, h=0.5, z=0.5),  # hardpoint north
         _box(0.0, -4.6, 2.0, 0.6, h=0.5, z=0.5),  # hardpoint south
     ],
-    "swarm-vs-swarm-race": [
-        # No collidable scenery — the center divider is 4 cm thick and the score
-        # gates are 1.8 cm tall; both are visual only.
-    ],
     "navigate-to-target": [
         # Corridor obstacles the single drone must weave through left→right.
         _box(-4.0,  2.5, 0.5, 1.2, h=1.2, z=0.6),   # obstacle row 1 top

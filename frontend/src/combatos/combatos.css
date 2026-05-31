@@ -571,17 +571,30 @@
   right: 22px;
   bottom: 42px;
   z-index: 6;
-  display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(320px, 1fr);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
   pointer-events: none;
 }
 .slam-window {
   min-width: 0;
+  pointer-events: auto;
   border: 1px solid rgba(63,163,230,.28);
   background: rgba(7, 12, 19, .84);
   box-shadow: 0 14px 38px rgba(0,0,0,.36);
   backdrop-filter: blur(12px);
+}
+.slam-window--frame {
+  flex: 0 1 360px;
+}
+.slam-window--diag {
+  flex: 1 1 420px;
+}
+.slam-window--collapsed {
+  flex: 0 0 auto;
+  min-width: 220px;
 }
 .sw-head {
   display: flex;
@@ -596,10 +609,35 @@
   letter-spacing: .16em;
   color: var(--ink-dim);
 }
+.sw-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .sw-head em {
   font-style: normal;
   color: var(--green);
   white-space: nowrap;
+}
+.sw-toggle {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(63,163,230,.34);
+  background: rgba(10, 19, 31, .9);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.sw-toggle:hover {
+  border-color: rgba(117, 205, 255, .56);
+  color: #fff;
+}
+.sw-toggle:focus-visible {
+  outline: 1px solid rgba(117, 205, 255, .8);
+  outline-offset: 1px;
 }
 .sw-frame {
   position: relative;
@@ -701,58 +739,14 @@
 }
 .cos-layer--optic.is-show .boot-sweep { animation: sweep .7s ease-out .04s 1; }
 
-.optic .fcrn { position: absolute; width: 46px; height: 46px; border: 2px solid var(--amber); opacity: .85; }
+.optic .fcrn { position: absolute; width: 46px; height: 46px; border: 3px solid var(--amber); opacity: .85; }
 .optic .fcrn.tl { top: 22px; left: 22px; border-right: 0; border-bottom: 0; }
 .optic .fcrn.tr { top: 22px; right: 22px; border-left: 0; border-bottom: 0; }
 .optic .fcrn.bl { bottom: 22px; left: 22px; border-right: 0; border-top: 0; }
 .optic .fcrn.br { bottom: 22px; right: 22px; border-left: 0; border-top: 0; }
 
-.optic .top-status {
-  position: absolute;
-  top: 30px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 26px;
-  align-items: center;
-  font-size: 12px;
-  letter-spacing: .2em;
-}
-.optic .top-status .s .k { color: var(--ink-dim); }
-.optic .top-status .s b { color: var(--green); }
-.optic .top-status .s.deny b { color: var(--amber); }
-.optic .top-status .sep { color: #27415c; }
-
-.optic .heading {
-  position: absolute;
-  top: 66px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 580px;
-  height: 22px;
-  border: 1px solid rgba(55,184,164,.32);
-  display: flex;
-  overflow: hidden;
-}
-.optic .heading .htk {
-  flex: 1;
-  text-align: center;
-  font-size: 9px;
-  color: var(--green);
-  border-right: 1px solid rgba(55,184,164,.14);
-  padding-top: 5px;
-}
-.optic .heading .hctr {
-  position: absolute;
-  left: 50%; top: -6px;
-  transform: translateX(-50%);
-  color: var(--amber);
-  font-size: 11px;
-}
-
 .optic .tape { position: absolute; top: 50%; transform: translateY(-50%); width: 106px; }
 .optic .tape.l { left: 46px; }
-.optic .tape.r { right: 46px; }
 .optic .tape .tl { font-size: 8.5px; letter-spacing: .2em; color: var(--green-dim); margin-bottom: 9px; }
 .optic .tape .tr {
   display: flex;
@@ -763,44 +757,6 @@
   color: var(--green);
 }
 .optic .tape .tr b { color: #d6f3ff; }
-
-.optic .cread {
-  position: absolute;
-  font-size: 10px;
-  letter-spacing: .08em;
-  color: var(--green);
-  line-height: 1.85;
-  white-space: nowrap;
-}
-.optic .cread .ct { color: var(--green-dim); letter-spacing: .18em; margin-bottom: 5px; white-space: nowrap; }
-.optic .cread b { color: #d6f3ff; }
-.optic .cread.bl { left: 84px; bottom: 96px; }
-.optic .cread.br { right: 84px; bottom: 96px; text-align: right; }
-
-.optic .bottom-strip {
-  position: absolute;
-  left: 50%;
-  bottom: 40px;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 11px;
-}
-.optic .ribbon {
-  width: 380px;
-  height: 38px;
-  border: 1px solid rgba(63,163,230,.3);
-  position: relative;
-  overflow: hidden;
-}
-.optic .ribbon .rl {
-  position: absolute;
-  left: 8px; top: 5px;
-  font-size: 8px;
-  letter-spacing: .16em;
-  color: var(--amber-dim);
-}
 
 .optic .exit-btn {
   position: absolute;
@@ -819,17 +775,6 @@
 }
 .optic .exit-btn:hover { border-color: var(--amber-dim); color: var(--amber); }
 
-.optic .opt-id {
-  position: absolute;
-  top: 26px; right: 30px;
-  font-size: 9px;
-  letter-spacing: .18em;
-  color: var(--ink-mute);
-  text-align: right;
-  line-height: 1.7;
-}
-.optic .opt-id b { color: var(--green); }
-
 /* reticle */
 .optic .recticle-wrap {
   position: absolute;
@@ -841,7 +786,7 @@
 .optic .rt-corner {
   position: absolute;
   width: 28px; height: 28px;
-  border: 2px solid var(--amber);
+  border: 3px solid var(--amber);
   transition: all .3s;
 }
 .optic .rt-corner.tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
@@ -863,14 +808,6 @@
   background-image: repeating-linear-gradient(45deg, currentColor 0 1px, transparent 1px 10px);
   opacity: .16;
 }
-.optic .rt-fill::after {
-  content: "SUBJECT";
-  position: absolute;
-  left: 6px; bottom: 5px;
-  font-size: 7px;
-  letter-spacing: .2em;
-  color: var(--amber-dim);
-}
 .optic.is-locked .rt-fill { opacity: .7; }
 .optic .cross {
   position: absolute;
@@ -884,8 +821,8 @@
   position: absolute;
   background: var(--amber);
 }
-.optic .cross::before { left: 50%; top: 0; bottom: 0; width: 1.5px; transform: translateX(-50%); }
-.optic .cross::after { top: 50%; left: 0; right: 0; height: 1.5px; transform: translateY(-50%); }
+.optic .cross::before { left: 50%; top: 0; bottom: 0; width: 2.5px; transform: translateX(-50%); }
+.optic .cross::after { top: 50%; left: 0; right: 0; height: 2.5px; transform: translateY(-50%); }
 .optic.is-locked .cross::before, .optic.is-locked .cross::after { background: var(--green); }
 .optic .rt-tag {
   position: absolute;
@@ -907,7 +844,7 @@
 .optic .rt-scan {
   position: absolute;
   left: 0; right: 0;
-  height: 1px;
+  height: 2px;
   background: rgba(63,163,230,.5);
   top: 0;
   animation: rtscan 2.4s linear infinite;

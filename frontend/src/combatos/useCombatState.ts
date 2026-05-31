@@ -1,6 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 
-const ORCH_WS = 'ws://localhost:8000'
+const ORCH_WS = import.meta.env.VITE_COMBATOS_WS_URL ?? 'ws://localhost:8000'
+const IMAGE_WS = import.meta.env.VITE_COMBATOS_IMAGE_WS_URL ?? 'ws://localhost:8001'
+const CONTROL_TOPICS = [
+  'pose',
+  'detections',
+  'recon',
+  'slam_status',
+  'slam_diagnostics',
+] as const
+const IMAGE_TOPICS = [
+  'camera_frame',
+  'fpv_raw',
+  'slam_frame',
+  'fpv_hud',
+] as const
 
 export interface SlamFrame {
   seq: number
@@ -62,51 +76,39 @@ export interface TelemetryState {
   slamDiagnostics: SlamDiagnostics
 }
 
-function j(v: number, a: number) { return +(v + (Math.random() - 0.5) * a) }
-
-function makeTraj(n = 24) {
-  const pts: Array<{ x: number; y: number }> = []
-  let x = 0, y = 0
-  for (let i = 0; i < n; i++) {
-    x += 5 + Math.random() * 2.5
-    y += Math.sin(i * 0.55) * 3.4 + (Math.random() - 0.42) * 4.5
-    pts.push({ x, y })
+function base64ToBlobUrl(data: string, mime = 'image/jpeg') {
+  const binary = atob(data)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
   }
-  return pts
+  return URL.createObjectURL(new Blob([bytes], { type: mime }))
 }
 
 function fmtSec(s: number) {
   return 'T+' + String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0')
 }
 
-const MOCK_DETS: Detection[] = [
-  { id: 'TGT-01', numericId: 1, cls: 'SUBJECT', conf: 0.94, rng: 42.1, brg: 14,  bbox: null, st: 'TRACK',   tone: 'amber', confirmed: false },
-  { id: 'E-2207', numericId: 2, cls: 'PERSON',  conf: 0.71, rng: 58.3, brg: 331, bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'E-2208', numericId: 3, cls: 'PERSON',  conf: 0.66, rng: 61.0, brg: 337, bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'V-0714', numericId: 4, cls: 'VEHICLE', conf: 0.82, rng: 88.4, brg: 48,  bbox: null, st: 'OBSERVE', tone: '',      confirmed: false },
-  { id: 'E-2209', numericId: 5, cls: 'PERSON',  conf: 0.58, rng: 73.9, brg: 9,   bbox: null, st: 'LOST',    tone: 'mute',  confirmed: false },
-]
-
 function initState(): TelemetryState {
   return {
-    sec: 137,
-    pose: { x: 12.84, y: -3.10, z: 1.62 },
-    yaw: 147.3,
-    vel: 2.41,
-    drift: 0.8,
-    slam: 28,
-    yolo: 19,
-    gpu: 81,
-    temp: 64,
-    heading: 150,
-    loops: 14,
-    traj: makeTraj(24),
+    sec: 0,
+    pose: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    vel: 0,
+    drift: 0,
+    slam: 0,
+    yolo: 0,
+    gpu: 0,
+    temp: 0,
+    heading: 0,
+    loops: 0,
+    traj: [],
     dets: [],
-    tracking: 'OK',
+    tracking: '--',
     gps: false,
     recon: { status: 'training', frames: 0 },
     wsConnected: false,
-    slamStatus: 'NO_LOCK',
+    slamStatus: '--',
     cameraFrame: null,
     slamFrame: null,
     slamDiagnostics: {
@@ -126,17 +128,13 @@ function toFrame(msg: Record<string, unknown>): SlamFrame | null {
     width: typeof msg.width === 'number' ? msg.width : 0,
     height: typeof msg.height === 'number' ? msg.height : 0,
     source: typeof msg.source === 'string' ? msg.source : '',
-    data: `data:image/jpeg;base64,${msg.data}`,
+    data: base64ToBlobUrl(msg.data),
   }
 }
 
 export function useCombatState() {
   const [t, setT] = useState<TelemetryState>(initState)
-  const [log, setLog] = useState<LogEntry[]>([
-    { ts: 'T+02:14', src: 'NAV',   tone: '', msg: 'loop closure accepted #14' },
-    { ts: 'T+02:16', src: 'NAV',   tone: '', msg: 'VSLAM tracking nominal' },
-    { ts: 'T+02:17', src: 'RECON', tone: '', msg: 'splat asset cached' },
-  ])
+  const [log, setLog] = useState<LogEntry[]>([])
 
   // ws ref for sending confirm messages
   const wsRef = useRef<WebSocket | null>(null)
@@ -147,59 +145,6 @@ export function useCombatState() {
       return p
     })
   }, [])
-
-  // mock simulation tick
-  useEffect(() => {
-    const id = setInterval(() => {
-      setT(p => {
-        const last = p.traj[p.traj.length - 1]
-        let traj = [
-          ...p.traj,
-          {
-            x: last.x + 5 + Math.random() * 2.5,
-            y: last.y + Math.sin(p.sec * 0.4) * 3 + (Math.random() - 0.42) * 4.5,
-          },
-        ]
-        if (traj.length > 46) traj = traj.slice(traj.length - 46)
-
-        return {
-          ...p,
-          sec: p.sec + 1,
-          pose: {
-            x: j(12.84 + (p.sec * 0.015 % 6), 0.05),
-            y: j(-3.10, 0.05),
-            z: j(1.62, 0.03),
-          },
-          yaw: ((p.yaw + (Math.random() - 0.5) * 1.4) + 360) % 360,
-          vel: Math.max(0.6, j(2.41, 0.16)),
-          drift: Math.min(1.8, Math.max(0.4, j(p.drift, 0.07))),
-          slam: Math.round(j(28, 1.5)),
-          yolo: Math.round(j(19, 1.7)),
-          gpu: Math.round(Math.min(96, Math.max(62, j(81, 3)))),
-          temp: Math.round(j(64, 0.7)),
-          heading: (p.heading + 0.7) % 360,
-          traj,
-          dets: p.dets,
-        }
-      })
-    }, 850)
-    return () => clearInterval(id)
-  }, [])
-
-  // mock log ticker
-  useEffect(() => {
-    const pool: [string, string, string][] = [
-      ['NAV', 'keyframe inserted', ''],
-      ['NAV', 'VSLAM tracking nominal', ''],
-      ['NAV', 'IMU pre-integration ok', ''],
-      ['RECON', 'fly-through armed', ''],
-    ]
-    const id = setInterval(() => {
-      const e = pool[Math.floor(Math.random() * pool.length)]
-      pushLog(e[0], e[1], e[2])
-    }, 4200)
-    return () => clearInterval(id)
-  }, [pushLog])
 
   // orchestrator WebSocket — real data when available
   useEffect(() => {
@@ -212,6 +157,10 @@ export function useCombatState() {
         wsRef.current = ws
 
         ws.onopen = () => {
+          ws?.send(JSON.stringify({
+            type: 'subscribe',
+            topics: CONTROL_TOPICS,
+          }))
           setT(p => ({ ...p, wsConnected: true }))
           pushLog('BUS', 'orchestrator connected', 'amber')
         }
@@ -230,11 +179,13 @@ export function useCombatState() {
           try {
             const msg = JSON.parse(ev.data as string)
             if (msg.topic === 'pose') {
-              const { x, y, z, qw = 1, qz = 0, tracking = 'OK', gps = false } = msg
+              const { x, y, z, qw = 1, qz = 0, tracking, gps = false } = msg
               const yaw = Math.atan2(2 * qw * qz, 1 - 2 * qz * qz) * (180 / Math.PI)
               setT(p => {
                 const last = p.traj[p.traj.length - 1]
-                const newPt = { x: x * 10 + last.x * 0.5, y: z * 10 + last.y * 0.5 }
+                const newPt = last
+                  ? { x: x * 10 + last.x * 0.5, y: z * 10 + last.y * 0.5 }
+                  : { x: x * 10, y: z * 10 }
                 let traj = [...p.traj, newPt]
                 if (traj.length > 46) traj = traj.slice(traj.length - 46)
                 return {
@@ -242,7 +193,7 @@ export function useCombatState() {
                   pose: { x, y, z },
                   yaw: (yaw + 360) % 360,
                   heading: (yaw + 360) % 360,
-                  tracking,
+                  tracking: typeof tracking === 'string' ? tracking : p.tracking,
                   gps,
                   traj,
                 }
@@ -276,8 +227,10 @@ export function useCombatState() {
               }))
               if (msg.status === 'ready') pushLog('RECON', '3DGS splat ready', 'amber')
             } else if (msg.topic === 'slam_status') {
-              const tracking = typeof msg.tracking === 'string' ? msg.tracking : 'NO_LOCK'
-              setT(p => ({ ...p, tracking, slamStatus: tracking }))
+              setT(p => {
+                const tracking = typeof msg.tracking === 'string' ? msg.tracking : p.slamStatus
+                return { ...p, tracking, slamStatus: tracking }
+              })
             } else if (msg.topic === 'slam_diagnostics') {
               setT(p => ({
                 ...p,
@@ -288,12 +241,6 @@ export function useCombatState() {
                   queueDepth: msg.queue_depth ?? p.slamDiagnostics.queueDepth,
                 },
               }))
-            } else if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
-              const frame = toFrame(msg)
-              if (frame) setT(p => ({ ...p, cameraFrame: frame }))
-            } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
-              const frame = toFrame(msg)
-              if (frame) setT(p => ({ ...p, slamFrame: frame }))
             }
           } catch {
             // ignore parse errors
@@ -311,6 +258,78 @@ export function useCombatState() {
       wsRef.current = null
     }
   }, [pushLog])
+
+  useEffect(() => {
+    let ws: WebSocket | null = null
+    let retryTimeout: ReturnType<typeof setTimeout>
+
+    function connect() {
+      try {
+        ws = new WebSocket(IMAGE_WS)
+
+        ws.onopen = () => {
+          ws?.send(JSON.stringify({
+            type: 'subscribe',
+            topics: IMAGE_TOPICS,
+          }))
+        }
+
+        ws.onclose = () => {
+          retryTimeout = setTimeout(connect, 3000)
+        }
+
+        ws.onerror = () => {
+          ws?.close()
+        }
+
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data as string)
+            if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
+              const frame = toFrame(msg)
+              if (frame) {
+                setT((p) => {
+                  if (p.cameraFrame?.data.startsWith('blob:')) {
+                    URL.revokeObjectURL(p.cameraFrame.data)
+                  }
+                  return { ...p, cameraFrame: frame }
+                })
+              }
+            } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
+              const frame = toFrame(msg)
+              if (frame) {
+                setT((p) => {
+                  if (p.slamFrame?.data.startsWith('blob:')) {
+                    URL.revokeObjectURL(p.slamFrame.data)
+                  }
+                  return { ...p, slamFrame: frame }
+                })
+              }
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      } catch {
+        retryTimeout = setTimeout(connect, 3000)
+      }
+    }
+
+    connect()
+    return () => {
+      clearTimeout(retryTimeout)
+      ws?.close()
+      setT((p) => {
+        if (p.cameraFrame?.data.startsWith('blob:')) {
+          URL.revokeObjectURL(p.cameraFrame.data)
+        }
+        if (p.slamFrame?.data.startsWith('blob:')) {
+          URL.revokeObjectURL(p.slamFrame.data)
+        }
+        return p
+      })
+    }
+  }, [])
 
   const _sendCmd = useCallback((payload: object) => {
     const ws = wsRef.current

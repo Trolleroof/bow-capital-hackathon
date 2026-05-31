@@ -53,10 +53,15 @@ interface StatusMessage {
 type BusMessage = PoseMessage | SlamStatusMessage | SlamDiagnosticsMessage | SlamFrameMessage | StatusMessage
 
 const BUS_URL = import.meta.env.VITE_COMBATOS_WS_URL ?? 'ws://localhost:8000'
+const IMAGE_URL = import.meta.env.VITE_COMBATOS_IMAGE_WS_URL ?? 'ws://localhost:8001'
 
-function frameSrc(frame?: SlamFrameMessage | null) {
-  if (!frame?.data) return ''
-  return `data:image/jpeg;base64,${frame.data}`
+function base64ToBlobUrl(data: string, mime = 'image/jpeg') {
+  const binary = atob(data)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return URL.createObjectURL(new Blob([bytes], { type: mime }))
 }
 
 function fmt(value: number | undefined, digits = 2) {
@@ -83,7 +88,7 @@ export default function SlamTestPanel() {
         setConnected(true)
         ws?.send(JSON.stringify({
           type: 'subscribe',
-          topics: ['pose', 'status', 'slam_status', 'slam_diagnostics', 'camera_frame', 'slam_frame'],
+          topics: ['pose', 'status', 'slam_status', 'slam_diagnostics'],
         }))
       }
       ws.onclose = () => {
@@ -98,8 +103,6 @@ export default function SlamTestPanel() {
           else if (msg.topic === 'slam_status') setStatus(msg)
           else if (msg.topic === 'slam_diagnostics') setDiagnostics(msg)
           else if (msg.topic === 'status') setSystemStatus(msg)
-          else if (msg.topic === 'camera_frame') setCameraFrame(msg)
-          else if (msg.topic === 'slam_frame') setSlamFrame(msg)
         } catch {
           // Ignore malformed test frames.
         }
@@ -114,8 +117,69 @@ export default function SlamTestPanel() {
     }
   }, [])
 
-  const cameraSrc = useMemo(() => frameSrc(cameraFrame), [cameraFrame])
-  const slamSrc = useMemo(() => frameSrc(slamFrame), [slamFrame])
+  useEffect(() => {
+    let ws: WebSocket | null = null
+    let retry: ReturnType<typeof setTimeout> | null = null
+    let closed = false
+
+    const connect = () => {
+      ws = new WebSocket(IMAGE_URL)
+      ws.onopen = () => {
+        ws?.send(JSON.stringify({
+          type: 'subscribe',
+          topics: ['camera_frame', 'slam_frame'],
+        }))
+      }
+      ws.onclose = () => {
+        if (!closed) retry = setTimeout(connect, 1000)
+      }
+      ws.onerror = () => ws?.close()
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data) as BusMessage
+          if (msg.topic === 'camera_frame') {
+            setCameraFrame((prev) => {
+              if (prev?.data.startsWith('blob:')) {
+                URL.revokeObjectURL(prev.data)
+              }
+              return { ...msg, data: base64ToBlobUrl(msg.data) }
+            })
+          } else if (msg.topic === 'slam_frame') {
+            setSlamFrame((prev) => {
+              if (prev?.data.startsWith('blob:')) {
+                URL.revokeObjectURL(prev.data)
+              }
+              return { ...msg, data: base64ToBlobUrl(msg.data) }
+            })
+          }
+        } catch {
+          // Ignore malformed test frames.
+        }
+      }
+    }
+
+    connect()
+    return () => {
+      closed = true
+      if (retry) clearTimeout(retry)
+      ws?.close()
+      setCameraFrame((prev) => {
+        if (prev?.data.startsWith('blob:')) {
+          URL.revokeObjectURL(prev.data)
+        }
+        return prev
+      })
+      setSlamFrame((prev) => {
+        if (prev?.data.startsWith('blob:')) {
+          URL.revokeObjectURL(prev.data)
+        }
+        return prev
+      })
+    }
+  }, [])
+
+  const cameraSrc = useMemo(() => cameraFrame?.data ?? '', [cameraFrame])
+  const slamSrc = useMemo(() => slamFrame?.data ?? '', [slamFrame])
   const tracking = status?.tracking ?? pose?.tracking ?? diagnostics?.tracking ?? 'NO_LOCK'
   const navState = systemStatus?.modules?.nav ?? 'down'
 

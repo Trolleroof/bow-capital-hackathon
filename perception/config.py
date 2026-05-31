@@ -72,6 +72,7 @@ WS_HOST  = os.getenv("WS_HOST", "localhost")
 
 # Port the perception node publishes to.
 WS_PORT  = int(os.getenv("WS_PORT", "8765"))
+IMAGE_WS_PORT = int(os.getenv("IMAGE_WS_PORT", "8001"))
 
 # Message topic written into every published payload.
 WS_TOPIC = "detections"
@@ -188,3 +189,9 @@ FPV_QUALITY = int(os.getenv("FPV_QUALITY", "60"))
 
 # Send every Nth processed frame. At 30 fps, 3 → ~10 fps stream.
 FPV_INTERVAL = int(os.getenv("FPV_INTERVAL", "3"))
+
+# Convert FPV stream frames to grayscale before encoding.
+# Reduces transmitted data to ~1 byte/pixel (single-channel) vs 3 bytes/pixel
+# for RGB.  Detection pipeline is unaffected and continues to run on color.
+# Set to "1" to enable.
+GRAYSCALE_STREAM = os.getenv("GRAYSCALE_STREAM", "1") == "1"

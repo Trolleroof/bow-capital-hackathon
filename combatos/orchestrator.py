@@ -1,34 +1,22 @@
-"""CombatOS Orchestrator — single entry point.
+"""CombatOS orchestrator entrypoint.
 
-Starts the WebSocket bus and all module tasks, then runs until SIGINT/SIGTERM.
-
-Usage:
-    cd <repo-root>
-    uv run --project combatos python -m combatos
-      or
-    python -m combatos.orchestrator
-
-Environment overrides (see config.py):
-    COMBATOS_HOST        bind address          (default 0.0.0.0)
-    COMBATOS_PORT        bus port              (default 8000)
-    COMBATOS_ROS_SLAM    desktop ROS2 bridge   (default 0)
-    SWARM_BUS_URL        swarm sub-bus         (default ws://localhost:8765)
-    RECON_ASSET_PATH     splat file path       (default recon/assets/field.splat)
-    COMBATOS_MOCK_POSE   emit mock pose        (default 1)
+Starts the control WebSocket bus, the image WebSocket bus, and all module
+tasks, then runs until SIGINT/SIGTERM.
 """
 from __future__ import annotations
+
 import asyncio
 import logging
 import signal
 
-from .bus import ws_server
+from . import config
+from .bus import image_ws_server, ws_server
 from .modules.nav_module import NavModule
 from .modules.perception_module import PerceptionModule
 from .modules.recon_module import ReconModule
 from .modules.ros_slam_module import RosSlamModule
 from .modules.swarm_module import SwarmModule
 from .state.system_state import run_status_loop
-from . import config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,18 +26,19 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 _BANNER = """
-╔══════════════════════════════════════════════════════════╗
-║           CombatOS Orchestrator                          ║
-║   GPS: DENIED  ·  LINK: NONE  ·  LOCALIZING...          ║
-║                                                          ║
-║   Bus    →  ws://0.0.0.0:{port:<5}                         ║
-║   Swarm  →  {swarm_url:<44}  ║
-╚══════════════════════════════════════════════════════════╝
++--------------------------------------------------------------+
+|                    CombatOS Orchestrator                     |
+|  GPS: DENIED  |  LINK: NONE  |  LOCALIZING...                |
+|                                                              |
+|  Control -> ws://0.0.0.0:{port:<5}                               |
+|  Images  -> ws://0.0.0.0:{image_port:<5}                               |
+|  Swarm   -> {swarm_url:<44} |
++--------------------------------------------------------------+
 """
 
 
 async def _run_module_forever(module) -> None:
-    """Run module.run() in a restart loop — crashes are logged, not fatal."""
+    """Run module.run() in a restart loop; crashes are logged, not fatal."""
     while True:
         try:
             await module.run()
@@ -57,7 +46,7 @@ async def _run_module_forever(module) -> None:
             log.info("[%s] stopped", module.name)
             break
         except Exception as exc:
-            log.error("[%s] crashed: %s — restarting in 3 s", module.name, exc)
+            log.error("[%s] crashed: %s; restarting in 3 s", module.name, exc)
             await asyncio.sleep(3.0)
 
 
@@ -65,6 +54,7 @@ async def main() -> None:
     print(
         _BANNER.format(
             port=config.BUS_PORT,
+            image_port=config.IMAGE_BUS_PORT,
             swarm_url=config.SWARM_BUS_URL,
         )
     )
@@ -76,8 +66,9 @@ async def main() -> None:
         log.info("[swarm] disabled; set COMBATOS_SWARM=1 to enable swarm relay")
 
     tasks = [
-        asyncio.create_task(ws_server.serve(),        name="bus"),
-        asyncio.create_task(run_status_loop(),         name="status"),
+        asyncio.create_task(ws_server.serve(), name="bus"),
+        asyncio.create_task(image_ws_server.serve(), name="image_bus"),
+        asyncio.create_task(run_status_loop(), name="status"),
         *[
             asyncio.create_task(_run_module_forever(m), name=m.name)
             for m in modules
@@ -85,18 +76,22 @@ async def main() -> None:
     ]
 
     def _shutdown() -> None:
-        log.info("shutdown signal received — stopping all tasks")
-        for t in tasks:
-            t.cancel()
+        log.info("shutdown signal received; stopping all tasks")
+        for task in tasks:
+            task.cancel()
 
-    # add_signal_handler is POSIX-only; use a KeyboardInterrupt wrapper on Windows
     import sys
+
     if sys.platform != "win32":
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _shutdown)
 
-    log.info("all systems go — connect dashboard to ws://localhost:%d", config.BUS_PORT)
+    log.info(
+        "all systems go; control ws://localhost:%d image ws://localhost:%d",
+        config.BUS_PORT,
+        config.IMAGE_BUS_PORT,
+    )
 
     try:
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -104,7 +99,7 @@ async def main() -> None:
         _shutdown()
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for name, result in zip([t.get_name() for t in tasks], results):
+    for name, result in zip([task.get_name() for task in tasks], results):
         if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
             log.error("task [%s] exited with error: %s", name, result)
 

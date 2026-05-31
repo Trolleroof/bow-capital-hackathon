@@ -5,6 +5,8 @@ import os
 # ── Bus ──────────────────────────────────────────────────────────────────────
 BUS_HOST = os.getenv("COMBATOS_HOST", "0.0.0.0")
 BUS_PORT = int(os.getenv("COMBATOS_PORT", "8000"))
+IMAGE_BUS_HOST = os.getenv("COMBATOS_IMAGE_HOST", BUS_HOST)
+IMAGE_BUS_PORT = int(os.getenv("COMBATOS_IMAGE_PORT", "8001"))
 
 # ── Module health ─────────────────────────────────────────────────────────────
 # A module that hasn't published in this many seconds is marked "degraded".

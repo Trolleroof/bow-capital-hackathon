@@ -71,8 +71,10 @@ class BusPublisher:
 
     def __init__(self) -> None:
         self._uri = f"ws://{config.WS_HOST}:{config.WS_PORT}"
+        self._image_uri = f"ws://{config.WS_HOST}:{config.IMAGE_WS_PORT}"
         self._loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
         self._ws: websockets.WebSocketClientProtocol | None = None
+        self._image_ws: websockets.WebSocketClientProtocol | None = None
         # Incoming command queue -- drainable from the main thread each frame
         self.commands: queue.SimpleQueue[dict] = queue.SimpleQueue()
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="bus-io")
@@ -91,6 +93,8 @@ class BusPublisher:
     def close(self) -> None:
         if self._ws:
             asyncio.run_coroutine_threadsafe(self._ws.close(), self._loop).result(timeout=2)
+        if self._image_ws:
+            asyncio.run_coroutine_threadsafe(self._image_ws.close(), self._loop).result(timeout=2)
         self._loop.call_soon_threadsafe(self._loop.stop)
 
     def _run_loop(self) -> None:
@@ -99,6 +103,7 @@ class BusPublisher:
 
     async def _connect(self) -> None:
         self._ws = await websockets.connect(self._uri)
+        self._image_ws = await websockets.connect(self._image_uri)
         self._loop.create_task(self._receive_loop())
 
     # ------------------------------------------------------------------
@@ -109,6 +114,11 @@ class BusPublisher:
             return
         asyncio.run_coroutine_threadsafe(self._ws.send(msg), self._loop)
 
+    def _send_image(self, msg: str) -> None:
+        if self._image_ws is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._image_ws.send(msg), self._loop)
+
     def publish(self, objects: list[TrackedObject], frame_w: int, frame_h: int,
                candidate_id: int | None = None) -> None:
         self._send(_serialize(objects, frame_w, frame_h, candidate_id))
@@ -117,11 +127,13 @@ class BusPublisher:
         """Encode frame as JPEG and broadcast on the given topic."""
         if self._ws is None:
             return
+        if config.GRAYSCALE_STREAM:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if not ok:
             return
         b64 = base64.b64encode(buf).decode("ascii")
-        self._send(json.dumps({"topic": topic, "data": b64}))
+        self._send_image(json.dumps({"topic": topic, "data": b64, "grayscale": config.GRAYSCALE_STREAM}))
 
     # ------------------------------------------------------------------
     # Receive loop (runs inside the background asyncio loop)

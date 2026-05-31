@@ -17,10 +17,12 @@ from typing import Any
 
 from .base import AbstractModule
 from .. import config
-from ..bus import router
+from ..bus import image_router, router
 from ..state import system_state
 
 log = logging.getLogger(__name__)
+
+_IMAGE_TOPICS = {"camera_frame", "camera_right_frame", "slam_frame"}
 
 
 def _stamp_seconds(stamp: Any) -> float:
@@ -68,7 +70,10 @@ class RosSlamModule(AbstractModule):
         try:
             while True:
                 topic, payload = await self._queue.get()
-                await router.publish(topic, payload)
+                if topic in _IMAGE_TOPICS:
+                    await image_router.publish(topic, payload)
+                else:
+                    await router.publish(topic, payload)
                 system_state.beat("nav")
         finally:
             self._stop.set()

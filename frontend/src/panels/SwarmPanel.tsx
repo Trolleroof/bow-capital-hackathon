@@ -1,24 +1,4 @@
-/**
- * SwarmPanel — Three.js view of the CombatOS swarm.
- *
- * Two data sources (prop `source`):
- *   'local' (default) — Phase 3 / Edge A: runs the trained policy.onnx CLIENT-SIDE
- *      via onnxruntime-web (WASM), stepping a faithful TS port of SwarmEnv each
- *      frame. No WebSocket, no Python — works fully offline.
- *   'bus' — Phase 0 fallback: subscribes to the Python WebSocket bus (swarm/bus.py)
- *      `swarm` topic and renders the streamed agents.
- *
- * Phase 4 adds an ops-console layer on top of the in-browser inference:
- *   - quadrotor drone meshes + fading motion trails
- *   - the coverage grid tinted on the ground (watch the swarm paint the field)
- *   - a top-down "COORDINATION MAP" minimap
- *   - operator controls: REVIVE and RESET
- *   - an event status line ("agent 3 lost — swarm recovering")
- *
- * Bus message (SWARM.md §4 / TEAM_PLAN §5):
- *   { "topic": "swarm", "t": 1234.56, "comms": "denied",
- *     "agents": [ { id, x, y, z, yaw, role, alive }, ... ] }
- */
+
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { SwarmEnv, WORLD_HALF as ENV_WORLD_HALF, ALTITUDE, GRID } from '../swarm/sim'
@@ -120,7 +100,12 @@ export default function SwarmPanel({
   useEffect(() => {
     if (source !== 'local') return
     let cancelled = false
-    const sim = new SwarmEnv(/* maxSteps */ 100000, /* seed */ 0)
+    const sim = new SwarmEnv(
+      /* maxSteps */ 100000,
+      /* seed */ 0,
+      /* battlefield */ null,
+      /* scenarioId */ 'search-and-interdict',
+    )
     simRef.current = sim
 
     loadPolicy('search-and-interdict')

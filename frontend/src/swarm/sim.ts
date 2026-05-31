@@ -1,7 +1,7 @@
 /**
  * sim.ts — faithful TypeScript port of swarm/env.py (SwarmEnv), inference parts.
  *
- * This replicates SwarmEnv's state, reset, step, and (critically) the 36-dim
+ * This replicates SwarmEnv's state, reset, step, and (critically) the 48-dim
  * local observation construction EXACTLY as env.py builds it, so the same
  * trained policy.onnx produces the same coordinated behavior in the browser
  * with no Python in the loop.
@@ -15,7 +15,10 @@
  *            BattlefieldParams: each slot zeroed with probability jamDutyCycle
  *   [10:35]  5x5 local coverage patch centered on the agent, row-major.
  *            1.0 = covered OR out-of-bounds, 0.0 = unexplored
- *   [35]     role flag normalized to [0,1]  (= role / max(1, nRoles-1))
+ *   [35:47]  M=3 nearest scenario obstacles: per slot (dx/h, dy/h, sx/h, sy/h)
+ *            from obstacle center, zero-filled when fewer than M exist.
+ *            Driven by frontend/src/swarm/obstacles.ts (mirrors swarm/obstacles.py).
+ *   [47]     role flag normalized to [0,1]  (= role / max(1, nRoles-1))
  *
  * BattlefieldParams also wires:
  *   - windSpeed / windDirRad: drift applied in step() after agent command
@@ -24,6 +27,7 @@
  */
 
 import type { BattlefieldParams } from '../gym/battlefieldParams'
+import { type Obstacle, obstaclesFor } from './obstacles'
 
 // ------------------------------------------------------------- constants ---
 // These mirror env.py module-level defaults EXACTLY.
@@ -44,7 +48,13 @@ export const OWN_DIM = 4
 export const NEIGHBOR_DIM = 2 * K_NEIGHBORS // 6
 export const PATCH_DIM = PATCH * PATCH // 25
 export const ROLE_DIM = 1
-export const OBS_DIM = OWN_DIM + NEIGHBOR_DIM + PATCH_DIM + ROLE_DIM // 36
+// Scenario obstacle slots: nearest-M obstacles, each (dx/h, dy/h, sx/h, sy/h)
+export const M_OBSTACLES = 3
+export const OBSTACLE_FEATS = 4
+export const OBSTACLE_DIM = M_OBSTACLES * OBSTACLE_FEATS // 12
+export const AGENT_RADIUS = 0.4
+export const OBS_DIM =
+  OWN_DIM + NEIGHBOR_DIM + PATCH_DIM + OBSTACLE_DIM + ROLE_DIM // 48
 export const ACT_DIM = 2
 
 // world units per grid cell = (2 * WORLD_HALF) / GRID = 1.0 for defaults
@@ -90,6 +100,10 @@ export class SwarmEnv {
   // Battlefield parameters (P0 knobs wired into dynamics and obs)
   readonly battlefield: BattlefieldParams | null
 
+  // Per-scenario collidable scenery, mirrored from swarm/obstacles.py
+  readonly scenarioId: string | null
+  readonly obstacles: Obstacle[]
+
   // Pre-computed wind drift (world-units/step) from battlefield.weather
   private windX = 0
   private windY = 0
@@ -105,8 +119,15 @@ export class SwarmEnv {
 
   private rand: () => number
 
-  constructor(maxSteps = 400, seed = 0, battlefield: BattlefieldParams | null = null) {
+  constructor(
+    maxSteps = 400,
+    seed = 0,
+    battlefield: BattlefieldParams | null = null,
+    scenarioId: string | null = null,
+  ) {
     this.battlefield = battlefield
+    this.scenarioId = scenarioId
+    this.obstacles = obstaclesFor(scenarioId)
     this.n = battlefield?.logistics.swarmSize ?? N_AGENTS
     // BattlefieldParams.roe.timeLimitSec maps to maxSteps when provided
     this.maxSteps = battlefield
@@ -218,6 +239,51 @@ export class SwarmEnv {
         else if (px > bound) px = bound
         if (py < -bound) py = -bound
         else if (py > bound) py = bound
+        // hard push-out against scenario obstacles (mirrors env.py exactly)
+        if (this.obstacles.length > 0) {
+          for (let pass = 0; pass < 2; pass++) {
+            let stillHit = false
+            for (const obs of this.obstacles) {
+              if (obs.kind === 'cylinder') {
+                const r = obs.sx + AGENT_RADIUS
+                let dx = px - obs.cx
+                let dy = py - obs.cy
+                const d2 = dx * dx + dy * dy
+                if (d2 < r * r) {
+                  let d = Math.sqrt(d2)
+                  if (d < 1e-5) {
+                    dx = 1
+                    dy = 0
+                    d = 1
+                  }
+                  px = obs.cx + (dx / d) * r
+                  py = obs.cy + (dy / d) * r
+                  stillHit = true
+                }
+              } else {
+                const hx = obs.sx + AGENT_RADIUS
+                const hy = obs.sy + AGENT_RADIUS
+                const dx = px - obs.cx
+                const dy = py - obs.cy
+                if (Math.abs(dx) < hx && Math.abs(dy) < hy) {
+                  const penX = hx - Math.abs(dx)
+                  const penY = hy - Math.abs(dy)
+                  if (penX < penY) {
+                    px = obs.cx + (dx >= 0 ? hx : -hx)
+                  } else {
+                    py = obs.cy + (dy >= 0 ? hy : -hy)
+                  }
+                  stillHit = true
+                }
+              }
+            }
+            if (!stillHit) break
+          }
+          if (px < -bound) px = -bound
+          else if (px > bound) px = bound
+          if (py < -bound) py = -bound
+          else if (py > bound) py = bound
+        }
         this.pos[i * 2] = px
         this.pos[i * 2 + 1] = py
       }
@@ -312,7 +378,31 @@ export class SwarmEnv {
       }
       o += this.patch * this.patch
 
-      // [35] role flag normalized to [0,1]
+      // nearest M_OBSTACLES scenario obstacles: (dx/h, dy/h, sx/h, sy/h) each.
+      // Empty slots stay zero (already initialised). Mirrors env.py _obs.
+      if (this.obstacles.length > 0) {
+        const obsList = this.obstacles
+        const dists = obsList.map((obs) => {
+          const dx = obs.cx - this.pos[i * 2]
+          const dy = obs.cy - this.pos[i * 2 + 1]
+          return Math.sqrt(dx * dx + dy * dy)
+        })
+        const order = obsList
+          .map((_, idx) => idx)
+          .sort((a, b) => dists[a] - dists[b])
+          .slice(0, M_OBSTACLES)
+        for (let slot = 0; slot < order.length; slot++) {
+          const obs = obsList[order[slot]]
+          const slotBase = base + o + slot * OBSTACLE_FEATS
+          out[slotBase + 0] = (obs.cx - this.pos[i * 2]) / half
+          out[slotBase + 1] = (obs.cy - this.pos[i * 2 + 1]) / half
+          out[slotBase + 2] = obs.sx / half
+          out[slotBase + 3] = obs.sy / half
+        }
+      }
+      o += OBSTACLE_DIM
+
+      // [final] role flag normalized to [0,1]
       out[base + o] = this.roles[i] / Math.max(1, N_ROLES - 1)
     }
     return out

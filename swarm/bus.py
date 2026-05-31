@@ -56,7 +56,6 @@ async def _register(ws):
 
 
 async def broadcast(topic: str, payload: dict) -> None:
-    """Send a JSON frame on `topic` to every connected client."""
     if not _CLIENTS:
         return
     msg = json.dumps({"topic": topic, **payload})
@@ -101,8 +100,10 @@ def _random_policy(env: SwarmEnv):
 def _trained_policy(ckpt_path: str):
     """Load the trained MAPPO actor and return a policy_fn(obs) -> actions.
 
-    The actor is the exact graph exported in Phase 2: obs (n,36) -> action (n,2),
-    deterministic mean, tanh-squashed to [-1,1]. Local obs only — no comms.
+    The actor is the exact graph exported in Phase 2: obs (n,OBS_DIM) ->
+    action (n,2), deterministic mean, tanh-squashed to [-1,1]. Local obs only
+    — no comms. OBS_DIM is read from the checkpoint, so the same loader works
+    against both legacy 36-dim policies and the new 48-dim obstacle-aware ones.
     """
     import torch
 

@@ -23,6 +23,7 @@ import {
   type PolicyStatus,
 } from '../swarm/policy'
 import { TrainingStatsDrawer, useTraining } from './TrainingDashboard'
+import { TrainingMetricsChart } from './TrainingMetricsChart'
 
 // ──────────────────────────────────────────────── scene types ──────────────
 
@@ -467,7 +468,7 @@ export default function GymScenarioStage({
   const [paramsOpen, setParamsOpen] = useState(false)
 
   // ── training (#16) ──────────────────────────────────────────────────────
-  const { status, metrics, start, stop } = useTraining(scenario.id, params, {
+  const { status, metrics, history, start, stop } = useTraining(scenario.id, params, {
     onComplete: async envId => {
       const exists = await checkPolicyExists(envId)
       if (exists) onPolicyReady?.(envId)
@@ -531,6 +532,7 @@ export default function GymScenarioStage({
             <strong>{canLaunchSim ? 'ready to launch' : 'locked until policy export'}</strong>
           </div>
           <TrainingStatsDrawer metrics={metrics} status={status} />
+          <TrainingMetricsChart history={history} />
         </aside>
       </section>
     </>

@@ -5,34 +5,35 @@ HTTP (default :8787):
   POST /api/train/stop    {"env_id"?}
   POST /api/train/export  {"env_id"}
   GET  /api/train/status?env_id=
+  GET  /api/sim/status
+  POST /api/sim/start     {"env_id","policy","camera_mode"?,"selected_drone"?}
+  POST /api/sim/stop
 
 WebSocket (:8766):
-  Broadcasts `topic: "train"` JSON lines (same shape as swarm/train.py stdout).
+  ws://localhost:8766/ws  — Broadcasts `topic: "train"` JSON lines.
+  ws://localhost:8765/sim/ws  — Broadcasts `topic: "pybullet_frame"` / `topic: "swarm"`.
 
 Run:
   uv run --project swarm python -m swarm.train_service
-
-Then in another terminal:
-  cd frontend && bun dev
+  # or with uvicorn directly:
+  uvicorn swarm.train_service:app --host 127.0.0.1 --port 8787
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from contextlib import asynccontextmanager
 from typing import Any
-from urllib.error import URLError
-from urllib.parse import parse_qs, urlparse
-from urllib.request import urlopen
 
-import websockets
+from fastapi import FastAPI, WebSocket
+from pydantic import BaseModel
 
 from swarm.train import checkpoint_paths
 
@@ -46,136 +47,169 @@ PORT_WS = 8766
 HOST_SIM_WS = "127.0.0.1"
 PORT_SIM_WS = 8765
 
-_WS_CLIENTS: set[Any] = set()
-_SIM_WS_CLIENTS: set[Any] = set()
+_WS_CLIENTS: set[WebSocket] = set()
+_SIM_WS_CLIENTS: set[WebSocket] = set()
 _LOCK = threading.Lock()
+_MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 _JOBS: dict[str, dict[str, Any]] = {}
 _SIM_JOB: dict[str, Any] | None = None
-_WS_LOOP: asyncio.AbstractEventLoop | None = None
-_WS_THREAD: threading.Thread | None = None
 
 
-def _ensure_ws_loop() -> asyncio.AbstractEventLoop:
-    global _WS_LOOP, _WS_THREAD
-    if _WS_LOOP is not None:
-        return _WS_LOOP
-
-    loop = asyncio.new_event_loop()
-
-    def _run() -> None:
-        asyncio.set_event_loop(loop)
-        loop.run_forever()
-
-    _WS_THREAD = threading.Thread(target=_run, daemon=True)
-    _WS_THREAD.start()
-    _WS_LOOP = loop
-    return loop
+# ── request/response models ─────────────────────────────────────────────────
 
 
-def _json_response(handler: BaseHTTPRequestHandler, code: int, payload: dict) -> None:
-    body = json.dumps(payload).encode("utf-8")
-    handler.send_response(code)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    handler.send_header("Access-Control-Allow-Headers", "Content-Type")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
+class TrainStartRequest(BaseModel):
+    env_id: str = "search-and-interdict"
+    profile: str = "combat"
+    timesteps: int = 100_000
 
 
-def _read_body(handler: BaseHTTPRequestHandler) -> dict:
-    length = int(handler.headers.get("Content-Length", "0") or 0)
-    if length <= 0:
-        return {}
-    raw = handler.rfile.read(length)
-    return json.loads(raw.decode("utf-8"))
+class TrainStopRequest(BaseModel):
+    env_id: str | None = None
 
 
-async def _ws_register(ws):
-    _WS_CLIENTS.add(ws)
-    try:
-        await ws.wait_closed()
-    finally:
-        _WS_CLIENTS.discard(ws)
+class TrainExportRequest(BaseModel):
+    env_id: str = "search-and-interdict"
 
 
-async def _sim_ws_register(ws):
-    _SIM_WS_CLIENTS.add(ws)
-    try:
-        await ws.wait_closed()
-    finally:
-        _SIM_WS_CLIENTS.discard(ws)
+class SimStartRequest(BaseModel):
+    env_id: str = "search-and-interdict"
+    policy: str = "trained"
+    camera_mode: str = "observer"
+    selected_drone: int = 0
 
 
-async def _ws_broadcast_line(line: str) -> None:
-    if not _WS_CLIENTS:
+# ── WebSocket helpers ──────────────────────────────────────────────────────
+
+
+def _schedule_ws_send(ws: WebSocket, line: str) -> None:
+    """Send to a WebSocket from a background thread via the main event loop."""
+    loop = _MAIN_LOOP
+    if loop is None or not loop.is_running():
         return
-    dead = []
-    for ws in list(_WS_CLIENTS):
-        try:
-            await ws.send(line)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        _WS_CLIENTS.discard(ws)
-
-
-async def _sim_ws_broadcast_line(line: str) -> None:
-    if not _SIM_WS_CLIENTS:
-        return
-    dead = []
-    for ws in list(_SIM_WS_CLIENTS):
-        try:
-            await ws.send(line)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        _SIM_WS_CLIENTS.discard(ws)
+    asyncio.run_coroutine_threadsafe(_send_to_ws(ws, line), loop)
 
 
 def _broadcast_sync_line(line: str) -> None:
-    loop = _ensure_ws_loop()
-    asyncio.run_coroutine_threadsafe(_ws_broadcast_line(line), loop)
+    """Queue a JSON line for broadcast to train clients (sync context)."""
+    with _LOCK:
+        clients = list(_WS_CLIENTS)
+    if not clients:
+        print("[train] warning: no WebSocket clients to broadcast to", flush=True)
+        return
+    for ws in clients:
+        try:
+            _schedule_ws_send(ws, line)
+        except Exception as exc:
+            print(f"[train] broadcast error: {exc}", flush=True)
 
 
 def _broadcast_sim_sync_line(line: str) -> None:
-    loop = _ensure_ws_loop()
-    asyncio.run_coroutine_threadsafe(_sim_ws_broadcast_line(line), loop)
+    """Queue a JSON line for broadcast to sim clients (sync context)."""
+    with _LOCK:
+        clients = list(_SIM_WS_CLIENTS)
+    for ws in clients:
+        try:
+            _schedule_ws_send(ws, line)
+        except Exception:
+            pass
+
+
+async def _send_to_ws(ws: Any, msg: str) -> None:
+    """Send a message to a WebSocket client."""
+    try:
+        await ws.send_text(msg)
+    except Exception:
+        pass
+
+
+# ── training control ───────────────────────────────────────────────────────
+
+
+def _is_job_running(job: dict[str, Any]) -> bool:
+    proc = job.get("proc")
+    return proc is not None and proc.poll() is None
+
+
+def _kill_proc(proc: subprocess.Popen | None, *, wait: bool = True) -> None:
+    """Terminate a child process (and its group on Unix) without hanging shutdown."""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if sys.platform != "win32":
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        else:
+            proc.terminate()
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    except Exception:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+    if not wait:
+        return
+
+    try:
+        proc.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        try:
+            if sys.platform != "win32":
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            else:
+                proc.kill()
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=0.5)
+        except Exception:
+            pass
+
+
+def _popen(*args: Any, **kwargs: Any) -> subprocess.Popen:
+    """Spawn a child in its own session so Ctrl+C can kill the whole tree."""
+    if sys.platform != "win32":
+        kwargs.setdefault("start_new_session", True)
+    return subprocess.Popen(*args, **kwargs)
 
 
 def _tail_training(env_id: str, proc: subprocess.Popen) -> None:
     """Read train.py stdout (NDJSON) and fan out to WebSocket clients."""
     assert proc.stdout is not None
-    last: dict[str, Any] = {}
+    last = {}
     for raw in proc.stdout:
-        line = raw.strip()
+        line = raw.rstrip()
         if not line:
             continue
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            print(f"[train] {line}", flush=True)
             continue
-        if event.get("topic") != "train":
-            continue
-        last = event
-        _broadcast_sync_line(line)
-        with _LOCK:
-            if env_id in _JOBS:
-                _JOBS[env_id]["last"] = event
+        if event.get("topic") == "train":
+            last = event
+            with _LOCK:
+                job = _JOBS.get(env_id, {})
+                job["last"] = event
+                _JOBS[env_id] = job
+            _broadcast_sync_line(line)
+        else:
+            print(f"[train] {line}", flush=True)
 
     code = proc.wait()
     with _LOCK:
         job = _JOBS.get(env_id, {})
-        job["returncode"] = code
         job["running"] = False
-        phase = last.get("phase")
-        if phase in {"final", "checkpoint"} and code == 0:
-            job["status"] = "completed"
-        elif code == 0:
-            job["status"] = "completed"
-        else:
-            job["status"] = "failed"
+        job["last"] = last or job.get("last")
+        job["status"] = "completed" if code == 0 else "failed"
+        job["returncode"] = code
         _JOBS[env_id] = job
 
     if code == 0 and os.path.exists(checkpoint_paths(env_id)["policy"]):
@@ -195,8 +229,11 @@ def _tail_training(env_id: str, proc: subprocess.Popen) -> None:
                 "losses": last.get("losses", {}),
                 "params_hash": last.get("params_hash", ""),
             }
+            print(f"[train] broadcasting exported event for {env_id}", flush=True)
             _broadcast_sync_line(json.dumps(exported))
+            time.sleep(0.1)  # Give WebSocket time to deliver the message
         except Exception as exc:
+            print(f"[train] export failed: {exc}", flush=True)
             failed = {
                 "topic": "train",
                 "env_id": env_id,
@@ -209,88 +246,6 @@ def _tail_training(env_id: str, proc: subprocess.Popen) -> None:
                 "params_hash": last.get("params_hash", ""),
             }
             _broadcast_sync_line(json.dumps(failed))
-
-
-def _start_training(env_id: str, profile: str, timesteps: int) -> dict:
-    with _LOCK:
-        job = _JOBS.get(env_id)
-        if job and job.get("running"):
-            return {"ok": False, "error": "training already running for this env_id"}
-
-    paths = checkpoint_paths(env_id)
-    os.makedirs(paths["dir"], exist_ok=True)
-    open(paths["events"], "w", encoding="utf-8").close()
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "swarm.train",
-        "--env-id",
-        env_id,
-        "--profile",
-        profile,
-        f"--timesteps={timesteps}",
-    ]
-    proc = subprocess.Popen(
-        cmd,
-        cwd=REPO,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    with _LOCK:
-        _JOBS[env_id] = {
-            "running": True,
-            "status": "running",
-            "proc": proc,
-            "last": None,
-            "profile": profile,
-            "timesteps": timesteps,
-        }
-
-    threading.Thread(target=_tail_training, args=(env_id, proc), daemon=True).start()
-    return {"ok": True, "env_id": env_id, "timesteps": timesteps}
-
-
-def _stop_training(env_id: str | None) -> dict:
-    with _LOCK:
-        targets = [env_id] if env_id else list(_JOBS.keys())
-        stopped = []
-        for eid in targets:
-            job = _JOBS.get(eid)
-            if not job or not job.get("running"):
-                continue
-            proc: subprocess.Popen = job["proc"]
-            proc.terminate()
-            job["running"] = False
-            job["status"] = "stopped"
-            stopped.append(eid)
-    return {"ok": True, "stopped": stopped}
-
-
-def _tail_sim(proc: subprocess.Popen) -> None:
-    assert proc.stdout is not None
-    for raw in proc.stdout:
-        line = raw.rstrip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            print(f"[pybullet-sim] {line}", flush=True)
-            continue
-        if event.get("topic") == "pybullet_frame":
-            _broadcast_sim_sync_line(line)
-        else:
-            print(f"[pybullet-sim] {line}", flush=True)
-
-    code = proc.wait()
-    with _LOCK:
-        global _SIM_JOB
-        if _SIM_JOB and _SIM_JOB.get("proc") is proc:
-            _SIM_JOB["running"] = False
-            _SIM_JOB["returncode"] = code
 
 
 def _drive_sim_policy(env_id: str, policy: str, proc: subprocess.Popen) -> None:
@@ -342,31 +297,106 @@ def _drive_sim_policy(env_id: str, policy: str, proc: subprocess.Popen) -> None:
         time.sleep(dt)
 
 
-def _start_sim(
-    env_id: str,
-    policy: str = "trained",
-    camera_mode: str = "observer",
-    selected_drone: int = 0,
-) -> dict:
+def _start_training(env_id: str, profile: str, timesteps: int) -> dict:
+    global _JOBS
+    with _LOCK:
+        existing = _JOBS.get(env_id, {})
+        if _is_job_running(existing):
+            return {"ok": False, "error": f"training already running for {env_id}"}
+        if existing.get("proc") is not None:
+            existing["running"] = False
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "swarm.train",
+        "--env-id",
+        env_id,
+        "--profile",
+        profile,
+        "--timesteps",
+        str(timesteps),
+    ]
+    proc = _popen(
+        cmd,
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    with _LOCK:
+        existing = _JOBS.get(env_id, {})
+        if _is_job_running(existing):
+            _kill_proc(proc, wait=False)
+            return {"ok": False, "error": f"training already running for {env_id}"}
+        _JOBS[env_id] = {
+            "env_id": env_id,
+            "profile": profile,
+            "running": True,
+            "proc": proc,
+            "status": "running",
+            "started_at": time.time(),
+        }
+
+    threading.Thread(target=_tail_training, args=(env_id, proc), daemon=True).start()
+    return {"ok": True, "env_id": env_id, "running": True}
+
+
+def _stop_training(env_id: str | None) -> dict:
+    global _JOBS
+    with _LOCK:
+        if not env_id:
+            env_id = list(_JOBS.keys())[0] if _JOBS else None
+        if not env_id or env_id not in _JOBS:
+            return {"ok": False, "error": "no training job found"}
+        job = _JOBS[env_id]
+        proc: subprocess.Popen | None = job.get("proc")
+        if not _is_job_running(job):
+            job["running"] = False
+            return {"ok": True, "env_id": env_id, "stopped": False}
+        _kill_proc(proc)
+        job["running"] = False
+    return {"ok": True, "env_id": env_id, "stopped": True}
+
+
+def _tail_sim(proc: subprocess.Popen) -> None:
+    assert proc.stdout is not None
+    for raw in proc.stdout:
+        line = raw.rstrip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            print(f"[pybullet-sim] {line}", flush=True)
+            continue
+        if event.get("topic") == "pybullet_frame":
+            _broadcast_sim_sync_line(line)
+        else:
+            print(f"[pybullet-sim] {line}", flush=True)
+
+    code = proc.wait()
+    with _LOCK:
+        global _SIM_JOB
+        if _SIM_JOB and _SIM_JOB.get("proc") is proc:
+            _SIM_JOB["running"] = False
+            _SIM_JOB["returncode"] = code
+
+
+def _start_sim(env_id: str, policy: str, camera_mode: str, selected_drone: int) -> dict:
     global _SIM_JOB
     with _LOCK:
         existing = _SIM_JOB
         if existing and existing.get("proc") and existing["proc"].poll() is None:
-            if (
-                existing.get("env_id") == env_id
-                and existing.get("policy") == policy
-                and existing.get("camera_mode") == camera_mode
-                and existing.get("selected_drone") == selected_drone
-            ):
+            if existing.get("env_id") == env_id and existing.get("policy") == policy:
                 return {
                     "ok": True,
                     "env_id": env_id,
-                    "camera_mode": camera_mode,
-                    "selected_drone": selected_drone,
                     "running": True,
                     "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
                 }
-            existing["proc"].terminate()
+            _kill_proc(existing["proc"])
             existing["running"] = False
 
     renderer_python = os.environ.get("PYBULLET_PYTHON", "/opt/homebrew/bin/python3")
@@ -376,12 +406,8 @@ def _start_sim(
         "swarm.pybullet_renderer",
         "--env-id",
         env_id,
-        "--camera-mode",
-        camera_mode,
-        "--selected-drone",
-        str(selected_drone),
     ]
-    proc = subprocess.Popen(
+    proc = _popen(
         cmd,
         cwd=REPO,
         stdin=subprocess.PIPE,
@@ -432,185 +458,182 @@ def _stop_sim() -> dict:
         job = _SIM_JOB
         if not job or not job.get("proc") or job["proc"].poll() is not None:
             return {"ok": True, "stopped": False}
-        job["proc"].terminate()
+        _kill_proc(job["proc"])
         job["running"] = False
         return {"ok": True, "stopped": True, "env_id": job.get("env_id")}
 
 
-class TrainAPIHandler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):  # noqa: D102
-        return
-
-    def do_OPTIONS(self):  # noqa: N802
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-
-    def do_GET(self):  # noqa: N802
-        parsed = urlparse(self.path)
-        if parsed.path == "/api/train/status":
-            qs = parse_qs(parsed.query)
-            env_id = (qs.get("env_id") or [""])[0]
-            with _LOCK:
-                job = _JOBS.get(env_id, {})
-            _json_response(
-                self,
-                200,
-                {
-                    "env_id": env_id,
-                    "running": bool(job.get("running")),
-                    "status": job.get("status", "idle"),
-                    "last": job.get("last"),
-                },
-            )
-            return
-
-        if parsed.path == "/api/sim/status":
-            with _LOCK:
-                job = dict(_SIM_JOB or {})
-                proc = job.get("proc")
-                running = bool(proc and proc.poll() is None)
-            _json_response(
-                self,
-                200,
-                {
-                    "env_id": job.get("env_id"),
-                    "policy": job.get("policy"),
-                    "camera_mode": job.get("camera_mode", "observer"),
-                    "selected_drone": job.get("selected_drone", 0),
-                    "running": running,
-                    "returncode": job.get("returncode"),
-                    "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
-                },
-            )
-            return
-
-        _json_response(self, 404, {"error": "not found"})
-
-    def do_POST(self):  # noqa: N802
-        parsed = urlparse(self.path)
-        body = _read_body(self)
-
-        if parsed.path == "/api/train/start":
-            env_id = body.get("env_id", "search-and-interdict")
-            profile = body.get("profile", "combat")
-            timesteps = int(body.get("timesteps", 12_000))
-            result = _start_training(env_id, profile, timesteps)
-            _json_response(self, 200 if result.get("ok") else 409, result)
-            return
-
-        if parsed.path == "/api/train/stop":
-            result = _stop_training(body.get("env_id"))
-            _json_response(self, 200, result)
-            return
-
-        if parsed.path == "/api/train/export":
-            env_id = body.get("env_id", "search-and-interdict")
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "swarm.export_onnx", "--env-id", env_id],
-                    cwd=REPO,
-                    check=True,
-                )
-                _json_response(self, 200, {"ok": True, "env_id": env_id})
-            except Exception as exc:
-                _json_response(self, 500, {"ok": False, "error": str(exc)})
-            return
-
-        if parsed.path == "/api/sim/start":
-            env_id = body.get("env_id", "search-and-interdict")
-            policy = body.get("policy", "trained")
-            camera_mode = body.get("camera_mode", "observer")
-            selected_drone = int(body.get("selected_drone", 0))
-            if policy not in {"trained", "random"}:
-                _json_response(self, 400, {"ok": False, "error": "invalid policy"})
-                return
-            if camera_mode not in {"observer", "chase", "fpv"}:
-                _json_response(self, 400, {"ok": False, "error": "invalid camera_mode"})
-                return
-            result = _start_sim(env_id, policy, camera_mode, selected_drone)
-            _json_response(self, 200 if result.get("ok") else 500, result)
-            return
-
-        if parsed.path == "/api/sim/stop":
-            result = _stop_sim()
-            _json_response(self, 200, result)
-            return
-
-        _json_response(self, 404, {"error": "not found"})
+# ── FastAPI app ────────────────────────────────────────────────────────────
 
 
-async def _ws_main(host: str, port: int) -> None:
-    async with (
-        websockets.serve(_ws_register, host, port),
-        websockets.serve(_sim_ws_register, HOST_SIM_WS, PORT_SIM_WS, max_size=6 * 1024 * 1024),
-    ):
-        print(f"[train-service] WebSocket ws://{host}:{port}  topic=train")
-        print(f"[train-service] PyBullet WebSocket ws://{HOST_SIM_WS}:{PORT_SIM_WS}  topic=swarm/pybullet_frame")
-        await asyncio.Future()
+def _cleanup_all(*, wait: bool = True) -> None:
+    """Terminate all running jobs and subprocesses."""
+    procs: list[subprocess.Popen] = []
+    with _LOCK:
+        for job in _JOBS.values():
+            proc = job.get("proc")
+            if proc is not None:
+                procs.append(proc)
+                job["running"] = False
+        global _SIM_JOB
+        if _SIM_JOB and _SIM_JOB.get("proc"):
+            procs.append(_SIM_JOB["proc"])
+            _SIM_JOB["running"] = False
+    for proc in procs:
+        _kill_proc(proc, wait=wait)
 
 
-def probe_train_api(host: str = HOST_HTTP, port: int = PORT_HTTP) -> bool:
-    """True if something is already serving our status endpoint."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown for the FastAPI app."""
+    global _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_running_loop()
+    print(f"[train-service] HTTP http://{HOST_HTTP}:{PORT_HTTP}")
+    print(f"[train-service] WebSocket ws://127.0.0.1:8787/ws  topic=train")
+    print(f"[train-service] PyBullet WebSocket ws://127.0.0.1:8787/sim/ws  topic=swarm/pybullet_frame")
+
+    yield
+
+    print("\n[train-service] shutting down...", flush=True)
+    _cleanup_all()
+    _MAIN_LOOP = None
+    print("[train-service] stopped", flush=True)
+
+
+app = FastAPI(title="CombatOS Train Service", lifespan=lifespan)
+
+
+@app.get("/api/train/status")
+async def get_train_status(env_id: str = "") -> dict:
+    """Get training status for a scenario."""
+    with _LOCK:
+        job = dict(_JOBS.get(env_id, {}))
+    running = _is_job_running(job)
+    if job and not running:
+        job["running"] = False
+        with _LOCK:
+            if env_id in _JOBS:
+                _JOBS[env_id]["running"] = False
+    return {
+        "env_id": env_id,
+        "running": running,
+        "status": job.get("status", "idle") if job else "idle",
+        "last": job.get("last"),
+    }
+
+
+@app.get("/api/sim/status")
+async def get_sim_status() -> dict:
+    """Get PyBullet sim status."""
+    with _LOCK:
+        job = dict(_SIM_JOB or {})
+        proc = job.get("proc")
+        running = bool(proc and proc.poll() is None)
+    return {
+        "env_id": job.get("env_id"),
+        "policy": job.get("policy"),
+        "camera_mode": job.get("camera_mode", "observer"),
+        "selected_drone": job.get("selected_drone", 0),
+        "running": running,
+        "returncode": job.get("returncode"),
+        "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
+    }
+
+
+@app.post("/api/train/start")
+async def post_train_start(req: TrainStartRequest) -> dict:
+    """Start training a scenario."""
+    result = _start_training(req.env_id, req.profile, req.timesteps)
+    return result
+
+
+@app.post("/api/train/stop")
+async def post_train_stop(req: TrainStopRequest) -> dict:
+    """Stop training."""
+    return _stop_training(req.env_id)
+
+
+@app.post("/api/train/export")
+async def post_train_export(req: TrainExportRequest) -> dict:
+    """Export a trained policy to ONNX."""
     try:
-        with urlopen(f"http://{host}:{port}/api/train/status?env_id=", timeout=1.5) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            return isinstance(body, dict) and "status" in body
-    except (URLError, OSError, json.JSONDecodeError, TimeoutError):
-        return False
+        subprocess.run(
+            [sys.executable, "-m", "swarm.export_onnx", "--env-id", req.env_id],
+            cwd=REPO,
+            check=True,
+        )
+        return {"ok": True, "env_id": req.env_id}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/sim/start")
+async def post_sim_start(req: SimStartRequest) -> dict:
+    """Start PyBullet sim."""
+    if req.policy not in {"trained", "random"}:
+        return {"ok": False, "error": "invalid policy"}
+    if req.camera_mode not in {"observer", "chase", "fpv"}:
+        return {"ok": False, "error": "invalid camera_mode"}
+    return _start_sim(req.env_id, req.policy, req.camera_mode, req.selected_drone)
+
+
+@app.post("/api/sim/stop")
+async def post_sim_stop() -> dict:
+    """Stop PyBullet sim."""
+    return _stop_sim()
+
+
+@app.websocket("/ws")
+async def websocket_train(websocket: WebSocket):
+    """Train WebSocket endpoint."""
+    await websocket.accept()
+    _WS_CLIENTS.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        _WS_CLIENTS.discard(websocket)
+
+
+@app.websocket("/sim/ws")
+async def websocket_sim(websocket: WebSocket):
+    """Sim WebSocket endpoint."""
+    await websocket.accept()
+    _SIM_WS_CLIENTS.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        _SIM_WS_CLIENTS.discard(websocket)
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="CombatOS training API + WS bridge")
-    p.add_argument("--http-host", default=HOST_HTTP)
-    p.add_argument("--http-port", type=int, default=PORT_HTTP)
-    p.add_argument("--ws-host", default=HOST_WS)
-    p.add_argument("--ws-port", type=int, default=PORT_WS)
-    args = p.parse_args()
+    """Run the FastAPI app with uvicorn."""
+    import uvicorn
 
-    if probe_train_api(args.http_host, args.http_port):
-        print(
-            f"[train-service] already running at http://{args.http_host}:{args.http_port} "
-            f"(ws://127.0.0.1:{args.ws_port}) — reusing existing process"
-        )
-        return
+    config = uvicorn.Config(
+        app,
+        host=HOST_HTTP,
+        port=PORT_HTTP,
+        log_level="info",
+        timeout_graceful_shutdown=2,
+        ws_max_size=16 * 1024 * 1024,  # allow large PyBullet frames (>1 MB default)
+    )
+    server = uvicorn.Server(config)
 
-    try:
-        httpd = ThreadingHTTPServer((args.http_host, args.http_port), TrainAPIHandler)
-    except OSError as exc:
-        if exc.errno == 48 and probe_train_api(args.http_host, args.http_port):
-            print(
-                f"[train-service] port {args.http_port} in use by existing train service — ok"
-            )
-            return
-        if exc.errno == 48:
-            print(
-                f"[train-service] ERROR: port {args.http_port} in use by another program.\n"
-                f"  Free it: lsof -ti :{args.http_port} | xargs kill\n"
-                f"  Or reuse if it's train_service from an earlier bun dev.",
-                file=sys.stderr,
-            )
-        raise
+    def _handle_exit(signum: int, frame: Any) -> None:
+        print("\n[train-service] Ctrl+C — stopping...", flush=True)
+        _cleanup_all(wait=False)
+        server.handle_exit(signum, frame)
 
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    print(f"[train-service] HTTP http://{args.http_host}:{args.http_port}")
+    signal.signal(signal.SIGINT, _handle_exit)
+    signal.signal(signal.SIGTERM, _handle_exit)
 
-    try:
-        asyncio.run(_ws_main(args.ws_host, args.ws_port))
-    except OSError as exc:
-        if exc.errno == 48:
-            print(
-                f"[train-service] ERROR: WebSocket port {args.ws_port} in use.\n"
-                f"  Free it: lsof -ti :{args.ws_port} | xargs kill",
-                file=sys.stderr,
-            )
-        raise
-    except KeyboardInterrupt:
-        print("\n[train-service] stopped")
-    finally:
-        httpd.shutdown()
+    server.run()
 
 
 if __name__ == "__main__":

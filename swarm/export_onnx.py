@@ -13,8 +13,12 @@ Outputs:
     swarm/checkpoints/<env_id>/policy.onnx
 
 ONNX inference contract (for Phase 3 / onnxruntime-web):
-    input  name "obs"     float32  shape (N, 36)   dynamic axis 0 = "batch"
-    output name "action"  float32  shape (N, 2)    deterministic, in [-1, 1]
+    input  name "obs"     float32  shape (N, OBS_DIM)   dynamic axis 0 = "batch"
+    output name "action"  float32  shape (N, 2)         deterministic, in [-1, 1]
+
+``OBS_DIM`` is recorded in the checkpoint and propagated through the export so
+the resulting ONNX is always shape-correct for whatever the env was trained on
+(48 with scenario obstacles enabled; 36 in the obstacle-free legacy build).
 """
 
 from __future__ import annotations

@@ -1,12 +1,12 @@
 {
   "env_id": "search-and-interdict",
   "ew": {
-    "gps_denial_level": 0.7,
-    "jam_duty_cycle": 0.4,
+    "gps_denial_level": 0.0,
+    "jam_duty_cycle": 0.0,
     "spoofing_enabled": false
   },
   "logistics": {
-    "attrition_inject_rate": 0.02,
+    "attrition_inject_rate": 0.0,
     "battery_envelope_sec": 360,
     "swarm_size": 5
   },
@@ -28,6 +28,6 @@
     "temperature_c": 15,
     "visibility": 0.6,
     "wind_dir_rad": 0.7853981633974483,
-    "wind_speed": 4.0
+    "wind_speed": 0.0
   }
 }

@@ -199,7 +199,7 @@ function seedMissionEnv(env: SwarmEnv, envId: string) {
 }
 
 function createMissionEnv(envId: string) {
-  const env = new SwarmEnv(400, 7, getMissionSimParams(envId))
+  const env = new SwarmEnv(400, 7, getMissionSimParams(envId), envId)
   seedMissionEnv(env, envId)
   return env
 }

@@ -1758,6 +1758,34 @@
   pointer-events: auto;
 }
 
+.gym-metrics-chart {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(10, 18, 28, 0.4);
+  overflow-y: auto;
+}
+
+.gym-metrics-chart-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.gym-metrics-chart .recharts-text {
+  font-family: 'Fira Code', monospace !important;
+}
+
+.gym-metrics-chart .recharts-legend-item-text {
+  color: var(--muted) !important;
+  font-size: 0.85rem !important;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Params panel — collapsible P0 knobs grid (#25)
    ═══════════════════════════════════════════════════════════════════════════ */

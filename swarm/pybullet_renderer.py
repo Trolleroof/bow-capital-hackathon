@@ -17,10 +17,22 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import math
 import sys
 from typing import Literal
+
+try:
+    from PIL import Image  # type: ignore
+    _HAS_PIL = True
+except ImportError:
+    _HAS_PIL = False
+
+try:
+    from .obstacles import obstacles_for as _obstacles_for
+except ImportError:  # direct-script execution
+    from obstacles import obstacles_for as _obstacles_for  # type: ignore
 
 # ── team / prop colours ─────────────────────────────────────────────────────
 BLUE = [0.22, 0.78, 1.0, 1.0]    # the swarm — "us"
@@ -188,21 +200,67 @@ def _add_troop_patrols(p) -> list[dict]:
     return scripted
 
 
+_SCENERY_BOX = [0.16, 0.3, 0.28, 1]
+_SCENERY_CRATE = [0.18, 0.32, 0.3, 1]
+_SCENERY_JAMMER = [0.5, 0.32, 0.16, 1]
+_SCENERY_MAST = [0.2, 0.42, 0.4, 1]
+_SCENERY_VEHICLE = [0.2, 0.36, 0.34, 1]
+
+
+def _scenery_color_for(scenario_id: str, obstacle) -> list[float]:
+    """Pick a sensible color for a registry obstacle (keeps visuals consistent)."""
+    if obstacle.kind == "cylinder":
+        if scenario_id == "search-and-interdict":
+            return _SCENERY_JAMMER
+        if scenario_id == "drone-vs-drone":
+            return _SCENERY_MAST
+        if scenario_id == "defend-asset":
+            return GREEN
+        return _SCENERY_MAST
+    if scenario_id == "search-and-interdict":
+        return _SCENERY_CRATE
+    if scenario_id == "moving-target-track" and obstacle.z_extent < 0.8:
+        return _SCENERY_VEHICLE
+    return _SCENERY_BOX
+
+
+def _spawn_registered_obstacles(p, scenario_id: str) -> None:
+    """Draw every entry from the shared obstacle registry as a PyBullet body."""
+    for obstacle in _obstacles_for(scenario_id):
+        color = _scenery_color_for(scenario_id, obstacle)
+        if obstacle.kind == "cylinder":
+            _cylinder(
+                p,
+                obstacle.sx,
+                obstacle.z_extent * 2.0,
+                [obstacle.cx, obstacle.cy, obstacle.z_center],
+                color,
+            )
+        else:
+            _box(
+                p,
+                [obstacle.sx, obstacle.sy, obstacle.z_extent],
+                [obstacle.cx, obstacle.cy, obstacle.z_center],
+                color,
+            )
+
+
 def _build_world(p, env_id: str) -> list[dict]:
     """Build static props for ``env_id`` and return the SCRIPTED entities.
 
     Each scripted entity is ``{"body": <id>, "fn": fn}`` where ``fn(t)`` returns
     ``([x, y, z], yaw)`` for that body at frame time ``t`` (seconds).
+
+    The collidable scenery is sourced from ``swarm/obstacles.py`` so the env
+    that trains the policy and the world that displays it see the same shapes.
     """
     _arena(p)
     scripted: list[dict] = _add_troop_patrols(p)
+    _spawn_registered_obstacles(p, env_id)
 
     if env_id == "drone-vs-drone":
-        # contested center lane: control disc + blast walls + radar mast
+        # contested center lane (visual-only disc; walls + mast come from registry)
         _cylinder(p, 4.2, 0.02, [0, 0, 0.02], GREEN_SOFT)
-        _box(p, [0.5, 3.0, 0.9], [-3.0, 0, 0.9], [0.16, 0.3, 0.28, 1])
-        _box(p, [0.5, 3.0, 0.9], [3.0, 0, 0.9], [0.16, 0.3, 0.28, 1])
-        _cylinder(p, 0.35, 2.2, [0, 5.2, 1.1], [0.2, 0.42, 0.4, 1])
         # 3 RED enemy drones patrolling the right half, contesting the lane
         for i in range(3):
             body = _drone_body(p, [4.5, 0, 1.0], RED)
@@ -213,13 +271,11 @@ def _build_world(p, env_id: str) -> list[dict]:
                 x, y = _orbit(4.8, 0.0, r, ang, 0.85)
                 return [x, y, 1.0 + 0.15 * math.sin(t * 0.8 + i)], ang + math.pi / 2
 
-            scripted.append({"body": body, "fn": fn})
+            scripted.append({"body": body, "fn": fn, "hostile": True, "alive": True})
 
     elif env_id == "moving-target-track":
-        # warehouses create blind spots; one big GREEN ground target weaves through
-        _box(p, [1.4, 2.6, 1.3], [-4.2, 3.2, 1.3], [0.16, 0.3, 0.28, 1])
-        _box(p, [1.6, 2.4, 1.3], [3.6, -3.4, 1.3], [0.16, 0.3, 0.28, 1])
-        _box(p, [1.6, 0.7, 0.5], [4.4, 3.0, 0.5], [0.2, 0.36, 0.34, 1])
+        # Warehouses + truck come from the registry; only the moving target
+        # itself (non-collidable, scripted) is added here.
         target = _box(p, [0.8, 0.5, 0.3], [0, 0, 0.3], GREEN)
 
         def target_fn(t):
@@ -234,10 +290,7 @@ def _build_world(p, env_id: str) -> list[dict]:
         scripted.append({"body": target, "fn": target_fn})
 
     elif env_id == "search-and-interdict":
-        # cluttered floor of crates + a jammer node, hiding one RED ground mover
-        for (cx, cy) in ((-4.5, -3.6), (-1.6, 3.1), (3.1, 1.2), (4.7, -3.7)):
-            _box(p, [0.9, 0.9, 0.7], [cx, cy, 0.7], [0.18, 0.32, 0.3, 1])
-        _cylinder(p, 1.1, 1.6, [1.0, -0.4, 0.8], [0.5, 0.32, 0.16, 1])
+        # Crates + jammer come from the registry; one RED ground mover added here.
         mover = _drone_body(p, [0, 0, 0.35], RED, scale=1.1)
 
         def mover_fn(t):
@@ -249,11 +302,9 @@ def _build_world(p, env_id: str) -> list[dict]:
         scripted.append({"body": mover, "fn": mover_fn})
 
     elif env_id == "defend-asset":
-        # central GREEN asset inside a standoff ring; RED attackers spiral inward
+        # Asset + hardpoints come from the registry; only the standoff disc
+        # (visual-only) is added here. RED attackers spiral inward.
         _cylinder(p, 6.5, 0.02, [0, 0, 0.02], GREEN_SOFT)
-        _cylinder(p, 1.0, 0.4, [0, 0, 0.2], GREEN)
-        _box(p, [2.0, 0.6, 0.5], [0, 4.6, 0.5], [0.16, 0.3, 0.28, 1])
-        _box(p, [2.0, 0.6, 0.5], [0, -4.6, 0.5], [0.16, 0.3, 0.28, 1])
         for i in range(3):
             body = _drone_body(p, [9.0, 0, 1.0], RED)
 
@@ -287,9 +338,30 @@ def _build_world(p, env_id: str) -> list[dict]:
 
 def _update_scripted(p, scripted: list[dict], t: float) -> None:
     for entity in scripted:
+        if not entity.get("alive", True):
+            p.resetBasePositionAndOrientation(entity["body"], [0.0, 0.0, -20.0], [0, 0, 0, 1])
+            continue
         pos, yaw = entity["fn"](t)
         quat = p.getQuaternionFromEuler([0.0, 0.0, yaw])
         p.resetBasePositionAndOrientation(entity["body"], pos, quat)
+
+
+def _apply_drone_engagement(scripted: list[dict], agents: list[dict], t: float, radius: float = 2.5) -> None:
+    """Mark hostile scripted drones eliminated when a friendly drone closes in."""
+    live_agents = [agent for agent in agents if agent.get("alive", True)]
+    if not live_agents:
+        return
+    for entity in scripted:
+        if not entity.get("hostile", False) or not entity.get("alive", True):
+            continue
+        pos, _ = entity["fn"](t)
+        hx, hy = float(pos[0]), float(pos[1])
+        for agent in live_agents:
+            dx = float(agent.get("x", 0.0)) - hx
+            dy = float(agent.get("y", 0.0)) - hy
+            if (dx * dx + dy * dy) ** 0.5 <= radius:
+                entity["alive"] = False
+                break
 
 
 def _spawn_drone(p, position) -> int:
@@ -396,14 +468,27 @@ def _render_frame(
         raw = bytes(rgba)
     except TypeError:
         raw = memoryview(rgba).tobytes()
+
+    if _HAS_PIL:
+        # JPEG-encode so each frame fits inside the WebSocket 1 MB frame limit
+        # (raw RGBA at 960x540 is ~2 MB base64 and trips uvicorn's 1009 cutoff).
+        img = Image.frombytes("RGBA", (width, height), raw).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=72)
+        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+        encoding: Literal["jpeg", "rgba"] = "jpeg"
+    else:
+        encoded = base64.b64encode(raw).decode("ascii")
+        encoding = "rgba"
+
     return {
         "topic": "pybullet_frame",
         "width": width,
         "height": height,
-        "encoding": "rgba",
+        "encoding": encoding,
         "camera_mode": camera_mode,
         "selected_drone": selected_drone,
-        "data": base64.b64encode(raw).decode("ascii"),
+        "data": encoded,
     }
 
 
@@ -434,6 +519,8 @@ def main() -> None:
             message = json.loads(raw)
             agents = message.get("agents", [])
             t = float(message.get("t", 0.0))
+            if args.env_id == "drone-vs-drone":
+                _apply_drone_engagement(scripted, agents, t)
             _update_bodies(p, bodies, agents)
             _update_scripted(p, scripted, t)
             p.stepSimulation()

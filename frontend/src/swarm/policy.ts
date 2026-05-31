@@ -6,8 +6,10 @@
  * — no Python, works offline.
  *
  * ONNX contract (from swarm/export_onnx.py):
- *   input  "obs"     float32  (N, 36)   dynamic axis 0 = batch
- *   output "action"  float32  (N, 2)    deterministic, in [-1, 1]
+ *   input  "obs"     float32  (N, OBS_DIM)   dynamic axis 0 = batch
+ *   output "action"  float32  (N, 2)         deterministic, in [-1, 1]
+ *
+ * OBS_DIM is read from `sim.ts` (currently 48 with the scenario-obstacles slots).
  */
 import * as ort from 'onnxruntime-web'
 import { OBS_DIM, ACT_DIM } from './sim'

@@ -1,6 +1,6 @@
 {
   "act_dim": 2,
-  "best_checkpoint_coverage": 0.099306,
+  "best_checkpoint_coverage": 0.242708,
   "best_global_step": 4000,
   "checkpoint": "checkpoints/search-and-interdict/policy.pt",
   "config": {
@@ -16,32 +16,32 @@
     "max_grad_norm": 0.5,
     "num_minibatches": 4,
     "rollout_steps": 400,
-    "seed": 0,
+    "seed": 1,
     "update_epochs": 8,
     "vf_clip": 0.2,
     "vf_coef": 0.5
   },
   "env_id": "search-and-interdict",
   "events": "checkpoints/search-and-interdict/train-events.ndjson",
-  "final_coverage": 0.107986,
-  "global_step": 12000,
+  "final_coverage": 0.242188,
+  "global_step": 4000,
   "losses_at_best": {
-    "approx_kl": 0.004541,
-    "entropy": 1.836322,
-    "pg_loss": -0.006792,
-    "v_loss": 24.307619
+    "approx_kl": 0.003825,
+    "entropy": 1.833961,
+    "pg_loss": -0.005083,
+    "v_loss": 33.801447
   },
-  "obs_dim": 36,
+  "obs_dim": 48,
   "onnx": {
     "checkpoint": "checkpoints/search-and-interdict/policy.onnx",
     "frontend": "frontend/public/policies/search-and-interdict/policy.onnx"
   },
   "params": "checkpoints/search-and-interdict/params.json",
-  "params_hash": "cc2678138b07",
-  "profile": "combat",
-  "random_coverage": 0.114063,
+  "params_hash": "7ffed0c3c1a5",
+  "profile": "garrison",
+  "random_coverage": 0.335417,
   "rollout_steps": 400,
-  "run_name": "mappo_search-and-interdict_combat_1780184218",
-  "seed": 0,
-  "timesteps": 12000
+  "run_name": "mappo_search-and-interdict_garrison_1780210341",
+  "seed": 1,
+  "timesteps": 4000
 }

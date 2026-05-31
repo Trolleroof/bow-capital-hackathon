@@ -31,14 +31,20 @@ Layout, in order (all positions/velocities normalized to roughly [-1, 1]):
              flattened row-major. Each cell is 1.0 if that world cell is already
              covered (or out of bounds), else 0.0. Encourages moving toward
              unexplored space.
+  [ .. .. ]  nearest M=3 scenario obstacles (boxes / cylinders from
+             ``swarm/obstacles.py``): per slot, (dx_to_center/h, dy_to_center/h,
+             sx/h, sy/h). Empty slots stay zero. The same registry drives the
+             PyBullet renderer, so what the policy is trained against matches
+             what you see in 3D.
   [ -1 ]     role/goal flag (float): role index normalized to [0, 1]
 
-Dimensions (defaults N=5, K=3, PATCH=5):
+Dimensions (defaults N=5, K=3, PATCH=5, M_OBSTACLES=3):
   OWN_DIM        = 4                 (pos 2 + vel 2)
   NEIGHBOR_DIM   = 2 * K             (= 6)
   PATCH_DIM      = PATCH * PATCH     (= 25)
+  OBSTACLE_DIM   = M_OBSTACLES * 4   (= 12)
   ROLE_DIM       = 1
-  OBS_DIM        = OWN_DIM + NEIGHBOR_DIM + PATCH_DIM + ROLE_DIM   (= 36)
+  OBS_DIM        = 4 + 6 + 25 + 12 + 1   (= 48)
 
 `obs_dim(K, patch)` recomputes this for non-default configs. The module-level
 constant OBS_DIM is for the defaults so Phase 1/2 can import a fixed shape.
@@ -65,6 +71,10 @@ REWARD (shared / team reward, identical for every live agent)
                        shadow the moving target, hold the defend ring, stay in own
                        territory). Gives a non-flat reward landscape once coverage
                        saturates, so agents do the task instead of parking at a wall.
+    - COLLISION_PENALTY per agent-step where the body was inside a scenario
+                       obstacle's expanded footprint (also gets hard-pushed
+                       out the same step, so the policy can never sit inside
+                       a wall — it has to plan around it).
 Dead agents contribute nothing and receive 0 reward.
 
 ================================================================================
@@ -98,8 +108,10 @@ import numpy as np
 
 try:
     from .env_config import BattlefieldConfig
+    from .obstacles import Obstacle, obstacles_for
 except ImportError:  # when run as __main__ directly (python env.py)
     from env_config import BattlefieldConfig  # type: ignore[no-redef]
+    from obstacles import Obstacle, obstacles_for  # type: ignore[no-redef]
 
 # ------------------------------------------------------------------ defaults ---
 N_AGENTS = 5
@@ -133,12 +145,33 @@ EDGE_GRADIENT_PENALTY = 0.4   # weight on (distance-beyond-soft)^2, summed over 
 # early in the episode.
 OBJECTIVE_REWARD = 0.06       # weight on normalized distance-to-objective
 
+# ── scenario obstacles (real 3D props that the policy now sees + avoids) ─────
+# Each obstacle contributes a 4-float slot to the per-agent observation
+# (relative dx, dy to obstacle center and its half-extents, all normalized).
+# Push-out is hard: agents physically cannot end a step inside an obstacle's
+# expanded footprint. A small per-collision penalty keeps the gradient honest.
+M_OBSTACLES = 3                 # how many nearest obstacles enter local obs
+OBSTACLE_FEATS = 4              # dx/h, dy/h, sx/h, sy/h
+OBSTACLE_DIM = M_OBSTACLES * OBSTACLE_FEATS
+AGENT_RADIUS = 0.4              # body half-extent used in collision push-out
+COLLISION_PENALTY = 0.4         # per-agent-step penalty for trying to enter
+
+# ── drone-vs-drone combat shaping ────────────────────────────────────────────
+HOSTILE_ENGAGE_RADIUS = 2.0
+HOSTILE_KILL_REWARD = 2.5
+HOSTILE_APPROACH_REWARD = 0.05
+DRONE_VS_DRONE_COVERAGE_SCALE = 0.12
+HOVER_CENTER_FRAC = 0.32
+HOVER_SPEED_MAX = 0.28
+HOVER_REWARD = 0.12
+OBJECTIVE_REWARD_POST_KILL = 0.18
+
 ROLES = ("scout", "scout", "scout", "scout", "scout")  # all scouts for Phase 0
 
 
-def obs_dim(k: int = K_NEIGHBORS, patch: int = PATCH) -> int:
+def obs_dim(k: int = K_NEIGHBORS, patch: int = PATCH, m_obstacles: int = M_OBSTACLES) -> int:
     """Compute the local observation vector length for a given K / patch size."""
-    return 4 + 2 * k + patch * patch + 1
+    return 4 + 2 * k + patch * patch + m_obstacles * OBSTACLE_FEATS + 1
 
 
 # Importable fixed dims for the default config (Phase 1/2 import these).
@@ -146,7 +179,7 @@ OWN_DIM = 4
 NEIGHBOR_DIM = 2 * K_NEIGHBORS
 PATCH_DIM = PATCH * PATCH
 ROLE_DIM = 1
-OBS_DIM = obs_dim()          # 36 for defaults
+OBS_DIM = obs_dim()          # 48 for defaults (was 36 pre-obstacles)
 ACT_DIM = 2
 
 
@@ -164,6 +197,7 @@ class SwarmEnv:
         seed: int | None = None,
         battlefield: BattlefieldConfig | None = None,
         scenario_id: str | None = None,
+        obstacles: list[Obstacle] | None = None,
     ) -> None:
         # ------------------------------------------------------------------
         # Battlefield config — P0 parameters (wind, EW, attrition, limits).
@@ -207,8 +241,145 @@ class SwarmEnv:
         self.roles = np.zeros(self.n, dtype=np.int64)
         self.t = 0
         self.steps = 0
+        self.hostile_pos = np.zeros((0, 2), dtype=np.float32)
+        self.hostile_alive = np.zeros(0, dtype=bool)
 
-    # ------------------------------------------------------------------ utils ---
+        # Scenario obstacles — real 3D props the policy must see + avoid.
+        # Default to the registry for this scenario_id; can be overridden for tests.
+        if obstacles is None and scenario_id is not None:
+            obstacles = obstacles_for(scenario_id)
+        self.obstacles: list[Obstacle] = list(obstacles or [])
+        if self.obstacles:
+            self._obs_centers = np.array(
+                [[o.cx, o.cy] for o in self.obstacles], dtype=np.float32
+            )
+            self._obs_half = np.array(
+                [[o.sx, o.sy] for o in self.obstacles], dtype=np.float32
+            )
+            self._obs_is_circle = np.array(
+                [o.kind == "cylinder" for o in self.obstacles], dtype=bool
+            )
+        else:
+            self._obs_centers = np.zeros((0, 2), dtype=np.float32)
+            self._obs_half = np.zeros((0, 2), dtype=np.float32)
+            self._obs_is_circle = np.zeros(0, dtype=bool)
+
+    def _hostile_count(self) -> int:
+        if self.scenario_id != "drone-vs-drone":
+            return 0
+        if self.battlefield is not None:
+            return max(1, int(self.battlefield.threat.hostile_uas_count))
+        return 3
+
+    def _reset_hostiles(self) -> None:
+        n_hostile = self._hostile_count()
+        if n_hostile == 0:
+            self.hostile_pos = np.zeros((0, 2), dtype=np.float32)
+            self.hostile_alive = np.zeros(0, dtype=bool)
+            return
+        h = self.world_half
+        x = self.rng.uniform(0.6 * h, 0.92 * h, n_hostile)
+        y = self.rng.uniform(-0.7 * h, 0.7 * h, n_hostile)
+        self.hostile_pos = np.stack([x, y], axis=1).astype(np.float32)
+        self.hostile_alive = np.ones(n_hostile, dtype=bool)
+
+    def _update_hostiles(self) -> None:
+        """Patrol the contested center lane (matches PyBullet scripted reds)."""
+        if self.hostile_alive.size == 0:
+            return
+        h = self.world_half
+        cx, cy = 0.48 * h, 0.0
+        for i in range(self.hostile_alive.size):
+            if not self.hostile_alive[i]:
+                continue
+            r = 0.24 * h * (2.4 + i * 0.8)
+            ang = self.t * 0.5 + i * 2.1
+            self.hostile_pos[i, 0] = cx + r * math.cos(ang) * 0.85
+            self.hostile_pos[i, 1] = cy + r * math.sin(ang) * 0.85
+
+    def _drone_vs_drone_combat_reward(self, live_pos: np.ndarray, live: np.ndarray) -> float:
+        if live_pos.shape[0] == 0 or self.hostile_alive.size == 0:
+            return 0.0
+
+        reward = 0.0
+        h = self.world_half
+        live_hostile = self.hostile_pos[self.hostile_alive]
+        if live_hostile.shape[0] > 0:
+            dists = np.linalg.norm(
+                live_pos[:, None, :] - live_hostile[None, :, :],
+                axis=-1,
+            )
+            nearest = dists.min(axis=1) / (2.0 * h)
+            reward += HOSTILE_APPROACH_REWARD * float((1.0 - nearest).sum())
+
+            for idx in np.where(self.hostile_alive)[0]:
+                if np.any(np.linalg.norm(live_pos - self.hostile_pos[idx], axis=1) < HOSTILE_ENGAGE_RADIUS):
+                    self.hostile_alive[idx] = False
+                    reward += HOSTILE_KILL_REWARD
+
+        if not self.hostile_alive.any():
+            dist_center = np.linalg.norm(live_pos, axis=1) / h
+            in_center = dist_center < HOVER_CENTER_FRAC
+            speeds = np.linalg.norm(self.vel[live], axis=1)
+            slow = speeds < HOVER_SPEED_MAX
+            reward += HOVER_REWARD * float((in_center & slow).sum()) / max(1, int(live.sum()))
+            reward += -OBJECTIVE_REWARD_POST_KILL * float(dist_center.mean())
+        return reward
+    def _resolve_obstacle_collisions(self, live_mask: np.ndarray) -> int:
+        """Hard push every live agent out of any obstacle's expanded footprint.
+
+        Each obstacle footprint is grown by AGENT_RADIUS, then any agent inside
+        is shoved to the nearest edge (boxes) or onto the inflated circle
+        (cylinders). Returns the number of live agents that needed correction
+        this step — used as a collision count for the reward.
+        """
+        if not self.obstacles or not live_mask.any():
+            return 0
+        live_idx = np.where(live_mask)[0]
+        collided = 0
+        for i in live_idx:
+            px, py = float(self.pos[i, 0]), float(self.pos[i, 1])
+            hit_any = False
+            # Two passes so an agent pushed out of one obstacle can't still sit
+            # inside an adjacent one (rare with our layouts but cheap insurance).
+            for _ in range(2):
+                still_hit = False
+                for k, obs in enumerate(self.obstacles):
+                    cx, cy = float(obs.cx), float(obs.cy)
+                    if self._obs_is_circle[k]:
+                        r = float(obs.sx) + AGENT_RADIUS
+                        dx, dy = px - cx, py - cy
+                        d2 = dx * dx + dy * dy
+                        if d2 < r * r:
+                            d = math.sqrt(d2) if d2 > 1e-12 else 1e-6
+                            # pick a deterministic direction when at exact center
+                            if d < 1e-5:
+                                dx, dy, d = 1.0, 0.0, 1.0
+                            px = cx + dx / d * r
+                            py = cy + dy / d * r
+                            still_hit = True
+                            hit_any = True
+                    else:
+                        hx = float(obs.sx) + AGENT_RADIUS
+                        hy = float(obs.sy) + AGENT_RADIUS
+                        if abs(px - cx) < hx and abs(py - cy) < hy:
+                            # push along the axis of least penetration
+                            pen_x = hx - abs(px - cx)
+                            pen_y = hy - abs(py - cy)
+                            if pen_x < pen_y:
+                                px = cx + math.copysign(hx, px - cx if px != cx else 1.0)
+                            else:
+                                py = cy + math.copysign(hy, py - cy if py != cy else 1.0)
+                            still_hit = True
+                            hit_any = True
+                if not still_hit:
+                    break
+            if hit_any:
+                self.pos[i, 0] = px
+                self.pos[i, 1] = py
+                collided += 1
+        return collided
+
     def _world_to_cell(self, p: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Map world (x, y) -> integer grid indices (cx, cy), clipped to grid."""
         idx = ((p + self.world_half) / self.cell).astype(np.int64)
@@ -322,6 +493,7 @@ class SwarmEnv:
         self.roles = np.zeros(self.n, dtype=np.int64)
         self.t = 0.0
         self.steps = 0
+        self._reset_hostiles()
         self._mark_covered()
         return self._obs()
 
@@ -360,10 +532,21 @@ class SwarmEnv:
         bound = self.world_half
         self.pos = np.clip(self.pos, -bound, bound)
 
-        new_cells = self._mark_covered()
+        # Hard collision push-out against scenario obstacles, then re-clip in
+        # case the push moved an agent past the world wall.
+        n_collisions = self._resolve_obstacle_collisions(live)
+        if n_collisions:
+            self.pos = np.clip(self.pos, -bound, bound)
 
-        # --- team reward ---
-        reward = COVERAGE_REWARD * new_cells
+        new_cells = self._mark_covered()
+        self._update_hostiles()
+
+        coverage_scale = (
+            DRONE_VS_DRONE_COVERAGE_SCALE
+            if self.scenario_id == "drone-vs-drone"
+            else 1.0
+        )
+        reward = COVERAGE_REWARD * coverage_scale * new_cells
 
         live_pos = self.pos[live]
 
@@ -378,10 +561,18 @@ class SwarmEnv:
             # so there is a real gradient pulling them back before they clip.
             dist_c = np.linalg.norm(live_pos, axis=1) / bound        # ~[0, 1.41]
             excess = np.clip(dist_c - EDGE_SOFT_FRAC, 0.0, None)
-            reward -= EDGE_GRADIENT_PENALTY * float((excess ** 2).sum())
+            edge_weight = 1.8 if self.scenario_id == "drone-vs-drone" else 1.0
+            reward -= EDGE_GRADIENT_PENALTY * edge_weight * float((excess ** 2).sum())
 
-            # scenario objective pull (keeps a gradient after coverage saturates)
-            reward += self._objective_reward(live_pos)
+            if self.scenario_id == "drone-vs-drone":
+                reward += self._drone_vs_drone_combat_reward(live_pos, live)
+                if self.hostile_alive.any():
+                    reward += 0.5 * self._objective_reward(live_pos)
+            else:
+                reward += self._objective_reward(live_pos)
+
+        if n_collisions:
+            reward -= COLLISION_PENALTY * float(n_collisions)
 
         self.steps += 1
         self.t += DT
@@ -395,7 +586,10 @@ class SwarmEnv:
             "new_cells": new_cells,
             "coverage": self.coverage_fraction(),
             "n_alive": int(self.alive.sum()),
+            "n_collisions": n_collisions,
         }
+        if self.hostile_alive.size:
+            info["n_hostile_alive"] = int(self.hostile_alive.sum())
         # Log params hash so training checkpoints are traceable (issue #15).
         if self.battlefield is not None:
             info["params_hash"] = self.battlefield_hash()
@@ -461,6 +655,22 @@ class SwarmEnv:
                         patch[a, b] = 1.0 if self.covered[gx, gy] else 0.0
             out[i, o:o + self.patch * self.patch] = patch.reshape(-1)
             o += self.patch * self.patch
+
+            # nearest M_OBSTACLES scenario obstacles, each as
+            # (dx_to_center/h, dy_to_center/h, sx/h, sy/h). Slots beyond the
+            # available obstacle count stay zero, which the policy reads as
+            # "no further obstacle nearby".
+            if self._obs_centers.shape[0] > 0:
+                rel = self._obs_centers - self.pos[i]
+                d = np.linalg.norm(rel, axis=1)
+                order = np.argsort(d)[:M_OBSTACLES]
+                for slot_i, k in enumerate(order):
+                    base = o + slot_i * OBSTACLE_FEATS
+                    out[i, base + 0] = rel[k, 0] / half
+                    out[i, base + 1] = rel[k, 1] / half
+                    out[i, base + 2] = self._obs_half[k, 0] / half
+                    out[i, base + 3] = self._obs_half[k, 1] / half
+            o += OBSTACLE_DIM
 
             # role flag normalized to [0, 1]
             out[i, o] = self.roles[i] / max(1, len(ROLES) - 1)

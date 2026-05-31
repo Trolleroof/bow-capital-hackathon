@@ -7,6 +7,7 @@ import type { BattlefieldParams } from './battlefieldParams'
 import {
   TRAIN_WS_URL,
   type TrainEvent,
+  fetchTrainStatus,
   startTraining,
   stopTraining,
 } from './trainApi'
@@ -63,6 +64,7 @@ export function useTraining(
   const [history, setHistory] = useState<TrainingMetrics[]>([])
 
   const wsRef = useRef<WebSocket | null>(null)
+  const startingRef = useRef(false)
   const optionsRef = useRef(options)
   optionsRef.current = options
 
@@ -75,7 +77,9 @@ export function useTraining(
 
   const handleEvent = useCallback(
     (event: TrainEvent) => {
-      if (event.env_id && event.env_id !== envId) return
+      if (event.env_id && event.env_id !== envId) {
+        return
+      }
 
       const m = eventToMetrics(event, params.logistics.swarmSize)
       setMetrics(m)
@@ -86,36 +90,26 @@ export function useTraining(
 
       if (event.phase === 'export_failed') {
         setStatus('failed')
-        optionsRef.current?.onError?.(event.error ?? 'ONNX export failed')
         closeSocket()
+        Promise.resolve().then(() => {
+          optionsRef.current?.onError?.(event.error ?? 'ONNX export failed')
+        })
         return
       }
 
       if (event.phase === 'final' || event.phase === 'exported') {
         setStatus('completed')
         closeSocket()
-        optionsRef.current?.onComplete?.(envId)
+        Promise.resolve().then(() => {
+          optionsRef.current?.onComplete?.(envId)
+        })
       }
     },
     [envId, params.logistics.swarmSize, closeSocket],
   )
 
-  const start = useCallback(async () => {
-    setMetrics(null)
-    setHistory([])
-    setStatus('running')
+  const attachSocket = useCallback(() => {
     closeSocket()
-
-    const { ok, error } = await startTraining(envId, 'combat')
-    if (!ok) {
-      setStatus('failed')
-      optionsRef.current?.onError?.(
-        error ??
-          'Training service not reachable. Restart with `cd frontend && bun dev` (needs `uv` installed), or run train_service manually.',
-      )
-      return
-    }
-
     const ws = new WebSocket(TRAIN_WS_URL)
     wsRef.current = ws
 
@@ -131,9 +125,11 @@ export function useTraining(
     ws.onerror = () => {
       setStatus(prev => {
         if (prev === 'running') {
-          optionsRef.current?.onError?.(
-            'WebSocket connection to training service failed',
-          )
+          Promise.resolve().then(() => {
+            optionsRef.current?.onError?.(
+              'WebSocket connection to training service failed',
+            )
+          })
           return 'failed'
         }
         return prev
@@ -143,13 +139,59 @@ export function useTraining(
     ws.onclose = () => {
       wsRef.current = null
     }
-  }, [envId, params, closeSocket, handleEvent])
+  }, [closeSocket, handleEvent])
+
+  const start = useCallback(async () => {
+    if (startingRef.current) return
+    startingRef.current = true
+    try {
+      setMetrics(null)
+      setHistory([])
+      setStatus('running')
+      closeSocket()
+
+      const { ok, error } = await startTraining(envId, 'combat')
+      if (!ok) {
+        setStatus('failed')
+        Promise.resolve().then(() => {
+          optionsRef.current?.onError?.(
+            error ??
+              'Training could not start. If a previous run is stuck, restart train_service or wait for it to finish.',
+          )
+        })
+        return
+      }
+
+      attachSocket()
+    } finally {
+      startingRef.current = false
+    }
+  }, [envId, closeSocket, attachSocket])
 
   const stop = useCallback(async () => {
     closeSocket()
     await stopTraining(envId)
     setStatus('stopped')
   }, [envId, closeSocket])
+
+  useEffect(() => {
+    let canceled = false
+
+    void fetchTrainStatus(envId).then(({ running, last }) => {
+      if (canceled || !running) return
+      setStatus('running')
+      if (last?.topic === 'train') {
+        const m = eventToMetrics(last, params.logistics.swarmSize)
+        setMetrics(m)
+        setHistory([m])
+      }
+      attachSocket()
+    })
+
+    return () => {
+      canceled = true
+    }
+  }, [envId, params.logistics.swarmSize, attachSocket])
 
   useEffect(() => () => closeSocket(), [closeSocket])
 

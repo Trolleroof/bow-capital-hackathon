@@ -12,6 +12,9 @@ dependencies = [
     "onnxruntime>=1.18",
     "tensorboard>=2.16",
     "websockets>=12.0",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.24",
+    "python-multipart>=0.0.6",
 ]
 
 [project.optional-dependencies]

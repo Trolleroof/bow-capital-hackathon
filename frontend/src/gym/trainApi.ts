@@ -1,13 +1,13 @@
-/** Training bridge — proxies to swarm/train_service.py (HTTP :8787, WS :8766). */
+/** Training bridge — proxies to swarm/train_service.py (FastAPI on :8787). */
 
 export const TRAIN_API_BASE =
   import.meta.env.VITE_TRAIN_API_URL ?? ''
 
 export const TRAIN_WS_URL =
-  import.meta.env.VITE_TRAIN_WS_URL ?? 'ws://127.0.0.1:8766'
+  import.meta.env.VITE_TRAIN_WS_URL ?? 'ws://127.0.0.1:8787/ws'
 
 export const PYBULLET_WS_URL =
-  import.meta.env.VITE_PYBULLET_WS_URL ?? 'ws://127.0.0.1:8765'
+  import.meta.env.VITE_PYBULLET_WS_URL ?? 'ws://127.0.0.1:8787/sim/ws'
 
 export const DEFAULT_TRAIN_TIMESTEPS = Number(
   import.meta.env.VITE_TRAIN_TIMESTEPS ?? 100_000,
@@ -51,6 +51,26 @@ export async function stopTraining(envId: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ env_id: envId }),
   })
+}
+
+export async function fetchTrainStatus(envId: string): Promise<{
+  running: boolean
+  status: string
+  last?: TrainEvent
+}> {
+  const res = await fetch(
+    `${TRAIN_API_BASE}/api/train/status?env_id=${encodeURIComponent(envId)}`,
+  )
+  const data = (await res.json()) as {
+    running?: boolean
+    status?: string
+    last?: TrainEvent
+  }
+  return {
+    running: Boolean(data.running),
+    status: data.status ?? 'idle',
+    last: data.last,
+  }
 }
 
 export async function startPyBulletSim(

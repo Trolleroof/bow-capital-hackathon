@@ -5,8 +5,6 @@ import { Gauge } from './atoms'
 import { VslamScene } from './VslamScene'
 import { makeDetectionOverlay } from './OpticView'
 
-const MODULES = ['NAVIGATION', 'TARGETS', 'RECON', 'SYSTEM']
-
 interface Props {
   t: TelemetryState
   log: LogEntry[]
@@ -20,9 +18,6 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
   const tracked = t.dets.filter(d => d.st !== 'LOST').length
   const liveFeed = t.cameraFrame
   const annotatedFeed = t.slamFrame
-  const liveFeedAspect = liveFeed && liveFeed.width > 0 && liveFeed.height > 0
-    ? `${liveFeed.width} / ${liveFeed.height}`
-    : '16 / 9'
   const cameraOverlay = useMemo(() => makeDetectionOverlay(t.dets, { lineScale: 0.42 }), [t.dets])
   const vslamPose = t.slamOdometry ?? { ...t.pose, qz: Math.sin(t.yaw * Math.PI / 360), qw: Math.cos(t.yaw * Math.PI / 360) }
 
@@ -35,23 +30,11 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           <span>EDGE AUTONOMY STACK</span>
         </div>
         <nav className="modtabs">
-          {MODULES.map((m, i) => (
-            <div className={'mtab' + (i === 0 ? ' is-active' : '')} key={m}>
-              <span className="mt-k">{String(i + 1).padStart(2, '0')}</span>
-              <span className="mt-t">{m}</span>
-            </div>
-          ))}
+          <div className="mtab is-active">
+            <span className="mt-t">Drone</span>
+          </div>
         </nav>
         <div className="hero-status">
-          <div className={'pill pill--deny'}>
-            <i /><span>GPS</span><b>DENIED</b>
-          </div>
-          <div className={'pill pill--deny'}>
-            <i /><span>LINK</span><b>NONE</b>
-          </div>
-          <div className={`pill ${t.tracking === 'OK' ? 'pill--ok' : 'pill--alert'}`}>
-            <i /><span>STATE</span><b>{t.tracking === 'OK' ? 'LOCALIZED' : t.tracking}</b>
-          </div>
           {t.wsConnected && (
             <div className="pill pill--ok">
               <i /><b>LIVE</b>
@@ -138,11 +121,11 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
         </div>
 
         {/* top-left: SLAM 3D environment */}
-        <div className={`pnl nav-col${fullscreenPanel === 'slam-map' ? ' panel-fullscreen' : ''}`}>
+        <div className={`pnl pnl-tile nav-col${fullscreenPanel === 'slam-map' ? ' panel-fullscreen' : ''}`}>
           <h4>
             <span>NAVIGATION · STEREO VSLAM</span>
             <span className="panel-head-actions">
-              <em>6-DoF</em>
+              <em>{t.slamPointCloud.length} pts</em>
               <button
                 type="button"
                 className="panel-fullscreen-btn"
@@ -154,22 +137,13 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
               </button>
             </span>
           </h4>
-          <div className="fig map" style={{ flex: 1 }}>
+          <div className="fig map">
             <VslamScene points={t.slamPointCloud} path={t.slamPath} pose={vslamPose} />
-            <div className="corner tl" /><div className="corner tr" />
-            <div className="corner bl" /><div className="corner br" />
-            <div className="fig-val">● LIVE · {t.slamPointCloud.length} MAP PTS</div>
-            <div className="fig-cap">VSLAM MAP · /slam/odometry · /slam/path · /slam/point_cloud</div>
-            <div className="fig-legend">
-              <span><i className="lg" />SLAM PATH</span>
-              <span><i className="lg dot" />EGO POSE</span>
-              <span><i className="lg cloud" />MAP POINTS</span>
-            </div>
           </div>
         </div>
 
         {/* bottom-left: SLAM keyframe */}
-        <div className={`pnl slam-frame-col${fullscreenPanel === 'slam-keyframe' ? ' panel-fullscreen' : ''}`}>
+        <div className={`pnl pnl-tile slam-frame-col${fullscreenPanel === 'slam-keyframe' ? ' panel-fullscreen' : ''}`}>
           <h4>
             <span>SLAM KEYFRAME</span>
             <span className="panel-head-actions">
@@ -195,9 +169,9 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
         </div>
 
         {/* top-right: YOLOX stream */}
-        <div className="pnl feed-col">
-          <h4>YOLOX VIDEO STREAM <em>{liveFeed ? `#${liveFeed.seq}` : 'WAITING'}</em></h4>
-          <div className="feed" style={{ aspectRatio: liveFeedAspect }} onClick={onEnterOptic}>
+        <div className="pnl pnl-tile feed-col">
+          <h4>Targeting <em>{liveFeed ? `#${liveFeed.seq}` : 'WAITING'}</em></h4>
+          <div className="feed" onClick={onEnterOptic}>
             {liveFeed ? (
               <LiveFrameCanvas frame={liveFeed} className="slam-live-canvas" fit="contain" overlay={cameraOverlay} />
             ) : (
@@ -212,7 +186,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
         </div>
 
         {/* bottom-right: detections list */}
-        <div className="pnl intel-col">
+        <div className="pnl pnl-tile intel-col">
           <h4>DETECTIONS <em>{tracked} ACTIVE</em></h4>
           <div className="dtable">
             <div className="dt-head">

@@ -11,6 +11,7 @@ Usage:
 Environment overrides (see config.py):
     COMBATOS_HOST        bind address          (default 0.0.0.0)
     COMBATOS_PORT        bus port              (default 8000)
+    COMBATOS_ROS_SLAM    desktop ROS2 bridge   (default 0)
     SWARM_BUS_URL        swarm sub-bus         (default ws://localhost:8765)
     RECON_ASSET_PATH     splat file path       (default recon/assets/field.splat)
     COMBATOS_MOCK_POSE   emit mock pose        (default 1)
@@ -24,6 +25,7 @@ from .bus import ws_server
 from .modules.nav_module import NavModule
 from .modules.perception_module import PerceptionModule
 from .modules.recon_module import ReconModule
+from .modules.ros_slam_module import RosSlamModule
 from .modules.swarm_module import SwarmModule
 from .state.system_state import run_status_loop
 from . import config
@@ -67,7 +69,11 @@ async def main() -> None:
         )
     )
 
-    modules = [NavModule(), PerceptionModule(), ReconModule(), SwarmModule()]
+    modules = [NavModule(), PerceptionModule(), ReconModule(), RosSlamModule()]
+    if config.ENABLE_SWARM:
+        modules.append(SwarmModule())
+    else:
+        log.info("[swarm] disabled; set COMBATOS_SWARM=1 to enable swarm relay")
 
     tasks = [
         asyncio.create_task(ws_server.serve(),        name="bus"),

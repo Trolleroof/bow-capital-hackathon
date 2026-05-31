@@ -60,6 +60,7 @@ def _serialize(objects: list[TrackedObject], fw: int, fh: int, candidate_id: int
                 "is_candidate": (candidate_id is not None and o.id == candidate_id
                                  and not o.is_primary and not o.confirmed),
                 "confirmed":    o.confirmed,
+                "allegiance":   o.allegiance,
             }
             for o in objects
         ],

@@ -140,7 +140,8 @@ export function OpticView({ t, onExit, onFollow, onConfirm, onRelease }: Props) 
         }
 
         const state = d.confirmed ? 'CONFIRMED' : d.tone === 'amber' ? 'LOCKED' : d.tone === 'candidate' ? 'FOLLOW' : ''
-        const label = `${d.id}  ${d.cls}  ${d.conf.toFixed(2)}${state ? '  ' + state : ''}`
+        const iffTag = d.allegiance ? `  ${d.allegiance.toUpperCase()}` : ''
+        const label = `${d.id}  ${d.cls}  ${d.conf.toFixed(2)}${state ? '  ' + state : ''}${iffTag}`
         drawLabel(ctx, label, x + w / 2, y - 4, color, d.confirmed)
       }
     },

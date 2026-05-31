@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+import cv2
 import numpy as np
 
+import perception.config as perception_config
 from perception.visualizer import draw
 
 from .bus_client import OrchestratorBusClient
@@ -23,6 +25,7 @@ class OverlayTrack:
     has_face: bool = False
     confirmed: bool = False
     is_primary: bool = False
+    allegiance: str | None = None
 
 
 class GroundTruthPerceptionNode:
@@ -88,6 +91,8 @@ class GroundTruthPerceptionNode:
 
         frame_bgr = decode_jpeg_to_bgr(frame_msg["data"])
         detections, candidate = self._project_targets(state)
+        if perception_config.IFF_ENABLED:
+            self._annotate_iff(frame_bgr, detections)
         annotated = draw(frame_bgr.copy(), detections, candidate)
 
         image_payload = {
@@ -119,6 +124,7 @@ class GroundTruthPerceptionNode:
                 "confirmed": False,
                 "is_primary": det.is_primary,
                 "is_candidate": candidate is not None and det.id == candidate.id,
+                "allegiance": det.allegiance,
             }
             for det in detections
         ]
@@ -199,6 +205,18 @@ class GroundTruthPerceptionNode:
         )
         candidate.is_primary = True
         return detections, candidate
+
+    def _annotate_iff(self, frame_bgr: np.ndarray, detections: list[OverlayTrack]) -> None:
+        fh, fw = frame_bgr.shape[:2]
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        for det in detections:
+            x, y, bw, bh = det.bbox
+            crop = gray[max(0, y):min(fh, y + bh), max(0, x):min(fw, x + bw)]
+            if crop.size == 0:
+                det.allegiance = None
+                continue
+            avg = float(np.mean(crop))
+            det.allegiance = "friend" if avg < perception_config.IFF_DARK_THRESHOLD else "foe"
 
     def _candidate_score(self, bbox: list[int], width: int, height: int) -> float:
         x, y, w, h = bbox

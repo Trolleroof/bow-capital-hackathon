@@ -21,6 +21,7 @@ class TrackedObject:
         self.conf = det.conf
         self.bbox = det.bbox
         self.has_face = det.has_face
+        self.allegiance: str | None = det.allegiance  # "friend" | "foe" | None
         self.confirmed = False   # operator-confirmed target
         self.is_primary = False  # follow-mode lock
 
@@ -36,6 +37,7 @@ class TargetTracker:
         self._primary_id: int | None = None   # follow-mode locked ID
         self._confirmed_ids: set[int] = set() # operator-confirmed targets
         self._smooth: dict[int, list[float]] = {}  # track_id → smoothed bbox
+        self._allegiance: dict[int, str | None] = {}  # track_id → allegiance
 
     # ------------------------------------------------------------------
     def update(self, detections: list[Detection]) -> list[TrackedObject]:
@@ -72,15 +74,17 @@ class TargetTracker:
             src_det.bbox = [int(v) for v in smoothed]
 
             active_ids.add(t.id)
+            self._allegiance[t.id] = src_det.allegiance
             obj = TrackedObject(t.id, src_det)
             obj.confirmed = t.id in self._confirmed_ids
             obj.is_primary = t.id == self._primary_id
             objects.append(obj)
 
-        # Prune stale smooth entries
+        # Prune stale smooth and allegiance entries
         gone = set(self._smooth) - active_ids
         for tid in gone:
             del self._smooth[tid]
+            self._allegiance.pop(tid, None)
 
         return objects
 
@@ -91,14 +95,22 @@ class TargetTracker:
     #                              <-- R --     <-- R --
     # Invariant: Confirmed always implies Followed (_primary_id == confirmed id).
 
-    def confirm_target(self, track_id: int) -> None:
-        """Followed → Confirmed. Also locks follow so the invariant holds."""
+    def confirm_target(self, track_id: int) -> bool:
+        """Followed → Confirmed. Returns False (no-op) if the track is a friend."""
+        if self._allegiance.get(track_id) == "friend":
+            print(f"[tracker] IFF: track {track_id} is FRIEND -- confirm blocked")
+            return False
         self._confirmed_ids = {track_id}
         self._primary_id    = track_id
+        return True
 
-    def lock_follow(self, track_id: int) -> None:
-        """Proposed → Followed."""
+    def lock_follow(self, track_id: int) -> bool:
+        """Proposed → Followed. Returns False (no-op) if the track is a friend."""
+        if self._allegiance.get(track_id) == "friend":
+            print(f"[tracker] IFF: track {track_id} is FRIEND -- follow blocked")
+            return False
         self._primary_id = track_id
+        return True
 
     def release(self) -> int | None:
         """Step back one level.

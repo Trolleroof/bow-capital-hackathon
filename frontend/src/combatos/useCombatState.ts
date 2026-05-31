@@ -69,6 +69,7 @@ export interface Detection {
   st: 'TRACK' | 'OBSERVE' | 'LOST'
   tone: 'amber' | 'candidate' | 'mute' | ''
   confirmed: boolean
+  allegiance: 'friend' | 'foe' | null
 }
 
 export interface LogEntry {
@@ -272,6 +273,7 @@ export function useCombatState() {
                 id: number; cls: string; conf: number
                 bbox: [number, number, number, number]
                 is_primary: boolean; is_candidate: boolean; confirmed: boolean
+                allegiance?: 'friend' | 'foe' | null
               }> = (msg.objects as typeof objects) ?? []
               const mapped: Detection[] = objects.map((o) => ({
                 id: `T-${String(o.id).padStart(4, '0')}`,
@@ -284,6 +286,7 @@ export function useCombatState() {
                 st: (o.confirmed || o.is_primary) ? 'TRACK' : 'OBSERVE',
                 tone: o.is_primary ? 'amber' : o.is_candidate ? 'candidate' : '',
                 confirmed: o.confirmed,
+                allegiance: o.allegiance ?? null,
               }))
               setT(p => ({ ...p, dets: mapped }))
             } else if (msg.topic === 'recon') {

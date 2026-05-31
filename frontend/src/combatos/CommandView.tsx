@@ -195,6 +195,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
                 <span className="r">CONF</span>
                 <span className="r">RNG·M</span>
                 <span className="r">BRG</span>
+                <span>IFF</span>
                 <span>STATUS</span>
               </div>
               <div className="dt-body">
@@ -211,6 +212,9 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
                     <span className="r mono">{d.conf.toFixed(2)}</span>
                     <span className="r mono">{isNaN(d.rng) ? '---' : d.rng.toFixed(1)}</span>
                     <span className="r mono">{isNaN(d.brg) ? '---' : String(d.brg).padStart(3, '0')}</span>
+                    <span className={d.allegiance ? `dt-iff dt-iff--${d.allegiance}` : 'dt-iff'}>
+                      {d.allegiance ? d.allegiance.toUpperCase() : '---'}
+                    </span>
                     <span className="dt-st">{d.confirmed ? 'CONFIRMED' : d.st}</span>
                   </div>
                 ))}

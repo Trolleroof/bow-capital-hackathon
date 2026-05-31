@@ -95,6 +95,7 @@ class Detection(BaseModel):
     bbox: list[float]          # [x, y, w, h] — pixel coords, normalised 0-1
     is_target: bool = False
     confirmed: bool = False    # True after operator clicks CONFIRM
+    allegiance: str | None = None  # "friend" | "foe" | None (IFF disabled or unknown)
 
 
 class DetectionsMessage(BaseModel):

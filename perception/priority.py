@@ -16,7 +16,8 @@ def score(obj: TrackedObject) -> float:
 
 def top_candidate(objects: list[TrackedObject]) -> TrackedObject | None:
     """Instantaneous top candidate (used internally by the buffer)."""
-    candidates = [o for o in objects if not o.confirmed and not o.is_primary]
+    candidates = [o for o in objects if not o.confirmed and not o.is_primary
+                  and o.allegiance != "friend"]
     if not candidates:
         return None
     return max(candidates, key=score)

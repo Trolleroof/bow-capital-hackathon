@@ -19,6 +19,7 @@ class _OverlayObject(Protocol):
     has_face: bool
     confirmed: bool
     is_primary: bool
+    allegiance: str | None
 
 _C = {
     "troop":     (0,   220, 255),
@@ -30,6 +31,8 @@ _C = {
     "primary":   (60,   60, 255),
     "candidate": (200,  80, 255),
     "white":     (220, 220, 220),
+    "friend":    (0,   200,  60),   # green
+    "foe":       (0,    60, 220),   # red (BGR)
 }
 
 _FONT = cv2.FONT_HERSHEY_PLAIN
@@ -65,17 +68,24 @@ def _draw_target(frame, obj, color, state):
         cv2.circle(frame, (x + w//2, y + h//2), 3, color, -1, cv2.LINE_AA)
 
     # label
+    iff_suffix = f"  {obj.allegiance.upper()}" if obj.allegiance else ""
     if state == "confirmed":
         tag = f"TGT-{obj.id:02d}  {obj.cls.upper()}  {obj.conf:.0%}"
         if obj.has_face: tag += "  FACE"
+        tag += iff_suffix
     elif state == "primary":
-        tag = f"LOCK  {obj.id:02d}  {obj.cls.upper()}"
+        tag = f"LOCK  {obj.id:02d}  {obj.cls.upper()}{iff_suffix}"
     elif state == "candidate":
-        tag = f"{obj.id:02d}  {obj.cls.upper()}"
+        tag = f"{obj.id:02d}  {obj.cls.upper()}{iff_suffix}"
     else:
-        tag = f"{obj.id:02d} {obj.cls[0].upper()}"
+        tag = f"{obj.id:02d} {obj.cls[0].upper()}{iff_suffix}"
 
     _label(frame, tag, cx, y - 6, color, bold=(state == "confirmed"))
+
+    # IFF indicator bar (colored strip above the bounding box)
+    if obj.allegiance:
+        iff_color = _C[obj.allegiance]
+        cv2.line(frame, (x, y - 3), (x + w, y - 3), iff_color, 2, cv2.LINE_AA)
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +99,10 @@ def _draw_hud(frame, objects, candidate):
     followed  = next((o for o in objects if o.is_primary and not o.confirmed), None)
     confirmed = next((o for o in objects if o.confirmed), None)
 
+    friends = sum(1 for o in objects if o.allegiance == "friend")
+    foes    = sum(1 for o in objects if o.allegiance == "foe")
+    iff_any = friends > 0 or foes > 0
+
     lines = [
         (f"TRACKS    {len(objects):02d}",                                          _C["white"]),
         (f"CANDIDATE  {'--' if not candidate else f'{candidate.id:02d} {candidate.cls.upper()}'}",
@@ -98,6 +112,10 @@ def _draw_hud(frame, objects, candidate):
         (f"CONFIRMED  {'--' if not confirmed else f'{confirmed.id:02d} {confirmed.cls.upper()}'}  [C]",
          _C["confirmed"] if confirmed else _C["white"]),
     ]
+    if iff_any:
+        lines.append(
+            (f"IFF  FRD:{friends:02d}  FOE:{foes:02d}", _C["white"])
+        )
 
     pad, lh = 10, 18
     panel_h = pad * 2 + len(lines) * lh

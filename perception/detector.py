@@ -15,6 +15,7 @@ class Detection:
     conf: float
     bbox: list[int]    # [x, y, w, h]
     has_face: bool = False
+    allegiance: str | None = None  # "friend" | "foe" | None (when IFF disabled)
 
 
 class Detector:
@@ -53,7 +54,25 @@ class Detector:
             detections.append(det)
 
         self._annotate_faces(frame, detections)
+        if config.IFF_ENABLED:
+            self._annotate_iff(frame, detections)
         return detections
+
+    def _annotate_iff(self, frame: np.ndarray, detections: list[Detection]) -> None:
+        """Classify each detection as friend or foe by average crop brightness.
+
+        Dark average (< IFF_DARK_THRESHOLD) = friend; light average = foe.
+        """
+        fh, fw = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        for det in detections:
+            x, y, bw, bh = det.bbox
+            crop = gray[max(0, y):min(fh, y + bh), max(0, x):min(fw, x + bw)]
+            if crop.size == 0:
+                det.allegiance = None
+                continue
+            avg = float(np.mean(crop))
+            det.allegiance = "friend" if avg < config.IFF_DARK_THRESHOLD else "foe"
 
     def _annotate_faces(self, frame: np.ndarray, detections: list[Detection]) -> None:
         """Run face detection only inside person/troop bounding boxes."""

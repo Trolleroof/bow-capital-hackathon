@@ -79,13 +79,12 @@ def _drain_commands(
         action = cmd.get("action")
         tid    = cmd.get("track_id")
         if action == "confirm" and tid is not None:
-            # Enforce state machine: confirm_target sets primary too, so this is always safe
-            tracker.confirm_target(tid)
-            gallery.confirm(tid)
-            print(f"[perception] CONFIRMED (remote) target {tid}")
+            if tracker.confirm_target(tid):
+                gallery.confirm(tid)
+                print(f"[perception] CONFIRMED (remote) target {tid}")
         elif action == "follow" and tid is not None:
-            tracker.lock_follow(tid)
-            print(f"[perception] FOLLOW LOCK (remote) → {tid}")
+            if tracker.lock_follow(tid):
+                print(f"[perception] FOLLOW LOCK (remote) → {tid}")
         elif action == "unconfirm":
             tracker.unconfirm_all()
             gallery.clear()
@@ -257,14 +256,14 @@ def main() -> None:
             # Follow confirmed target if it's visible; otherwise follow proposed candidate
             target = confirmed_obj or candidate
             if target:
-                tracker.lock_follow(target.id)
-                print(f"[perception] FOLLOW LOCK → {target.id}")
+                if tracker.lock_follow(target.id):
+                    print(f"[perception] FOLLOW LOCK → {target.id}")
         elif key == ord("c"):
             # Confirm requires a followed target -- C on a bare candidate is not allowed
             if followed_obj:
-                tracker.confirm_target(followed_obj.id)
-                gallery.confirm(followed_obj.id)
-                print(f"[perception] CONFIRMED target {followed_obj.id} -- {gallery.debug_info()}")
+                if tracker.confirm_target(followed_obj.id):
+                    gallery.confirm(followed_obj.id)
+                    print(f"[perception] CONFIRMED target {followed_obj.id} -- {gallery.debug_info()}")
             else:
                 print("[perception] Press F first to follow a target before confirming")
         elif key == ord("u"):

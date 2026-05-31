@@ -215,3 +215,18 @@ FPV_INTERVAL = int(os.getenv("FPV_INTERVAL", "3"))
 # for RGB.  Detection pipeline is unaffected and continues to run on color.
 # Set to "1" to enable.
 GRAYSCALE_STREAM = os.getenv("GRAYSCALE_STREAM", "1") == "1"
+
+# ---------------------------------------------------------------------------
+# IFF (Identify Friend or Foe)
+#
+# When enabled, each detected object is classified as "friend" or "foe" based
+# on the average brightness of its bounding-box crop.  Dark average pixel value
+# (below IFF_DARK_THRESHOLD) → "friend"; light average → "foe".
+# Disabled by default -- set IFF_ENABLED=1 in .env to enable.
+# ---------------------------------------------------------------------------
+
+IFF_ENABLED = os.getenv("IFF_ENABLED", "0").lower() in ("1", "true", "yes")
+
+# Grayscale threshold (0-255) separating friend from foe.
+# Average crop brightness below this value → "friend"; at or above → "foe".
+IFF_DARK_THRESHOLD = int(os.getenv("IFF_DARK_THRESHOLD", "127"))

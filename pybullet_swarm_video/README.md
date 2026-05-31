@@ -26,6 +26,7 @@ These are the working rules for this prototype:
 - a small group of ground troops moves in scattered pockets below
 - the ground scene is dressed with berms, blast marks, concrete ruins, wrecks, perimeter walls, and sandbag emplacements so it reads more like a battlefield than a test pad
 - the sim will automatically use staged assets from `pybullet_swarm_video/resources/` when it can
+- the default FPV capture resolution is now `640x360` per drone
 - each drone renders its own first-person camera feed
 - the feeds are tiled into one output video
 - each drone also gets its own MP4 output by default
@@ -43,6 +44,7 @@ The current implementation is intentionally simple:
 - GUI runs are automatically stretched to a much longer duration so the window does not close almost immediately while you are flying or inspecting
 - the code is structured so a future policy adapter can replace the scripted controller
 - the current perception round-trip uses simulation ground truth for target projection
+- FPV rendering now uses mild camera shake, bank, vignette, grain, and motion-blur style post-processing to read more like surveillance footage than a raw test render
 
 ## Resource Loading
 
@@ -118,6 +120,15 @@ uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_demo \
   --seconds 5 \
   --fps 8 \
   --output output/smoke_test.mp4
+```
+
+If another machine is slower and the new default render resolution is too heavy in GUI mode, lower it explicitly:
+
+```bash
+uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_demo \
+  --gui \
+  --width 320 \
+  --height 180
 ```
 
 If they also want the orchestrated round-trip on another machine:

@@ -1,4 +1,8 @@
-"""Training API + WebSocket bridge for the CombatOS gym UI.
+"""Persistent backend API for the CombatOS gym UI.
+
+Starting this process does not train a policy. It only serves HTTP/WebSocket
+endpoints. Training is spawned on demand when the frontend calls
+``POST /api/train/start`` for a specific ``env_id``.
 
 HTTP (default :8787):
   POST /api/train/start   {"env_id","profile","timesteps"?}
@@ -9,14 +13,14 @@ HTTP (default :8787):
   POST /api/sim/start     {"env_id","policy","camera_mode"?,"selected_drone"?}
   POST /api/sim/stop
 
-WebSocket (:8766):
-  ws://localhost:8766/ws  — Broadcasts `topic: "train"` JSON lines.
-  ws://localhost:8765/sim/ws  — Broadcasts `topic: "pybullet_frame"` / `topic: "swarm"`.
+WebSocket (same port as HTTP, :8787):
+  ws://127.0.0.1:8787/ws       — Broadcasts `topic: "train"` JSON lines.
+  ws://127.0.0.1:8787/sim/ws   — Broadcasts `topic: "pybullet_frame"` / `topic: "swarm"`.
 
 Run:
-  uv run --project swarm python -m swarm.train_service
-  # or with uvicorn directly:
   uvicorn swarm.train_service:app --host 127.0.0.1 --port 8787
+  # compatibility wrapper:
+  uv run --project swarm python -m swarm.train_service
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from swarm.train import checkpoint_paths
@@ -42,10 +47,6 @@ REPO = os.path.dirname(HERE)
 
 HOST_HTTP = "127.0.0.1"
 PORT_HTTP = 8787
-HOST_WS = "0.0.0.0"
-PORT_WS = 8766
-HOST_SIM_WS = "127.0.0.1"
-PORT_SIM_WS = 8765
 
 _WS_CLIENTS: set[WebSocket] = set()
 _SIM_WS_CLIENTS: set[WebSocket] = set()
@@ -53,6 +54,7 @@ _LOCK = threading.Lock()
 _MAIN_LOOP: asyncio.AbstractEventLoop | None = None
 _JOBS: dict[str, dict[str, Any]] = {}
 _SIM_JOB: dict[str, Any] | None = None
+_NO_CLIENT_WARNED_AT = 0.0
 
 
 # ── request/response models ─────────────────────────────────────────────────
@@ -92,11 +94,23 @@ def _schedule_ws_send(ws: WebSocket, line: str) -> None:
 
 def _broadcast_sync_line(line: str) -> None:
     """Queue a JSON line for broadcast to train clients (sync context)."""
+    global _NO_CLIENT_WARNED_AT
     with _LOCK:
         clients = list(_WS_CLIENTS)
     if not clients:
-        print("[train] warning: no WebSocket clients to broadcast to", flush=True)
+        # Training still runs; metrics are persisted to train-events.ndjson and
+        # GET /api/train/status. Avoid spamming the terminal when the gym UI
+        # is not open or the socket has not connected yet.
+        now = time.time()
+        if now - _NO_CLIENT_WARNED_AT > 120.0:
+            print(
+                "[train] note: no gym WebSocket clients connected — "
+                "open the gym UI or connect to ws://127.0.0.1:8787/ws for live metrics",
+                flush=True,
+            )
+            _NO_CLIENT_WARNED_AT = now
         return
+    _NO_CLIENT_WARNED_AT = 0.0
     for ws in clients:
         try:
             _schedule_ws_send(ws, line)
@@ -276,7 +290,22 @@ def _drive_sim_policy(env_id: str, policy: str, proc: subprocess.Popen) -> None:
         label = "random"
 
     dt = 0.1
+    ckpt_mtime: float = os.path.getmtime(ckpt) if os.path.exists(ckpt) else 0.0
+    reload_check_interval = 50  # frames
+    frame_count = 0
     while proc.poll() is None:
+        # Hot-reload checkpoint if training produced a new one since we started.
+        frame_count += 1
+        if frame_count % reload_check_interval == 0 and policy == "trained" and os.path.exists(ckpt):
+            mtime = os.path.getmtime(ckpt)
+            if mtime > ckpt_mtime:
+                try:
+                    policy_fn = _trained_policy(ckpt)
+                    ckpt_mtime = mtime
+                    label = "trained"
+                    print(f"[pybullet-sim] reloaded updated checkpoint for {env_id}", flush=True)
+                except Exception as e:
+                    print(f"[pybullet-sim] checkpoint reload failed: {e}", flush=True)
         actions = policy_fn(obs)
         obs, _, dones, _ = env.step(actions)
         if dones.all():
@@ -340,6 +369,11 @@ def _start_training(env_id: str, profile: str, timesteps: int) -> dict:
         }
 
     threading.Thread(target=_tail_training, args=(env_id, proc), daemon=True).start()
+    print(
+        f"[train-service] started training env_id={env_id} profile={profile} "
+        f"timesteps={timesteps} pid={proc.pid}",
+        flush=True,
+    )
     return {"ok": True, "env_id": env_id, "running": True}
 
 
@@ -394,7 +428,7 @@ def _start_sim(env_id: str, policy: str, camera_mode: str, selected_drone: int) 
                     "ok": True,
                     "env_id": env_id,
                     "running": True,
-                    "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
+                    "ws_url": f"ws://{HOST_HTTP}:{PORT_HTTP}/sim/ws",
                 }
             _kill_proc(existing["proc"])
             existing["running"] = False
@@ -448,7 +482,7 @@ def _start_sim(env_id: str, policy: str, camera_mode: str, selected_drone: int) 
         "camera_mode": camera_mode,
         "selected_drone": selected_drone,
         "running": True,
-        "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
+        "ws_url": f"ws://{HOST_HTTP}:{PORT_HTTP}/sim/ws",
     }
 
 
@@ -501,6 +535,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CombatOS Train Service", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/api/train/status")
@@ -536,7 +582,7 @@ async def get_sim_status() -> dict:
         "selected_drone": job.get("selected_drone", 0),
         "running": running,
         "returncode": job.get("returncode"),
-        "ws_url": f"ws://{HOST_SIM_WS}:{PORT_SIM_WS}",
+        "ws_url": f"ws://{HOST_HTTP}:{PORT_HTTP}/sim/ws",
     }
 
 
@@ -544,6 +590,18 @@ async def get_sim_status() -> dict:
 async def post_train_start(req: TrainStartRequest) -> dict:
     """Start training a scenario."""
     result = _start_training(req.env_id, req.profile, req.timesteps)
+    if result.get("ok"):
+        print(
+            f"[train-service] POST /api/train/start accepted env_id={req.env_id} "
+            f"profile={req.profile} timesteps={req.timesteps}",
+            flush=True,
+        )
+    else:
+        print(
+            f"[train-service] POST /api/train/start rejected env_id={req.env_id}: "
+            f"{result.get('error')}",
+            flush=True,
+        )
     return result
 
 
@@ -588,6 +646,21 @@ async def websocket_train(websocket: WebSocket):
     """Train WebSocket endpoint."""
     await websocket.accept()
     _WS_CLIENTS.add(websocket)
+    global _NO_CLIENT_WARNED_AT
+    _NO_CLIENT_WARNED_AT = 0.0
+    # Late joiners (e.g. socket opened after POST /train/start) get the latest
+    # event per job so the dashboard is not stuck waiting for the next update.
+    with _LOCK:
+        last_events = [
+            job["last"]
+            for job in _JOBS.values()
+            if job.get("last")
+        ]
+    for event in last_events:
+        try:
+            await websocket.send_text(json.dumps(event))
+        except Exception:
+            break
     try:
         while True:
             await websocket.receive_text()

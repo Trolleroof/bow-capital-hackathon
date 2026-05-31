@@ -9,13 +9,13 @@
  *   input  "obs"     float32  (N, OBS_DIM)   dynamic axis 0 = batch
  *   output "action"  float32  (N, 2)         deterministic, in [-1, 1]
  *
- * OBS_DIM is read from `sim.ts` (currently 48 with the scenario-obstacles slots).
+ * OBS_DIM is read from `sim.ts` (64 with scenario task features).
  */
 import * as ort from 'onnxruntime-web'
 import { OBS_DIM, ACT_DIM } from './sim'
 
 export interface Policy {
-  /** Run inference: obs is N*36 flat float32, returns N*2 flat float32. */
+  /** Run inference: obs is N*OBS_DIM flat float32, returns N*2 flat float32. */
   act(obs: Float32Array, n: number): Promise<Float32Array>
   /** Which ORT execution provider actually loaded (for the HUD). */
   readonly provider: string

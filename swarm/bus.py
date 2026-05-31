@@ -87,7 +87,11 @@ def swarm_message(env: SwarmEnv) -> dict:
                 "alive": bool(env.alive[i]),
             }
         )
-    return {"t": round(float(env.t), 3), "comms": "denied", "agents": agents}
+    msg: dict = {"t": round(float(env.t), 3), "comms": "denied", "agents": agents}
+    # Expose target position so the PyBullet renderer can draw it correctly.
+    if hasattr(env, "target_pos") and env.target_pos is not None:
+        msg["target_pos"] = [round(float(env.target_pos[0]), 3), round(float(env.target_pos[1]), 3)]
+    return msg
 
 
 def _random_policy(env: SwarmEnv):

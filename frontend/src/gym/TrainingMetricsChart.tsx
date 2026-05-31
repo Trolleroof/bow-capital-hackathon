@@ -54,6 +54,14 @@ export function TrainingMetricsChart({ history }: TrainingMetricsChartProps) {
           />
           <Line
             type="monotone"
+            dataKey="task_score"
+            stroke="#d5b76a"
+            dot={false}
+            isAnimationActive={false}
+            name="Task Score"
+          />
+          <Line
+            type="monotone"
             dataKey="coverage"
             stroke="#20c997"
             dot={false}

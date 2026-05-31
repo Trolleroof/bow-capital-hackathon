@@ -80,6 +80,16 @@ SCENARIO_OBSTACLES: dict[str, list[Obstacle]] = {
         # No collidable scenery — the center divider is 4 cm thick and the score
         # gates are 1.8 cm tall; both are visual only.
     ],
+    "navigate-to-target": [
+        # Corridor obstacles the single drone must weave through left→right.
+        _box(-4.0,  2.5, 0.5, 1.2, h=1.2, z=0.6),   # obstacle row 1 top
+        _box(-4.0, -2.5, 0.5, 1.2, h=1.2, z=0.6),   # obstacle row 1 bottom
+        _cyl(-1.5,  1.8, 0.7, h=1.5, z=0.75),         # pillar cluster
+        _cyl(-1.5, -1.8, 0.7, h=1.5, z=0.75),
+        _box( 1.5,  3.2, 0.5, 1.0, h=1.0, z=0.5),   # mid-field wall
+        _box( 1.5, -3.2, 0.5, 1.0, h=1.0, z=0.5),
+        _cyl( 4.2,  0.0, 0.8, h=1.8, z=0.9),          # choke-point pillar near goal
+    ],
 }
 
 

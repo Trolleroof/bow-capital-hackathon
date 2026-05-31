@@ -1,10 +1,12 @@
 /**
- * Starts swarm/train_service.py when Vite dev server boots so Train Policy works
- * with only `bun dev` (no separate terminal).
+ * Optional backend autostart for local demos.
  *
- * If :8787 is already alive at startup it's reused, but a background watchdog
- * respawns the service if it later dies (covers the crash-after-probe case).
- * Disable auto-start: VITE_AUTO_TRAIN_SERVICE=0 bun dev
+ * Default workflow is now explicit:
+ *   uv run --project swarm uvicorn swarm.backend:app --host 127.0.0.1 --port 8787
+ *   bun dev
+ *
+ * Opt into autostart only when desired:
+ *   VITE_AUTO_TRAIN_SERVICE=1 bun dev
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -32,7 +34,7 @@ async function probeTrainService(): Promise<boolean> {
 }
 
 function spawnTrainService(): ChildProcess {
-  const proc = spawn('uv', ['run', '--project', 'swarm', 'python', '-m', 'swarm.train_service'], {
+  const proc = spawn('uv', ['run', '--project', 'swarm', 'uvicorn', 'swarm.backend:app', '--host', '127.0.0.1', '--port', '8787'], {
     cwd: REPO_ROOT,
     stdio: 'inherit',
     env: { ...process.env },
@@ -41,7 +43,7 @@ function spawnTrainService(): ChildProcess {
   proc.on('error', (err) => {
     console.error(
       '[train-service] Failed to start (is `uv` installed?). Run manually:\n' +
-        '  uv run --project swarm python -m swarm.train_service',
+        '  uv run --project swarm uvicorn swarm.backend:app --host 127.0.0.1 --port 8787',
     )
     console.error(err.message)
   })
@@ -68,7 +70,7 @@ export function trainServicePlugin(): Plugin {
     if (shuttingDown) return
     if (proc && !proc.killed) return
     if (await probeTrainService()) return
-    console.log('[train-service] (re)starting MAPPO bridge on :8787 / ws://localhost:8766 …')
+    console.log('[backend] (re)starting API on :8787 …')
     proc = spawnTrainService()
     startedByPlugin = true
   }
@@ -90,14 +92,16 @@ export function trainServicePlugin(): Plugin {
     name: 'combatos-train-service',
     apply: 'serve',
     async configureServer() {
-      if (process.env.VITE_AUTO_TRAIN_SERVICE === '0') {
-        console.log('[train-service] auto-start disabled (VITE_AUTO_TRAIN_SERVICE=0)')
+      if (process.env.VITE_AUTO_TRAIN_SERVICE !== '1') {
+        console.log(
+          '[backend] auto-start disabled. Run: uv run --project swarm uvicorn swarm.backend:app --host 127.0.0.1 --port 8787',
+        )
         return
       }
 
       if (await probeTrainService()) {
         console.log(
-          '[train-service] already running on :8787 — reusing (Train Policy should work)',
+          '[backend] already running on :8787 — reusing',
         )
       } else {
         await ensureRunning()

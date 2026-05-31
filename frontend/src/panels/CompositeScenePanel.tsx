@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { ALTITUDE, GRID, SwarmEnv, WORLD_HALF, MAX_SPEED } from '../swarm/sim'
+import { loadPolicy, type Policy } from '../swarm/policy'
 import { makeDrone, updateDrone, Trail, type Drone } from '../swarm/drone'
-import { drawMinimap, type MiniAgent } from '../swarm/minimap'
+import { drawMinimap, type MiniAgent, type MiniMarker } from '../swarm/minimap'
 import { getScenarioDefaults } from '../gym/battlefieldParams'
 
 interface PoseSample {
@@ -30,11 +31,6 @@ const WORLD_Y_MIN = 0.35
 const WORLD_Y_MAX = 11
 const WORLD_XZ_LIMIT = WORLD_HALF
 
-interface Waypoint {
-  x: number
-  y: number
-}
-
 // scene mapping: world (x,y,z) -> three (x = x, up = z, depth = -y)
 function scenePoint(x: number, y: number, z: number): THREE.Vector3 {
   return new THREE.Vector3(x, z, -y)
@@ -47,26 +43,6 @@ function clampWorldVector(point: THREE.Vector3, minY = WORLD_Y_MIN, maxY = WORLD
   return point
 }
 
-function wrapIndex(index: number, length: number) {
-  return ((index % length) + length) % length
-}
-
-function routePoint(route: Waypoint[], phase: number): Waypoint {
-  if (route.length === 0) return { x: 0, y: 0 }
-  if (route.length === 1) return route[0]
-
-  const raw = Math.floor(phase)
-  const i = wrapIndex(raw, route.length)
-  const a = route[i]
-  const b = route[(i + 1) % route.length]
-  const t = phase - raw
-  const eased = t * t * (3 - 2 * t)
-  return {
-    x: a.x + (b.x - a.x) * eased,
-    y: a.y + (b.y - a.y) * eased,
-  }
-}
-
 function hashString(value: string) {
   let hash = 2166136261
   for (let i = 0; i < value.length; i++) {
@@ -74,98 +50,6 @@ function hashString(value: string) {
     hash = Math.imul(hash, 16777619)
   }
   return hash >>> 0
-}
-
-function missionRoutes(envId: string): Waypoint[][] {
-  if (envId === 'drone-vs-drone') {
-    return [
-      [{ x: -8, y: -4 }, { x: -4, y: -2 }, { x: -1.2, y: 0 }, { x: -4, y: 2 }, { x: -8, y: 4 }],
-      [{ x: -8, y: 0 }, { x: -4, y: -1.6 }, { x: -0.8, y: 0.6 }, { x: -4, y: 1.7 }],
-      [{ x: -7, y: 4 }, { x: -3, y: 3 }, { x: -1.4, y: 0.7 }, { x: -5, y: -2.8 }],
-      [{ x: 8, y: -4 }, { x: 4, y: -2 }, { x: 1.4, y: 0 }, { x: 4, y: 2 }, { x: 8, y: 4 }],
-      [{ x: 8, y: 0 }, { x: 4, y: -1.4 }, { x: 1, y: -0.5 }, { x: 4, y: 1.8 }],
-      [{ x: 7, y: 4 }, { x: 3, y: 3 }, { x: 1.2, y: 0.6 }, { x: 5, y: -2.8 }],
-    ]
-  }
-
-  if (envId === 'moving-target-track') {
-    return [
-      [{ x: -8, y: -2 }, { x: -3, y: -4 }, { x: 2, y: -3 }, { x: 7, y: -1 }, { x: 3, y: 2 }, { x: -4, y: 2 }],
-      [{ x: -7, y: 3 }, { x: -2, y: 5 }, { x: 4, y: 4 }, { x: 8, y: 2 }, { x: 2, y: -1 }, { x: -5, y: -1 }],
-      [{ x: -5, y: 0 }, { x: 0, y: -2 }, { x: 5, y: -1 }, { x: 6, y: 3 }, { x: 0, y: 4 }],
-      [{ x: -6, y: -4 }, { x: -1, y: -5 }, { x: 5, y: -4 }, { x: 8, y: 0 }, { x: 1, y: 1 }],
-    ]
-  }
-
-  if (envId === 'defend-asset') {
-    return [
-      [{ x: -4, y: 0 }, { x: -2, y: 3.5 }, { x: 2, y: 3.5 }, { x: 4, y: 0 }, { x: 2, y: -3.5 }, { x: -2, y: -3.5 }],
-      [{ x: 0, y: 4.5 }, { x: 3.8, y: 1.5 }, { x: 2.3, y: -3.8 }, { x: -2.8, y: -3.6 }, { x: -4, y: 1.2 }],
-      [{ x: 4.5, y: 0 }, { x: 1.5, y: -3.8 }, { x: -3.8, y: -2.2 }, { x: -3.5, y: 2.6 }, { x: 1.4, y: 4 }],
-      [{ x: 0, y: -4.5 }, { x: -3.8, y: -1.5 }, { x: -2.3, y: 3.8 }, { x: 2.8, y: 3.6 }, { x: 4, y: -1.2 }],
-      [{ x: -5.5, y: -5.5 }, { x: -4, y: 0 }, { x: -5.5, y: 5.5 }, { x: 0, y: 4 }, { x: 5.5, y: 5.5 }, { x: 4, y: 0 }, { x: 5.5, y: -5.5 }, { x: 0, y: -4 }],
-    ]
-  }
-
-  if (envId === 'swarm-vs-swarm-race') {
-    return [
-      [{ x: -8, y: -7 }, { x: -5, y: -3 }, { x: -8, y: 1 }, { x: -5, y: 6 }, { x: -1, y: 4 }, { x: -2, y: -5 }],
-      [{ x: -5, y: -8 }, { x: -2, y: -4 }, { x: -5, y: 1 }, { x: -1, y: 7 }, { x: 2, y: 3 }, { x: 1, y: -6 }],
-      [{ x: -2, y: -7 }, { x: 1, y: -3 }, { x: -1, y: 2 }, { x: 2, y: 7 }, { x: 5, y: 2 }, { x: 4, y: -5 }],
-      [{ x: 8, y: 7 }, { x: 5, y: 3 }, { x: 8, y: -1 }, { x: 5, y: -6 }, { x: 1, y: -4 }, { x: 2, y: 5 }],
-      [{ x: 5, y: 8 }, { x: 2, y: 4 }, { x: 5, y: -1 }, { x: 1, y: -7 }, { x: -2, y: -3 }, { x: -1, y: 6 }],
-      [{ x: 2, y: 7 }, { x: -1, y: 3 }, { x: 1, y: -2 }, { x: -2, y: -7 }, { x: -5, y: -2 }, { x: -4, y: 5 }],
-    ]
-  }
-
-  return [
-    [{ x: -8, y: -7 }, { x: -3, y: -7 }, { x: 2, y: -6 }, { x: 8, y: -5 }, { x: 8, y: -1 }, { x: 2, y: -1 }, { x: -5, y: -2 }],
-    [{ x: -8, y: 2 }, { x: -3, y: 3 }, { x: 2, y: 2 }, { x: 8, y: 1 }, { x: 8, y: 6 }, { x: 2, y: 7 }, { x: -6, y: 6 }],
-    [{ x: -7, y: -3 }, { x: -3, y: -2 }, { x: 0, y: 0 }, { x: 4, y: 1 }, { x: 8, y: 4 }],
-    [{ x: 7, y: 7 }, { x: 4, y: 4 }, { x: 1, y: 1 }, { x: -2, y: 0 }, { x: -6, y: 1 }],
-    [{ x: -6, y: 7 }, { x: -1, y: 5 }, { x: 4, y: 6 }, { x: 7, y: 2 }, { x: 3, y: -2 }, { x: -2, y: -4 }],
-  ]
-}
-
-function scriptedMissionActions(env: SwarmEnv, envId: string, now: number): Float32Array {
-  const routes = missionRoutes(envId)
-  const actions = new Float32Array(env.n * 2)
-  const phaseBase = now / 5200
-  const stepScale = MAX_SPEED * 0.1
-
-  for (let i = 0; i < env.n; i++) {
-    if (!env.alive[i]) continue
-    const route = routes[i % routes.length]
-    const target = routePoint(route, phaseBase + i * 0.18)
-    const px = env.pos[i * 2]
-    const py = env.pos[i * 2 + 1]
-    let ax = (target.x - px) / stepScale
-    let ay = (target.y - py) / stepScale
-
-    for (let j = 0; j < env.n; j++) {
-      if (i === j || !env.alive[j]) continue
-      const dx = px - env.pos[j * 2]
-      const dy = py - env.pos[j * 2 + 1]
-      const d2 = dx * dx + dy * dy
-      if (d2 > 0.0001 && d2 < 2.8) {
-        const push = (2.8 - d2) / 2.8
-        ax += (dx / Math.sqrt(d2)) * push * 0.85
-        ay += (dy / Math.sqrt(d2)) * push * 0.85
-      }
-    }
-
-    const edge = WORLD_HALF - 1.2
-    if (px > edge) ax -= 1.1
-    if (px < -edge) ax += 1.1
-    if (py > edge) ay -= 1.1
-    if (py < -edge) ay += 1.1
-
-    const mag = Math.max(1, Math.hypot(ax, ay))
-    actions[i * 2] = Math.max(-1, Math.min(1, ax / mag))
-    actions[i * 2 + 1] = Math.max(-1, Math.min(1, ay / mag))
-  }
-
-  return actions
 }
 
 function getMissionSimParams(envId: string) {
@@ -182,26 +66,53 @@ function getMissionSimParams(envId: string) {
 function seedMissionEnv(env: SwarmEnv, envId: string) {
   env.reset(hashString(envId))
   env.vel.fill(0)
-  env.covered.fill(0)
   env.reviveAll()
-
-  const routes = missionRoutes(envId)
-  for (let i = 0; i < env.n; i++) {
-    const start = routes[i % routes.length]?.[0] ?? { x: 0, y: 0 }
-    env.pos[i * 2] = start.x
-    env.pos[i * 2 + 1] = start.y
-  }
-
-  env.steps = 0
-  env.step(new Float32Array(env.n * 2))
-  env.steps = 0
-  env.vel.fill(0)
 }
 
 function createMissionEnv(envId: string) {
   const env = new SwarmEnv(400, 7, getMissionSimParams(envId), envId)
   seedMissionEnv(env, envId)
   return env
+}
+
+function hasMissionTarget(scenarioId: string | null) {
+  return scenarioId === 'moving-target-track' || scenarioId === 'search-and-interdict'
+}
+
+function getMissionMarkers(env: SwarmEnv): MiniMarker[] {
+  const markers: MiniMarker[] = []
+
+  if (hasMissionTarget(env.scenarioId)) {
+    markers.push({
+      kind: 'target',
+      x: env.targetPos[0],
+      y: env.targetPos[1],
+      active: env.scenarioId !== 'search-and-interdict' || env.contactStep !== null,
+    })
+  }
+
+  if (env.scenarioId === 'defend-asset') {
+    markers.push({ kind: 'asset', x: env.assetPos[0], y: env.assetPos[1] })
+  }
+
+  for (let i = 0; i < env.hostileAlive.length; i++) {
+    markers.push({
+      kind: 'hostile',
+      x: env.hostilePos[i * 2],
+      y: env.hostilePos[i * 2 + 1],
+      active: env.hostileAlive[i],
+    })
+  }
+
+  for (let i = 0; i < env.rivalPos.length / 2; i++) {
+    markers.push({
+      kind: 'rival',
+      x: env.rivalPos[i * 2],
+      y: env.rivalPos[i * 2 + 1],
+    })
+  }
+
+  return markers
 }
 
 function makeOrbitPan(keys: Record<string, boolean>, dt: number) {
@@ -281,6 +192,8 @@ export default function CompositeScenePanel({
   const mountRef = useRef<HTMLDivElement | null>(null)
   const miniRef = useRef<HTMLCanvasElement | null>(null)
   const envRef = useRef(createMissionEnv(envId))
+  const policyRef = useRef<Policy | null>(null)
+  const inferringRef = useRef(false)
   const missionActiveRef = useRef(false)
   const resetNextRef = useRef(false)
   const reviveNextRef = useRef(false)
@@ -372,6 +285,11 @@ export default function CompositeScenePanel({
   }, [])
 
   useEffect(() => {
+    let canceled = false
+    policyRef.current = null
+    inferringRef.current = false
+    envRef.current = createMissionEnv(envId)
+
     if (!policyEnabled) {
       missionActiveRef.current = false
       setProvider('required')
@@ -383,14 +301,35 @@ export default function CompositeScenePanel({
       return
     }
 
-    missionActiveRef.current = true
     seedMissionEnv(envRef.current, envId)
-    setProvider('scripted')
+    missionActiveRef.current = false
+    setProvider('loading')
     setAlive(envRef.current.nAlive())
     setCoverage(envRef.current.coverage())
     setMeanAction(0)
-    setStatus(NOMINAL)
+    setStatus('loading trained policy controller')
     setLost(false)
+    void loadPolicy(envId)
+      .then((policy) => {
+        if (canceled) return
+        policyRef.current = policy
+        missionActiveRef.current = true
+        setProvider(policy.provider)
+        setStatus(NOMINAL)
+        setLost(false)
+      })
+      .catch((err) => {
+        if (canceled) return
+        policyRef.current = null
+        missionActiveRef.current = false
+        setProvider('failed')
+        setStatus(`policy load failed · ${err instanceof Error ? err.message : 'unknown error'}`)
+        setLost(true)
+      })
+
+    return () => {
+      canceled = true
+    }
   }, [envId, policyEnabled])
 
   useEffect(() => {
@@ -467,6 +406,26 @@ export default function CompositeScenePanel({
     upperFrame.position.y = 1.6
     boundary.add(lowerFrame, upperFrame)
     scene.add(boundary)
+
+    const targetGroup = new THREE.Group()
+    const targetRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.42, 0.7, 36),
+      new THREE.MeshBasicMaterial({
+        color: 0xffcf66,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+      }),
+    )
+    targetRing.rotation.x = -Math.PI / 2
+    const targetCore = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 20, 12),
+      new THREE.MeshBasicMaterial({ color: 0xffcf66 }),
+    )
+    targetCore.position.y = 0.34
+    targetGroup.add(targetRing, targetCore)
+    targetGroup.visible = false
+    scene.add(targetGroup)
 
     // --- coverage paint: one instanced quad per grid cell, shown as covered ---
     const env0 = envRef.current
@@ -557,7 +516,6 @@ export default function CompositeScenePanel({
 
     let raf = 0
     let last = performance.now()
-    const missionStartedAt = last
     let lastUIUpdate = 0
     const animate = (now: number) => {
       raf = requestAnimationFrame(animate)
@@ -571,6 +529,11 @@ export default function CompositeScenePanel({
 
       coverMesh.visible = missionLaunched
       trajectoryLine.visible = missionLaunched
+      targetGroup.visible = missionLaunched && hasMissionTarget(env.scenarioId)
+      if (targetGroup.visible) {
+        targetGroup.position.copy(scenePoint(env.targetPos[0], env.targetPos[1], 0.08))
+        targetGroup.rotation.y = now * 0.0018
+      }
       drones.forEach((drone, i) => {
         drone.group.visible = missionLaunched
         trails[i].line.visible = missionLaunched
@@ -603,17 +566,37 @@ export default function CompositeScenePanel({
       if (frameTimer >= FRAME_MS && !stepping && missionLaunched) {
         frameTimer = 0
         stepping = true
-        const actions = scriptedMissionActions(env, envId, now - missionStartedAt)
-        env.step(actions)
-        setAlive(env.nAlive())
-        setCoverage(env.coverage())
-        let total = 0
-        for (let i = 0; i < env.n; i++) {
-          total += Math.hypot(actions[i * 2], actions[i * 2 + 1])
+        const policy = policyRef.current
+        if (policy && !inferringRef.current) {
+          inferringRef.current = true
+          const obs = env.observe()
+          policy.act(obs, env.n)
+            .then((actions) => {
+              env.step(actions)
+              setAlive(env.nAlive())
+              setCoverage(env.coverage())
+              let total = 0
+              for (let i = 0; i < env.n; i++) {
+                total += Math.hypot(actions[i * 2], actions[i * 2 + 1])
+              }
+              setMeanAction(total / env.n)
+              refreshCoverage()
+            })
+            .catch((err) => {
+              missionActiveRef.current = false
+              statusRef.current = {
+                text: `policy inference failed · ${err instanceof Error ? err.message : 'unknown error'}`,
+                lost: true,
+              }
+              setProvider('failed')
+            })
+            .finally(() => {
+              inferringRef.current = false
+              stepping = false
+            })
+        } else {
+          stepping = false
         }
-        setMeanAction(total / env.n)
-        refreshCoverage()
-        stepping = false
       }
 
       // drones: smooth toward target, then drone.ts handles spin + dead-state.
@@ -673,6 +656,7 @@ export default function CompositeScenePanel({
             GRID,
             missionLaunched ? env.coveredCells() : new Uint8Array(GRID * GRID),
             agents,
+            missionLaunched ? getMissionMarkers(env) : [],
           )
         }
       }

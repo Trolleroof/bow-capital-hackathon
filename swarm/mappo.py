@@ -86,7 +86,7 @@ class MAPPO:
         val_buf = np.zeros(T, dtype=np.float32)
         done_buf = np.zeros(T, dtype=np.float32)
 
-        ep_rewards, ep_coverage = [], []
+        ep_rewards, ep_coverage, ep_task_score, ep_primary_value = [], [], [], []
         ep_ret = 0.0
 
         for t in range(T):
@@ -114,6 +114,8 @@ class MAPPO:
             if dones.any():
                 ep_rewards.append(ep_ret)
                 ep_coverage.append(info["coverage"])
+                ep_task_score.append(float(info.get("task_score", info["coverage"])))
+                ep_primary_value.append(float(info.get("primary_value", info.get("task_score", info["coverage"]))))
                 ep_ret = 0.0
                 obs = env.reset(seed=int(env.rng.integers(1 << 30)))
 
@@ -148,6 +150,8 @@ class MAPPO:
         stats = {
             "ep_rewards": ep_rewards,
             "ep_coverage": ep_coverage,
+            "ep_task_score": ep_task_score,
+            "ep_primary_value": ep_primary_value,
         }
         return batch, obs, stats
 

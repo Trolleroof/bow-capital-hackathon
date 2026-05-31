@@ -3,11 +3,34 @@
 export const TRAIN_API_BASE =
   import.meta.env.VITE_TRAIN_API_URL ?? ''
 
-export const TRAIN_WS_URL =
-  import.meta.env.VITE_TRAIN_WS_URL ?? 'ws://127.0.0.1:8787/ws'
+/** Host:port for train_service when bypassing the Vite dev proxy (WebSocket). */
+const TRAIN_BACKEND =
+  import.meta.env.VITE_TRAIN_BACKEND_HOST ?? '127.0.0.1:8787'
 
-export const PYBULLET_WS_URL =
-  import.meta.env.VITE_PYBULLET_WS_URL ?? 'ws://127.0.0.1:8787/sim/ws'
+function resolveTrainWsUrl(path: '/ws' | '/sim/ws', fallback: string): string {
+  const envKey = path === '/ws' ? 'VITE_TRAIN_WS_URL' : 'VITE_PYBULLET_WS_URL'
+  const fromEnv = import.meta.env[envKey]
+  if (fromEnv) return fromEnv
+
+  // HTTP /api is proxied through Vite, but the WS proxy is unreliable in Firefox.
+  // In dev, connect straight to train_service on :8787.
+  if (import.meta.env.DEV) {
+    return `ws://${TRAIN_BACKEND}${path}`
+  }
+
+  if (typeof window !== 'undefined') {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${proto}//${window.location.host}${path}`
+  }
+  return fallback
+}
+
+export const TRAIN_WS_URL = resolveTrainWsUrl('/ws', 'ws://127.0.0.1:8787/ws')
+
+export const PYBULLET_WS_URL = resolveTrainWsUrl(
+  '/sim/ws',
+  'ws://127.0.0.1:8787/sim/ws',
+)
 
 export const DEFAULT_TRAIN_TIMESTEPS = Number(
   import.meta.env.VITE_TRAIN_TIMESTEPS ?? 100_000,
@@ -21,6 +44,10 @@ export interface TrainEvent {
   step: number
   reward_mean: number
   coverage: number
+  task_score?: number
+  primary_metric?: string
+  primary_value?: number
+  task_metrics?: Record<string, number>
   losses?: {
     pg_loss?: number
     v_loss?: number

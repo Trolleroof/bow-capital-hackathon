@@ -1,7 +1,7 @@
 /**
  * sim.ts — faithful TypeScript port of swarm/env.py (SwarmEnv), inference parts.
  *
- * This replicates SwarmEnv's state, reset, step, and (critically) the 48-dim
+ * This replicates SwarmEnv's state, reset, step, and (critically) the 64-dim
  * local observation construction EXACTLY as env.py builds it, so the same
  * trained policy.onnx produces the same coordinated behavior in the browser
  * with no Python in the loop.
@@ -18,7 +18,8 @@
  *   [35:47]  M=3 nearest scenario obstacles: per slot (dx/h, dy/h, sx/h, sy/h)
  *            from obstacle center, zero-filled when fewer than M exist.
  *            Driven by frontend/src/swarm/obstacles.ts (mirrors swarm/obstacles.py).
- *   [47]     role flag normalized to [0,1]  (= role / max(1, nRoles-1))
+ *   [47:63]  scenario task features (targets, hostiles, rivals, asset cues)
+ *   [63]     role flag normalized to [0,1]  (= role / max(1, nRoles-1))
  *
  * BattlefieldParams also wires:
  *   - windSpeed / windDirRad: drift applied in step() after agent command
@@ -52,9 +53,10 @@ export const ROLE_DIM = 1
 export const M_OBSTACLES = 3
 export const OBSTACLE_FEATS = 4
 export const OBSTACLE_DIM = M_OBSTACLES * OBSTACLE_FEATS // 12
+export const TASK_DIM = 16
 export const AGENT_RADIUS = 0.4
 export const OBS_DIM =
-  OWN_DIM + NEIGHBOR_DIM + PATCH_DIM + OBSTACLE_DIM + ROLE_DIM // 48
+  OWN_DIM + NEIGHBOR_DIM + PATCH_DIM + OBSTACLE_DIM + TASK_DIM + ROLE_DIM // 64
 export const ACT_DIM = 2
 
 // world units per grid cell = (2 * WORLD_HALF) / GRID = 1.0 for defaults
@@ -114,6 +116,25 @@ export class SwarmEnv {
   alive: boolean[]
   covered: Uint8Array // grid*grid, row-major [cx*grid + cy]
   roles: Int32Array
+  hostilePos: Float32Array
+  hostileVel: Float32Array
+  hostileAlive: boolean[]
+  targetPos = new Float32Array(2)
+  targetVel = new Float32Array(2)
+  rivalPos: Float32Array
+  rivalVel: Float32Array
+  contestedCells: Int32Array
+  contestedOwner: Int8Array
+  assetPos = new Float32Array(2)
+  taskPhase = 'coverage'
+  breaches = 0
+  intercepts = 0
+  custodySteps = 0
+  lostTrackSteps = 0
+  contactStep: number | null = null
+  interceptStep: number | null = null
+  contestedScore = 0
+  rivalScore = 0
   steps = 0
   t = 0
 
@@ -138,6 +159,13 @@ export class SwarmEnv {
     this.alive = new Array(this.n).fill(true)
     this.covered = new Uint8Array(this.grid * this.grid)
     this.roles = new Int32Array(this.n)
+    this.hostilePos = new Float32Array(0)
+    this.hostileVel = new Float32Array(0)
+    this.hostileAlive = []
+    this.rivalPos = new Float32Array(0)
+    this.rivalVel = new Float32Array(0)
+    this.contestedCells = new Int32Array(0)
+    this.contestedOwner = new Int8Array(0)
     this.rand = mulberry32(seed)
     // Pre-compute wind vector (world-units per step = speed * DT)
     if (battlefield) {
@@ -176,22 +204,130 @@ export class SwarmEnv {
     return after - before
   }
 
-  reset(seed?: number): Float32Array {
-    if (seed !== undefined) this.rand = mulberry32(seed)
-    // spawn agents in a small cluster near center (env.py: world_half * 0.25)
-    const spawn = this.worldHalf * 0.25
+  private hostileCount(): number {
+    if (this.scenarioId !== 'drone-vs-drone' && this.scenarioId !== 'defend-asset') return 0
+    return Math.max(1, this.battlefield?.threat.hostileUasCount ?? (this.scenarioId === 'drone-vs-drone' ? 3 : 5))
+  }
+
+  private resetTaskEntities(): void {
+    const h = this.worldHalf
+    this.taskPhase =
+      this.scenarioId === 'drone-vs-drone' ? 'engage'
+        : this.scenarioId === 'search-and-interdict' ? 'search'
+          : this.scenarioId === 'swarm-vs-swarm-race' ? 'contest'
+            : this.scenarioId === 'defend-asset' ? 'defend'
+              : this.scenarioId === 'moving-target-track' ? 'track'
+                : 'coverage'
+    this.hostilePos = new Float32Array(0)
+    this.hostileVel = new Float32Array(0)
+    this.hostileAlive = []
+    this.rivalPos = new Float32Array(0)
+    this.rivalVel = new Float32Array(0)
+    this.contestedCells = new Int32Array(0)
+    this.contestedOwner = new Int8Array(0)
+    this.assetPos[0] = 0
+    this.assetPos[1] = 0
+    this.targetPos[0] = 0.45 * h
+    this.targetPos[1] = 0.35 * h
+    this.targetVel[0] = 0
+    this.targetVel[1] = 0
+    this.breaches = 0
+    this.intercepts = 0
+    this.custodySteps = 0
+    this.lostTrackSteps = 0
+    this.contactStep = null
+    this.interceptStep = null
+    this.contestedScore = 0
+    this.rivalScore = 0
+
+    if (this.scenarioId === 'drone-vs-drone') {
+      const count = this.hostileCount()
+      this.hostilePos = new Float32Array(count * 2)
+      this.hostileVel = new Float32Array(count * 2)
+      this.hostileAlive = new Array(count).fill(true)
+      for (let i = 0; i < count; i++) {
+        this.hostilePos[i * 2] = (0.35 + this.rand() * 0.5) * h
+        this.hostilePos[i * 2 + 1] = (this.rand() * 1.3 - 0.65) * h
+      }
+    } else if (this.scenarioId === 'moving-target-track') {
+      const speed = Math.max(0.15, this.battlefield?.threat.movingTargetSpeed ?? 0.6)
+      this.targetPos[0] = -0.45 * h
+      this.targetPos[1] = -0.15 * h
+      this.targetVel[0] = speed
+      this.targetVel[1] = speed * 0.45
+    } else if (this.scenarioId === 'search-and-interdict') {
+      this.targetPos[0] = 0.35 * h
+      this.targetPos[1] = 0.45 * h
+      this.targetVel[0] = -0.18
+      this.targetVel[1] = -0.08
+    } else if (this.scenarioId === 'defend-asset') {
+      const count = this.hostileCount()
+      this.hostilePos = new Float32Array(count * 2)
+      this.hostileVel = new Float32Array(count * 2)
+      this.hostileAlive = new Array(count).fill(true)
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * Math.PI * 2
+        const x = Math.cos(a) * 0.95 * h
+        const y = Math.sin(a) * 0.95 * h
+        this.hostilePos[i * 2] = x
+        this.hostilePos[i * 2 + 1] = y
+        const d = Math.max(1e-6, Math.hypot(x, y))
+        this.hostileVel[i * 2] = (-x / d) * 0.55
+        this.hostileVel[i * 2 + 1] = (-y / d) * 0.55
+      }
+    } else if (this.scenarioId === 'swarm-vs-swarm-race') {
+      this.rivalPos = new Float32Array(this.n * 2)
+      this.rivalVel = new Float32Array(this.n * 2)
+      for (let i = 0; i < this.n; i++) {
+        this.rivalPos[i * 2] = (0.15 + this.rand() * 0.75) * h
+        this.rivalPos[i * 2 + 1] = (this.rand() * 1.6 - 0.8) * h
+      }
+      const cells: number[] = []
+      for (let gx = Math.floor(this.grid / 2) - 2; gx < this.grid - 2; gx += 3) {
+        for (let gy = 3; gy < this.grid - 3; gy += 4) {
+          cells.push(gx, gy)
+        }
+      }
+      this.contestedCells = new Int32Array(cells)
+      this.contestedOwner = new Int8Array(cells.length / 2)
+    }
+  }
+
+  private spawnAgents(): void {
+    const h = this.worldHalf
     for (let i = 0; i < this.n; i++) {
-      // uniform(-spawn, spawn)
-      this.pos[i * 2] = (this.rand() * 2 - 1) * spawn
-      this.pos[i * 2 + 1] = (this.rand() * 2 - 1) * spawn
+      if (this.scenarioId === 'drone-vs-drone') {
+        this.pos[i * 2] = -(0.6 + this.rand() * 0.32) * h
+        this.pos[i * 2 + 1] = (this.rand() * 1.4 - 0.7) * h
+      } else if (this.scenarioId === 'search-and-interdict') {
+        this.pos[i * 2] = (this.rand() * 1.7 - 0.85) * h
+        this.pos[i * 2 + 1] = -(0.6 + this.rand() * 0.32) * h
+      } else if (this.scenarioId === 'defend-asset') {
+        const a = this.rand() * Math.PI * 2
+        const r = (0.42 + this.rand() * 0.13) * h
+        this.pos[i * 2] = Math.cos(a) * r
+        this.pos[i * 2 + 1] = Math.sin(a) * r
+      } else if (this.scenarioId === 'swarm-vs-swarm-race') {
+        this.pos[i * 2] = -(0.15 + this.rand() * 0.75) * h
+        this.pos[i * 2 + 1] = (this.rand() * 1.6 - 0.8) * h
+      } else {
+        this.pos[i * 2] = (this.rand() * 1.6 - 0.8) * h
+        this.pos[i * 2 + 1] = (this.rand() * 1.6 - 0.8) * h
+      }
       this.vel[i * 2] = 0
       this.vel[i * 2 + 1] = 0
       this.alive[i] = true
       this.roles[i] = 0
     }
+  }
+
+  reset(seed?: number): Float32Array {
+    if (seed !== undefined) this.rand = mulberry32(seed)
+    this.spawnAgents()
     this.covered.fill(0)
     this.steps = 0
     this.t = 0
+    this.resetTaskEntities()
     this.markCovered()
     return this.observe()
   }
@@ -288,9 +424,280 @@ export class SwarmEnv {
         this.pos[i * 2 + 1] = py
       }
     }
+    this.updateTaskEntities()
+    this.computeTaskTransitions()
     this.markCovered()
     this.steps += 1
     this.t += DT
+  }
+
+  private updateTaskEntities(): void {
+    const h = this.worldHalf
+    if (this.scenarioId === 'drone-vs-drone') {
+      const cx = 0.45 * h
+      for (let i = 0; i < this.hostileAlive.length; i++) {
+        if (!this.hostileAlive[i]) continue
+        const r = 0.16 * h + i * 0.08 * h
+        const a = this.t * 0.45 + i * 2.1
+        const nx = cx + Math.cos(a) * r
+        const ny = Math.sin(a) * r
+        this.hostileVel[i * 2] = (nx - this.hostilePos[i * 2]) / DT
+        this.hostileVel[i * 2 + 1] = (ny - this.hostilePos[i * 2 + 1]) / DT
+        this.hostilePos[i * 2] = nx
+        this.hostilePos[i * 2 + 1] = ny
+      }
+    } else if (this.scenarioId === 'moving-target-track') {
+      const speed = Math.max(0.15, this.battlefield?.threat.movingTargetSpeed ?? 0.6)
+      const nx = 0.62 * h * Math.sin(this.t * 0.20 * speed)
+      const ny = 0.45 * h * Math.sin(this.t * 0.37 * speed + 0.7)
+      this.targetVel[0] = (nx - this.targetPos[0]) / DT
+      this.targetVel[1] = (ny - this.targetPos[1]) / DT
+      this.targetPos[0] = nx
+      this.targetPos[1] = ny
+    } else if (this.scenarioId === 'search-and-interdict') {
+      const nx = 0.42 * h * Math.sin(this.t * 0.16) + 0.18 * h
+      const ny = 0.42 * h * Math.cos(this.t * 0.23)
+      this.targetVel[0] = (nx - this.targetPos[0]) / DT
+      this.targetVel[1] = (ny - this.targetPos[1]) / DT
+      this.targetPos[0] = nx
+      this.targetPos[1] = ny
+    } else if (this.scenarioId === 'defend-asset') {
+      for (let i = 0; i < this.hostileAlive.length; i++) {
+        if (!this.hostileAlive[i]) continue
+        this.hostilePos[i * 2] += this.hostileVel[i * 2] * DT
+        this.hostilePos[i * 2 + 1] += this.hostileVel[i * 2 + 1] * DT
+      }
+    } else if (this.scenarioId === 'swarm-vs-swarm-race') {
+      const tx = -0.05 * h
+      for (let i = 0; i < this.rivalPos.length / 2; i++) {
+        const dx = tx - this.rivalPos[i * 2]
+        const dy = -this.rivalPos[i * 2 + 1]
+        const d = Math.max(1e-6, Math.hypot(dx, dy))
+        const vx = (dx / d) * 0.65
+        const vy = (dy / d) * 0.65
+        this.rivalVel[i * 2] = vx
+        this.rivalVel[i * 2 + 1] = vy
+        this.rivalPos[i * 2] = Math.max(-h, Math.min(h, this.rivalPos[i * 2] + vx * DT))
+        this.rivalPos[i * 2 + 1] = Math.max(-h, Math.min(h, this.rivalPos[i * 2 + 1] + vy * DT))
+      }
+    }
+  }
+
+  private computeTaskTransitions(): void {
+    const live: number[] = []
+    for (let i = 0; i < this.n; i++) if (this.alive[i]) live.push(i)
+    if (live.length === 0) return
+    if (this.scenarioId === 'drone-vs-drone' || this.scenarioId === 'defend-asset') {
+      for (let hidx = 0; hidx < this.hostileAlive.length; hidx++) {
+        if (!this.hostileAlive[hidx]) continue
+        for (const i of live) {
+          const d = Math.hypot(
+            this.pos[i * 2] - this.hostilePos[hidx * 2],
+            this.pos[i * 2 + 1] - this.hostilePos[hidx * 2 + 1],
+          )
+          if (d < 2.0) {
+            this.hostileAlive[hidx] = false
+            this.intercepts += 1
+            break
+          }
+        }
+      }
+      if (this.scenarioId === 'drone-vs-drone') {
+        this.taskPhase = this.hostileAlive.some(Boolean) ? 'engage' : 'orbit'
+      }
+    }
+    if (this.scenarioId === 'moving-target-track') {
+      let inCustody = 0
+      for (const i of live) {
+        if (Math.hypot(this.pos[i * 2] - this.targetPos[0], this.pos[i * 2 + 1] - this.targetPos[1]) < 2.8) {
+          inCustody++
+        }
+      }
+      if (inCustody >= Math.max(1, Math.min(2, live.length))) this.custodySteps++
+      else this.lostTrackSteps++
+    } else if (this.scenarioId === 'search-and-interdict') {
+      let nearest = Infinity
+      for (const i of live) {
+        nearest = Math.min(nearest, Math.hypot(this.pos[i * 2] - this.targetPos[0], this.pos[i * 2 + 1] - this.targetPos[1]))
+      }
+      if (this.contactStep === null && nearest < 4.2) this.contactStep = this.steps
+      if (this.contactStep !== null) this.taskPhase = 'contact'
+      if (this.interceptStep === null && nearest < 2.0) {
+        this.interceptStep = this.steps
+        this.taskPhase = 'intercept'
+      }
+    } else if (this.scenarioId === 'defend-asset') {
+      for (let hidx = 0; hidx < this.hostileAlive.length; hidx++) {
+        if (!this.hostileAlive[hidx]) continue
+        const d = Math.hypot(this.hostilePos[hidx * 2] - this.assetPos[0], this.hostilePos[hidx * 2 + 1] - this.assetPos[1])
+        if (d < 1.4) {
+          this.hostileAlive[hidx] = false
+          this.breaches++
+        }
+      }
+    } else if (this.scenarioId === 'swarm-vs-swarm-race') {
+      for (let c = 0; c < this.contestedOwner.length; c++) {
+        if (this.contestedOwner[c] !== 0) continue
+        const wx = (this.contestedCells[c * 2] + 0.5) * this.cell - this.worldHalf
+        const wy = (this.contestedCells[c * 2 + 1] + 0.5) * this.cell - this.worldHalf
+        let blueHit = false
+        for (const i of live) {
+          if (Math.hypot(this.pos[i * 2] - wx, this.pos[i * 2 + 1] - wy) < 1.2) blueHit = true
+        }
+        let rivalHit = false
+        for (let i = 0; i < this.rivalPos.length / 2; i++) {
+          if (Math.hypot(this.rivalPos[i * 2] - wx, this.rivalPos[i * 2 + 1] - wy) < 1.2) rivalHit = true
+        }
+        if (blueHit && !rivalHit) {
+          this.contestedOwner[c] = 1
+          this.contestedScore++
+        } else if (rivalHit && !blueHit) {
+          this.contestedOwner[c] = -1
+          this.rivalScore++
+        }
+      }
+    }
+  }
+
+  private taskObs(agentIdx: number): Float32Array {
+    const feats = new Float32Array(TASK_DIM)
+    const h = this.worldHalf
+    const ox = this.pos[agentIdx * 2]
+    const oy = this.pos[agentIdx * 2 + 1]
+    if (this.scenarioId === 'drone-vs-drone') {
+      const live = this.hostileAlive
+        .map((alive, idx) => ({ alive, idx }))
+        .filter((x) => x.alive)
+        .sort((a, b) => {
+          const ad = Math.hypot(this.hostilePos[a.idx * 2] - ox, this.hostilePos[a.idx * 2 + 1] - oy)
+          const bd = Math.hypot(this.hostilePos[b.idx * 2] - ox, this.hostilePos[b.idx * 2 + 1] - oy)
+          return ad - bd
+        })
+        .slice(0, 2)
+      for (let slot = 0; slot < live.length; slot++) {
+        const idx = live[slot].idx
+        const base = slot * 3
+        feats[base] = (this.hostilePos[idx * 2] - ox) / h
+        feats[base + 1] = (this.hostilePos[idx * 2 + 1] - oy) / h
+        feats[base + 2] = 1
+      }
+      const total = Math.max(1, this.hostileAlive.length)
+      feats[6] = this.hostileAlive.filter(Boolean).length / total
+      feats[7] = -ox / h
+      feats[8] = -oy / h
+      feats[9] = this.taskPhase === 'orbit' ? 1 : 0
+      feats[10] = Math.hypot(ox, oy) / h - 0.32
+      feats[11] = Math.hypot(this.vel[agentIdx * 2], this.vel[agentIdx * 2 + 1])
+    } else if (this.scenarioId === 'moving-target-track') {
+      const dx = this.targetPos[0] - ox
+      const dy = this.targetPos[1] - oy
+      const dist = Math.hypot(dx, dy)
+      feats[0] = dx / h
+      feats[1] = dy / h
+      feats[2] = Math.max(-1, Math.min(1, this.targetVel[0] / MAX_SPEED))
+      feats[3] = Math.max(-1, Math.min(1, this.targetVel[1] / MAX_SPEED))
+      feats[4] = dist < 2.8 ? 1 : 0
+      let team = 0
+      for (let i = 0; i < this.n; i++) {
+        if (this.alive[i] && Math.hypot(this.pos[i * 2] - this.targetPos[0], this.pos[i * 2 + 1] - this.targetPos[1]) < 2.8) team++
+      }
+      feats[5] = team >= 2 ? 1 : 0
+      feats[6] = Math.max(-1, Math.min(1, (dist - 2.8) / h))
+      const desired = (agentIdx / Math.max(1, this.n)) * Math.PI * 2
+      const actual = Math.atan2(oy - this.targetPos[1], ox - this.targetPos[0])
+      feats[7] = Math.sin(actual - desired)
+      feats[10] = Math.min(1, Math.hypot(this.targetVel[0], this.targetVel[1]) / MAX_SPEED)
+      feats[11] = this.lostTrackSteps / Math.max(1, this.steps)
+    } else if (this.scenarioId === 'search-and-interdict') {
+      const phase = this.taskPhase === 'intercept' ? 2 : this.taskPhase === 'contact' ? 1 : 0
+      feats[phase] = 1
+      if (this.contactStep !== null) {
+        feats[3] = (this.targetPos[0] - ox) / h
+        feats[4] = (this.targetPos[1] - oy) / h
+        feats[5] = 1
+        feats[6] = (this.steps - this.contactStep) / Math.max(1, this.maxSteps)
+        feats[8] = Math.hypot(this.targetPos[0] - ox, this.targetPos[1] - oy) / h
+      } else {
+        feats[7] = (h - oy) / (2 * h)
+      }
+      feats[9] = this.interceptStep !== null ? 1 : 0
+    } else if (this.scenarioId === 'defend-asset') {
+      feats[0] = (this.assetPos[0] - ox) / h
+      feats[1] = (this.assetPos[1] - oy) / h
+      let nearest = -1
+      let nearestDist = Infinity
+      for (let i = 0; i < this.hostileAlive.length; i++) {
+        if (!this.hostileAlive[i]) continue
+        const d = Math.hypot(this.hostilePos[i * 2] - ox, this.hostilePos[i * 2 + 1] - oy)
+        if (d < nearestDist) {
+          nearest = i
+          nearestDist = d
+        }
+      }
+      if (nearest >= 0) {
+        feats[2] = (this.hostilePos[nearest * 2] - ox) / h
+        feats[3] = (this.hostilePos[nearest * 2 + 1] - oy) / h
+        feats[4] = 1
+        feats[5] = Math.max(-1, Math.min(1, this.hostileVel[nearest * 2] / MAX_SPEED))
+        feats[6] = Math.max(-1, Math.min(1, this.hostileVel[nearest * 2 + 1] / MAX_SPEED))
+        const assetDist = Math.hypot(this.hostilePos[nearest * 2], this.hostilePos[nearest * 2 + 1])
+        feats[7] = assetDist / h
+        feats[8] = 1 - Math.max(0, Math.min(1, assetDist / h))
+      }
+      feats[9] = Math.hypot(ox, oy) / h - 0.48
+      feats[10] = Math.sin(Math.atan2(oy, ox) - (agentIdx / Math.max(1, this.n)) * Math.PI * 2)
+      feats[11] = this.breaches / Math.max(1, this.hostileCount())
+    } else if (this.scenarioId === 'swarm-vs-swarm-race') {
+      if (this.rivalPos.length > 0) {
+        let nearest = 0
+        let nearestDist = Infinity
+        for (let i = 0; i < this.rivalPos.length / 2; i++) {
+          const d = Math.hypot(this.rivalPos[i * 2] - ox, this.rivalPos[i * 2 + 1] - oy)
+          if (d < nearestDist) {
+            nearest = i
+            nearestDist = d
+          }
+        }
+        feats[0] = (this.rivalPos[nearest * 2] - ox) / h
+        feats[1] = (this.rivalPos[nearest * 2 + 1] - oy) / h
+        feats[10] = 1 - Math.max(0, Math.min(1, nearestDist / h))
+      }
+      const total = Math.max(1, this.contestedOwner.length)
+      feats[4] = this.contestedScore / total
+      feats[5] = this.rivalScore / total
+      let best = -1
+      let bestDist = Infinity
+      for (let c = 0; c < this.contestedOwner.length; c++) {
+        if (this.contestedOwner[c] !== 0 && best !== -1) continue
+        const wx = (this.contestedCells[c * 2] + 0.5) * this.cell - h
+        const wy = (this.contestedCells[c * 2 + 1] + 0.5) * this.cell - h
+        const d = Math.hypot(wx - ox, wy - oy)
+        if (d < bestDist) {
+          best = c
+          bestDist = d
+        }
+      }
+      if (best >= 0) {
+        const wx = (this.contestedCells[best * 2] + 0.5) * this.cell - h
+        const wy = (this.contestedCells[best * 2 + 1] + 0.5) * this.cell - h
+        feats[2] = (wx - ox) / h
+        feats[3] = (wy - oy) / h
+      }
+      const [cx, cy] = this.worldToCell(ox, oy)
+      for (let c = 0; c < this.contestedOwner.length; c++) {
+        if (this.contestedCells[c * 2] === cx && this.contestedCells[c * 2 + 1] === cy) {
+          feats[6] = 1
+          feats[7] = this.contestedOwner[c] === 1 ? 1 : 0
+          feats[8] = this.contestedOwner[c] === -1 ? 1 : 0
+          break
+        }
+      }
+      feats[9] = ox > 0 ? 1 : -1
+    }
+    for (let i = 0; i < feats.length; i++) {
+      feats[i] = Math.max(-1, Math.min(1, feats[i]))
+    }
+    return feats
   }
 
   /**
@@ -401,6 +808,10 @@ export class SwarmEnv {
         }
       }
       o += OBSTACLE_DIM
+
+      const task = this.taskObs(i)
+      out.set(task, base + o)
+      o += TASK_DIM
 
       // [final] role flag normalized to [0,1]
       out[base + o] = this.roles[i] / Math.max(1, N_ROLES - 1)

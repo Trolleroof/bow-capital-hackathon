@@ -195,7 +195,7 @@ export const SCENARIO_DEFAULTS: Record<string, BattlefieldParams> = {
     terrain:  { elevRoughness: 0.0, urbanDensity: 0.0 },
     threat:   { hostileUasCount: 3, movingTargetSpeed: 0.5 },
     roe:      { engagementAuthority: 'weapons-tight', minStandoffM: 0, civilianDensity: 0, timeLimitSec: 320 },
-    logistics:{ swarmSize: 6, batteryEnvelopeSec: 320, attritionInjectRate: 0.06 },
+    logistics:{ swarmSize: 6, batteryEnvelopeSec: 320, attritionInjectRate: 0.0 },
   },
   'moving-target-track': {
     envId: 'moving-target-track',

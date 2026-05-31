@@ -30,7 +30,7 @@ from ..state import system_state
 
 log = logging.getLogger(__name__)
 
-_IMAGE_TOPICS = {"camera_frame", "camera_right_frame", "slam_frame", "fpv_raw", "fpv_hud"}
+_IMAGE_TOPICS = {"camera_frame", "camera_right_frame", "slam_frame", "fpv_raw", "fpv_hud", "perception_frame"}
 
 # Maps the incoming topic to its owning module so we can update health state
 # whenever a remote client (Jetson, etc.) publishes on that topic.
@@ -49,8 +49,16 @@ _TOPIC_MODULE: dict[str, str] = {
 }
 
 
+def _topics_from_subscription(value: object) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return []
+    return [topic for topic in value if isinstance(topic, str)]
+
+
 async def _handler(ws: WebSocketServerProtocol) -> None:
-    q: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
+    q: asyncio.Queue[str] = asyncio.Queue(maxsize=32)
     # Default: subscribe to all topics so dashboard gets everything without
     # sending an explicit subscribe message first.
     router.subscribe(q, topics=None)
@@ -77,8 +85,9 @@ async def _handler(ws: WebSocketServerProtocol) -> None:
             # ── Subscription control ──────────────────────────────────────────
             if data.get("type") == "subscribe":
                 router.unsubscribe(q)
-                topics = data.get("topics")  # None = all
+                topics = _topics_from_subscription(data.get("topics"))  # None = all
                 router.subscribe(q, topics)
+                router.replay_latest(q, topics)
                 log.debug("client %s → subscribed to %s", ws.remote_address, topics)
                 continue
 

@@ -59,3 +59,13 @@ ROS_SLAM_VIDEO_FPS = float(os.getenv("COMBATOS_ROS_SLAM_VIDEO_FPS", "10.0"))
 ROS_SLAM_JPEG_QUALITY = int(os.getenv("COMBATOS_ROS_SLAM_JPEG_QUALITY", "70"))
 ROS_SLAM_PATH_MAX_POSES = int(os.getenv("COMBATOS_ROS_SLAM_PATH_MAX_POSES", "240"))
 ROS_SLAM_POINT_CLOUD_MAX_POINTS = int(os.getenv("COMBATOS_ROS_SLAM_POINT_CLOUD_MAX_POINTS", "2500"))
+
+# ── Desktop ROS2 perception bridge ─────────────────────────────────────────
+# YOLOX publishes ROS2 topics; the orchestrator converts them to CombatOS bus
+# topics so the browser only needs to speak to the orchestrator.
+ENABLE_ROS_PERCEPTION = os.getenv("COMBATOS_ROS_PERCEPTION", "1") == "1"
+ROS_PERCEPTION_DETECTIONS_TOPIC = os.getenv("COMBATOS_ROS_PERCEPTION_DETECTIONS_TOPIC", "/perception/detections")
+ROS_PERCEPTION_ANNOTATED_TOPIC = os.getenv("COMBATOS_ROS_PERCEPTION_ANNOTATED_TOPIC", "/perception/annotated_image")
+ROS_PERCEPTION_FRAME_TOPIC = os.getenv("COMBATOS_ROS_PERCEPTION_FRAME_TOPIC", "camera_frame")
+ROS_PERCEPTION_ENABLE_DETECTIONS = os.getenv("COMBATOS_ROS_PERCEPTION_ENABLE_DETECTIONS", "1") == "1"
+ROS_PERCEPTION_ENABLE_ANNOTATED = os.getenv("COMBATOS_ROS_PERCEPTION_ENABLE_ANNOTATED", "1") == "1"

@@ -13,16 +13,19 @@ const CONTROL_TOPICS = [
   'slam_path',
   'slam_point_cloud',
   'camera_frame',
+  'perception_frame',
   'fpv_raw',
   'slam_frame',
   'fpv_hud',
 ] as const
 const IMAGE_TOPICS = [
   'camera_frame',
+  'perception_frame',
   'fpv_raw',
   'slam_frame',
   'fpv_hud',
 ] as const
+const WS_RETRY_MS = 250
 
 export interface SlamFrame {
   seq: number
@@ -172,7 +175,7 @@ function toFrame(msg: Record<string, unknown>): SlamFrame | null {
 }
 
 function applyFrameMessage(msg: Record<string, unknown>, setT: React.Dispatch<React.SetStateAction<TelemetryState>>) {
-  if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
+  if (msg.topic === 'camera_frame' || msg.topic === 'perception_frame' || msg.topic === 'fpv_raw') {
     const frame = toFrame(msg)
     if (frame) setT(p => (frame.t >= (p.cameraFrame?.t ?? -Infinity) ? { ...p, cameraFrame: frame } : p))
   } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
@@ -234,8 +237,10 @@ export function useCombatState() {
   useEffect(() => {
     let ws: WebSocket | null = null
     let retryTimeout: ReturnType<typeof setTimeout>
+    let stopped = false
 
     function connect() {
+      if (stopped) return
       try {
         ws = new WebSocket(ORCH_WS)
         wsRef.current = ws
@@ -252,7 +257,7 @@ export function useCombatState() {
         ws.onclose = () => {
           setT(p => ({ ...p, wsConnected: false }))
           wsRef.current = null
-          retryTimeout = setTimeout(connect, 3000)
+          if (!stopped) retryTimeout = setTimeout(connect, WS_RETRY_MS)
         }
 
         ws.onerror = () => {
@@ -363,7 +368,7 @@ export function useCombatState() {
                   queueDepth: msg.queue_depth ?? p.slamDiagnostics.queueDepth,
                 },
               }))
-            } else if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
+            } else if (msg.topic === 'camera_frame' || msg.topic === 'perception_frame' || msg.topic === 'fpv_raw') {
               applyFrameMessage(msg, setT)
             } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
               applyFrameMessage(msg, setT)
@@ -373,12 +378,13 @@ export function useCombatState() {
           }
         }
       } catch {
-        retryTimeout = setTimeout(connect, 3000)
+        if (!stopped) retryTimeout = setTimeout(connect, WS_RETRY_MS)
       }
     }
 
     connect()
     return () => {
+      stopped = true
       clearTimeout(retryTimeout)
       ws?.close()
       wsRef.current = null
@@ -388,8 +394,10 @@ export function useCombatState() {
   useEffect(() => {
     let ws: WebSocket | null = null
     let retryTimeout: ReturnType<typeof setTimeout>
+    let stopped = false
 
     function connect() {
+      if (stopped) return
       try {
         ws = new WebSocket(IMAGE_WS)
 
@@ -401,7 +409,7 @@ export function useCombatState() {
         }
 
         ws.onclose = () => {
-          retryTimeout = setTimeout(connect, 3000)
+          if (!stopped) retryTimeout = setTimeout(connect, WS_RETRY_MS)
         }
 
         ws.onerror = () => {
@@ -411,7 +419,7 @@ export function useCombatState() {
         ws.onmessage = (ev) => {
           try {
             const msg = JSON.parse(ev.data as string)
-            if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
+            if (msg.topic === 'camera_frame' || msg.topic === 'perception_frame' || msg.topic === 'fpv_raw') {
               applyFrameMessage(msg, setT)
             } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
               applyFrameMessage(msg, setT)
@@ -421,12 +429,13 @@ export function useCombatState() {
           }
         }
       } catch {
-        retryTimeout = setTimeout(connect, 3000)
+        if (!stopped) retryTimeout = setTimeout(connect, WS_RETRY_MS)
       }
     }
 
     connect()
     return () => {
+      stopped = true
       clearTimeout(retryTimeout)
       ws?.close()
     }

@@ -56,6 +56,13 @@ class SimulationDisconnectedError(RuntimeError):
     """Raised when the PyBullet client has disconnected during a running sim."""
 
 
+TROOP_COLLIDER_RADIUS_M = 0.11
+TROOP_COLLIDER_HEIGHT_M = 1.55
+TROOP_MASS_KG = 80.0
+TROOP_DETECTION_WIDTH_M = 0.36
+TROOP_DETECTION_HEIGHT_M = 1.75
+
+
 class DroneSurveillanceSimulation:
     def __init__(self, config: SimulationConfig, gui: bool = False) -> None:
         self.config = config
@@ -593,6 +600,7 @@ class DroneSurveillanceSimulation:
         visual_ids: Sequence[int | None],
         base_position: Sequence[float],
         base_orientation_euler: Sequence[float],
+        base_mass: float = 0.0,
     ) -> int | None:
         usable: list[tuple[MeshAsset, int]] = [
             (asset, visual_id)
@@ -606,7 +614,7 @@ class DroneSurveillanceSimulation:
         base_orientation = p.getQuaternionFromEuler(list(base_orientation_euler))
         if len(usable) == 1:
             body = p.createMultiBody(
-                baseMass=0.0,
+                baseMass=base_mass,
                 baseCollisionShapeIndex=collision_shape_id,
                 baseVisualShapeIndex=base_visual,
                 basePosition=list(base_position),
@@ -618,7 +626,7 @@ class DroneSurveillanceSimulation:
 
         link_count = len(usable) - 1
         body = p.createMultiBody(
-            baseMass=0.0,
+            baseMass=base_mass,
             baseCollisionShapeIndex=collision_shape_id,
             baseVisualShapeIndex=base_visual,
             basePosition=list(base_position),
@@ -1565,12 +1573,6 @@ class DroneSurveillanceSimulation:
                 )
 
     def _spawn_troops(self) -> None:
-        collision = p.createCollisionShape(
-            p.GEOM_CAPSULE,
-            radius=0.18,
-            height=1.0,
-            physicsClientId=self.client_id,
-        )
         fallback_visual = p.createVisualShape(
             p.GEOM_BOX,
             halfExtents=[0.34, 0.05, 0.88],
@@ -1593,6 +1595,31 @@ class DroneSurveillanceSimulation:
             if self._troop_mesh_asset_ref is None
             else self._troop_mesh_asset_ref.yaw_offset
         )
+        fallback_collision = p.createCollisionShape(
+            p.GEOM_CAPSULE,
+            radius=TROOP_COLLIDER_RADIUS_M,
+            height=TROOP_COLLIDER_HEIGHT_M,
+            physicsClientId=self.client_id,
+        )
+        mesh_collision = fallback_collision
+        if self._troop_mesh_asset_ref is not None:
+            _, mesh_collision_orientation = p.invertTransform(
+                [0.0, 0.0, 0.0],
+                p.getQuaternionFromEuler(
+                    [
+                        self._troop_mesh_asset_ref.roll_offset,
+                        self._troop_mesh_asset_ref.pitch_offset,
+                        0.0,
+                    ]
+                ),
+            )
+            mesh_collision = p.createCollisionShape(
+                p.GEOM_CAPSULE,
+                radius=TROOP_COLLIDER_RADIUS_M,
+                height=TROOP_COLLIDER_HEIGHT_M,
+                collisionFrameOrientation=mesh_collision_orientation,
+                physicsClientId=self.client_id,
+            )
         if self._salt_dome_active:
             self._troop_anchor_bases = np.array(
                 [
@@ -1634,6 +1661,7 @@ class DroneSurveillanceSimulation:
             z = 1.0 + self._ground_offset_z
             use_mesh = mesh_assets_usable and idx % 2 == 0
             self._troop_mesh_mask[idx] = use_mesh
+            collision = mesh_collision if use_mesh else fallback_collision
             spawn_z = z + (self._troop_visual_z_offset if use_mesh else 0.0)
             yaw = self._troop_visual_yaw_offset
             if use_mesh:
@@ -1647,10 +1675,11 @@ class DroneSurveillanceSimulation:
                         0.0 if self._troop_mesh_asset_ref is None else self._troop_mesh_asset_ref.pitch_offset,
                         yaw,
                     ],
+                    base_mass=TROOP_MASS_KG,
                 )
             else:
                 body = p.createMultiBody(
-                    baseMass=0.0,
+                    baseMass=TROOP_MASS_KG,
                     baseCollisionShapeIndex=collision,
                     baseVisualShapeIndex=fallback_visual,
                     basePosition=[x, y, spawn_z],
@@ -1659,14 +1688,24 @@ class DroneSurveillanceSimulation:
                 )
             if body is None:
                 body = p.createMultiBody(
-                    baseMass=0.0,
-                    baseCollisionShapeIndex=collision,
+                    baseMass=TROOP_MASS_KG,
+                    baseCollisionShapeIndex=fallback_collision,
                     baseVisualShapeIndex=fallback_visual,
                     basePosition=[x, y, z],
                     baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
                     physicsClientId=self.client_id,
                 )
                 self._troop_mesh_mask[idx] = False
+            p.changeDynamics(
+                body,
+                -1,
+                lateralFriction=0.8,
+                rollingFriction=0.05,
+                spinningFriction=0.05,
+                linearDamping=0.04,
+                angularDamping=0.9,
+                physicsClientId=self.client_id,
+            )
             if troop_texture_id is not None and not self._troop_mesh_mask[idx]:
                 try:
                     p.changeVisualShape(
@@ -1766,6 +1805,7 @@ class DroneSurveillanceSimulation:
             if self.gui:
                 self._update_observer_camera()
             p.stepSimulation(physicsClientId=client_id)
+            self._sync_troop_physics_positions()
         except SimulationDisconnectedError:
             raise
         except Exception as exc:
@@ -1912,12 +1952,18 @@ class DroneSurveillanceSimulation:
             if math.hypot(dx, dy) > 0.002:
                 self._troop_headings[idx] = math.atan2(dy, dx)
             yaw = self._troop_headings[idx]
-            self.troop_positions[idx] = (x, y, z)
             use_mesh = bool(self._troop_mesh_mask[idx])
+            body_position, _ = p.getBasePositionAndOrientation(
+                body,
+                physicsClientId=self.client_id,
+            )
+            body_velocity, _ = p.getBaseVelocity(body, physicsClientId=self.client_id)
+            body_z = float(body_position[2])
+            self.troop_positions[idx] = (x, y, body_z - (self._troop_visual_z_offset if use_mesh else 0.0))
             self.troop_yaws[idx] = yaw + self._troop_visual_yaw_offset
             p.resetBasePositionAndOrientation(
                 body,
-                [x, y, z + (self._troop_visual_z_offset if use_mesh else 0.0)],
+                [x, y, body_z],
                 p.getQuaternionFromEuler(
                     [
                         0.0 if not use_mesh or self._troop_mesh_asset_ref is None else self._troop_mesh_asset_ref.roll_offset,
@@ -1927,10 +1973,38 @@ class DroneSurveillanceSimulation:
                 ),
                 physicsClientId=self.client_id,
             )
+            p.resetBaseVelocity(
+                body,
+                linearVelocity=[0.0, 0.0, float(body_velocity[2])],
+                angularVelocity=[0.0, 0.0, 0.0],
+                physicsClientId=self.client_id,
+            )
             if idx < len(self._troop_marker_ids):
                 p.resetBasePositionAndOrientation(
                     self._troop_marker_ids[idx],
-                    [x, y, z + 1.4],
+                    [x, y, float(self.troop_positions[idx, 2]) + 1.4],
+                    [0.0, 0.0, 0.0, 1.0],
+                    physicsClientId=self.client_id,
+                )
+        self._sync_debug_lines()
+
+    def _sync_troop_physics_positions(self) -> None:
+        for idx, body in enumerate(self.troop_ids):
+            use_mesh = bool(self._troop_mesh_mask[idx])
+            body_position, _ = p.getBasePositionAndOrientation(
+                body,
+                physicsClientId=self.client_id,
+            )
+            visual_offset = self._troop_visual_z_offset if use_mesh else 0.0
+            self.troop_positions[idx, 2] = float(body_position[2]) - visual_offset
+            if idx < len(self._troop_marker_ids):
+                p.resetBasePositionAndOrientation(
+                    self._troop_marker_ids[idx],
+                    [
+                        float(self.troop_positions[idx, 0]),
+                        float(self.troop_positions[idx, 1]),
+                        float(self.troop_positions[idx, 2]) + 1.4,
+                    ],
                     [0.0, 0.0, 0.0, 1.0],
                     physicsClientId=self.client_id,
                 )
@@ -2084,8 +2158,8 @@ class DroneSurveillanceSimulation:
                 "x": round(float(pos[0]), 4),
                 "y": round(float(pos[1]), 4),
                 "z": round(float(pos[2]), 4),
-                "width_m": 0.55,
-                "height_m": 1.75,
+                "width_m": TROOP_DETECTION_WIDTH_M,
+                "height_m": TROOP_DETECTION_HEIGHT_M,
             }
             for idx, pos in enumerate(self.troop_positions)
         ]

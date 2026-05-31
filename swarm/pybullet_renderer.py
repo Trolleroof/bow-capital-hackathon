@@ -477,16 +477,32 @@ def _render_frame(
     t: float,
     camera_mode: CameraMode,
     selected_drone: int,
+    lit: bool = False,
 ) -> dict:
     eye, target, fov = _camera_vectors(agents, t, camera_mode, selected_drone)
     view = p.computeViewMatrix(eye, target, [0.0, 0.0, 1.0])
     proj = p.computeProjectionMatrixFOV(fov, width / height, 0.05, 120)
+    # ``lit`` adds directional light + shadows so the photoreal hunt scene reads
+    # well; the primitive worlds keep the cheaper flat render.
+    light_kwargs = (
+        dict(
+            lightDirection=[0.42, 0.18, 1.0],
+            lightColor=[1.0, 0.96, 0.9],
+            lightAmbientCoeff=0.55,
+            lightDiffuseCoeff=0.68,
+            lightSpecularCoeff=0.08,
+            shadow=1,
+        )
+        if lit
+        else {}
+    )
     _, _, rgba, _, _ = p.getCameraImage(
         width,
         height,
         view,
         proj,
         renderer=p.ER_TINY_RENDERER,
+        **light_kwargs,
     )
     try:
         raw = bytes(rgba)
@@ -516,23 +532,196 @@ def _render_frame(
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Render policy poses in PyBullet")
-    parser.add_argument("--env-id", default="search-and-interdict")
-    # Default kept modest so the raw-RGBA fallback (when Pillow is absent in the
-    # renderer's Python) stays under the 1 MB WebSocket frame limit: 512x288 RGBA
-    # base64 ≈ 786 KB. With Pillow present, frames are JPEG and far smaller, so a
-    # higher resolution can be requested via --width/--height.
-    parser.add_argument("--width", type=int, default=512)
-    parser.add_argument("--height", type=int, default=288)
-    parser.add_argument(
-        "--camera-mode",
-        choices=["observer", "chase", "fpv"],
-        default="observer",
-    )
-    parser.add_argument("--selected-drone", type=int, default=0)
-    args = parser.parse_args()
+# ── rich hunt-and-seek scene (pybullet_swarm_video assets) ───────────────────
 
+
+def _spawn_extra_drone(sim, p, position) -> int:
+    """Fallback drone body when a pose arrives for an id beyond the spawned ring."""
+    asset = getattr(sim, "_drone_mesh_asset_ref", None)
+    cid = sim.client_id
+    collision = p.createCollisionShape(
+        p.GEOM_BOX, halfExtents=[0.25, 0.25, 0.08], physicsClientId=cid
+    )
+    if asset is not None:
+        visual = sim._create_mesh_visual(asset)
+    else:
+        visual = None
+    if visual is None:
+        visual = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=[0.25, 0.25, 0.08],
+            rgbaColor=[0.90, 0.90, 0.92, 1.0],
+            physicsClientId=cid,
+        )
+    body = p.createMultiBody(
+        baseMass=0.0,
+        baseCollisionShapeIndex=collision,
+        baseVisualShapeIndex=visual,
+        basePosition=list(position),
+        physicsClientId=cid,
+    )
+    if asset is not None:
+        sim._apply_body_texture(body, asset.texture_path)
+    return body
+
+
+def _sync_rich_drones(sim, p, agents: list[dict], ground_offset: float) -> None:
+    """Drive the FPV drone meshes from incoming PPO poses (blue swarm = "us")."""
+    cid = sim.client_id
+    ref = getattr(sim, "_drone_mesh_asset_ref", None)
+    roll = ref.roll_offset if ref else 0.0
+    pitch = ref.pitch_offset if ref else 0.0
+    yaw_off = ref.yaw_offset if ref else 0.0
+    vz = ref.vertical_offset if ref else 0.0
+    for agent in agents:
+        idx = int(agent["id"])
+        x = float(agent["x"])
+        y = float(agent["y"])
+        z = float(agent["z"]) + ground_offset
+        if idx >= len(sim.drone_ids):
+            sim.drone_ids.append(_spawn_extra_drone(sim, p, [x, y, z]))
+            sim._drone_marker_ids.append(None)
+        body = sim.drone_ids[idx]
+        if not agent.get("alive", True):
+            p.resetBasePositionAndOrientation(body, [x, y, -50.0], [0, 0, 0, 1], physicsClientId=cid)
+            marker = sim._drone_marker_ids[idx] if idx < len(sim._drone_marker_ids) else None
+            if marker is not None:
+                p.resetBasePositionAndOrientation(marker, [x, y, -50.0], [0, 0, 0, 1], physicsClientId=cid)
+            continue
+        yaw = float(agent.get("yaw", 0.0))
+        quat = p.getQuaternionFromEuler([roll, pitch, yaw + yaw_off])
+        p.resetBasePositionAndOrientation(body, [x, y, z + vz], quat, physicsClientId=cid)
+        marker = sim._drone_marker_ids[idx] if idx < len(sim._drone_marker_ids) else None
+        if marker is not None:
+            p.resetBasePositionAndOrientation(marker, [x, y, z + 0.9], [0, 0, 0, 1], physicsClientId=cid)
+
+
+def _sync_hunt_human(sim, p, message: dict, ground_offset: float, state: dict) -> None:
+    """Drive troop[0] (a soldier mesh) from the live target_pos — the hunted human."""
+    tp = message.get("target_pos")
+    if not tp or not sim.troop_ids:
+        return
+    x = float(tp[0])
+    y = float(tp[1])
+    idx = 0
+    cid = sim.client_id
+    use_mesh = bool(sim._troop_mesh_mask[idx]) if len(sim._troop_mesh_mask) else False
+    base_z = 1.0 + ground_offset + (sim._troop_visual_z_offset if use_mesh else 0.0)
+    prev = state.get("human_xy")
+    if prev is not None:
+        dx, dy = x - prev[0], y - prev[1]
+        if math.hypot(dx, dy) > 0.01:
+            state["human_yaw"] = math.atan2(dy, dx)
+    state["human_xy"] = (x, y)
+    yaw = state.get("human_yaw", 0.0) + sim._troop_visual_yaw_offset
+    roll = sim._troop_mesh_asset_ref.roll_offset if (use_mesh and sim._troop_mesh_asset_ref) else 0.0
+    pitch = sim._troop_mesh_asset_ref.pitch_offset if (use_mesh and sim._troop_mesh_asset_ref) else 0.0
+    quat = p.getQuaternionFromEuler([roll, pitch, yaw])
+    p.resetBasePositionAndOrientation(sim.troop_ids[idx], [x, y, base_z], quat, physicsClientId=cid)
+    if idx < len(sim._troop_marker_ids) and sim._troop_marker_ids[idx] is not None:
+        p.resetBasePositionAndOrientation(
+            sim._troop_marker_ids[idx], [x, y, base_z + 1.4], [0, 0, 0, 1], physicsClientId=cid
+        )
+
+
+def _run_rich_hunt(args) -> bool:
+    """Render hunt-and-seek with pybullet_swarm_video scenery + assets.
+
+    Returns ``True`` once it has taken over the stdin→stdout loop (i.e. the
+    rich scene built successfully). Returns ``False`` if setup fails *before*
+    any stdin is consumed, so the caller can fall back to the primitive world.
+    """
+    try:
+        from pathlib import Path
+
+        here = Path(__file__).resolve()
+        pkg_root = here.parents[1] / "pybullet_swarm_video"
+        if str(pkg_root) not in sys.path:
+            sys.path.insert(0, str(pkg_root))
+
+        # The renderer's Python ships a bare pybullet .so without the
+        # ``pybullet_data`` package, which simulation.py imports for the ground
+        # plane. Provide a tiny shim backed by vendored plane data so the rich
+        # scene works without altering the Python install.
+        if "pybullet_data" not in sys.modules:
+            try:
+                import pybullet_data  # noqa: F401  (real package if present)
+            except ImportError:
+                import types
+
+                data_dir = str(here.parent / "_bullet_data")
+                shim = types.ModuleType("pybullet_data")
+                shim.getDataPath = lambda: data_dir  # type: ignore[attr-defined]
+                sys.modules["pybullet_data"] = shim
+
+        from pybullet_swarm_video.config import SimulationConfig
+        from pybullet_swarm_video.simulation import DroneSurveillanceSimulation
+        import pybullet as p
+
+        config = SimulationConfig(
+            num_drones=5,          # matches hunt-and-seek N_AGENTS
+            num_troops=6,          # 1 hunted human (idx 0) + ambient soldiers
+            resources_dir=pkg_root / "resources",
+        )
+        sim = DroneSurveillanceSimulation(config, gui=False)
+        # The sim logs asset issues via print() → stdout, which is our JSON
+        # frame channel. Reroute to stderr so a missing texture can't corrupt
+        # the stream the dashboard parses.
+        sim._log_asset = lambda msg, _seen=sim._asset_messages: (  # type: ignore[assignment]
+            None if msg in _seen else (_seen.add(msg), print(f"[sim-asset] {msg}", file=sys.stderr, flush=True))[0]
+        )
+        sim.reset()
+    except Exception as exc:  # noqa: BLE001 - any failure → primitive fallback
+        print(f"[pybullet-renderer] rich hunt setup failed: {exc}", file=sys.stderr, flush=True)
+        return False
+
+    ground_offset = float(getattr(sim, "_ground_offset_z", 0.0))
+    cid = sim.client_id
+
+    # Highlight the hunted human (troop 0) with a red marker; ambient soldiers
+    # stay green. Everything else in the scene is static scenery.
+    if sim.troop_ids and sim._troop_marker_ids and sim._troop_marker_ids[0] is not None:
+        try:
+            p.changeVisualShape(
+                sim._troop_marker_ids[0], -1, rgbaColor=[0.95, 0.22, 0.24, 0.95], physicsClientId=cid
+            )
+        except Exception:
+            pass
+
+    human_state: dict = {}
+    try:
+        for raw in sys.stdin:
+            if not raw.strip():
+                continue
+            message = json.loads(raw)
+            agents = message.get("agents", [])
+            t = float(message.get("t", 0.0))
+            _sync_rich_drones(sim, p, agents, ground_offset)
+            _sync_hunt_human(sim, p, message, ground_offset, human_state)
+            p.stepSimulation(physicsClientId=cid)
+            frame = _render_frame(
+                p,
+                args.width,
+                args.height,
+                [
+                    {**a, "z": float(a["z"]) + ground_offset}
+                    for a in agents
+                    if a.get("alive", True)
+                ],
+                t,
+                args.camera_mode,
+                args.selected_drone,
+                lit=True,
+            )
+            frame["t"] = message.get("t", 0)
+            frame["env_id"] = message.get("env_id", args.env_id)
+            print(json.dumps(frame), flush=True)
+    finally:
+        sim.close()
+    return True
+
+
+def _run_primitive(args) -> None:
     import pybullet as p
     client = p.connect(p.DIRECT)
     p.setGravity(0, 0, -9.81)
@@ -571,6 +760,31 @@ def main() -> None:
             print(json.dumps(frame), flush=True)
     finally:
         p.disconnect(client)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Render policy poses in PyBullet")
+    parser.add_argument("--env-id", default="search-and-interdict")
+    # Default kept modest so the raw-RGBA fallback (when Pillow is absent in the
+    # renderer's Python) stays under the 1 MB WebSocket frame limit: 512x288 RGBA
+    # base64 ≈ 786 KB. With Pillow present, frames are JPEG and far smaller, so a
+    # higher resolution can be requested via --width/--height.
+    parser.add_argument("--width", type=int, default=512)
+    parser.add_argument("--height", type=int, default=288)
+    parser.add_argument(
+        "--camera-mode",
+        choices=["observer", "chase", "fpv"],
+        default="observer",
+    )
+    parser.add_argument("--selected-drone", type=int, default=0)
+    args = parser.parse_args()
+
+    # hunt-and-seek gets the photoreal pybullet_swarm_video scenery; everything
+    # else keeps the lightweight primitive world. The pose/frame protocol is
+    # identical for both paths.
+    if args.env_id == "hunt-and-seek" and _run_rich_hunt(args):
+        return
+    _run_primitive(args)
 
 
 if __name__ == "__main__":

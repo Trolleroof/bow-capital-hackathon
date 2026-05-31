@@ -22,6 +22,10 @@ body,
   overflow: hidden;
 }
 
+#root {
+  position: relative;
+}
+
 body {
   margin: 0;
   background: #050c13;

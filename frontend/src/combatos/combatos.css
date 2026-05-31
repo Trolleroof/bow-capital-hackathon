@@ -137,6 +137,8 @@
   align-items: stretch;
   border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, #0e1622, #0a0f18);
+  overflow: visible;
+  min-width: 0;
 }
 .hero .brand {
   display: flex;
@@ -144,6 +146,7 @@
   justify-content: center;
   padding: 0 22px;
   border-right: 1px solid var(--line);
+  flex-shrink: 0;
 }
 .hero .brand b {
   font-size: 15px;
@@ -160,7 +163,13 @@
   white-space: nowrap;
 }
 
-.modtabs { display: flex; align-items: stretch; }
+.modtabs {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  min-width: max-content;
+  overflow: visible;
+}
 .mtab {
   display: flex;
   align-items: center;
@@ -168,8 +177,11 @@
   padding: 0 20px;
   border-right: 1px solid var(--line);
   position: relative;
-  cursor: default;
+  cursor: pointer;
   transition: background .15s;
+  flex-shrink: 0;
+  min-width: 72px;
+  user-select: none;
 }
 .mtab:hover { background: var(--panel-hi); }
 .mtab .mt-k { font-size: 9px; letter-spacing: .1em; color: var(--ink-mute); }
@@ -233,6 +245,16 @@
   gap: 1px;
   background: var(--line);
 }
+.cmd-body--swarm {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: 1fr;
+}
+.swarm-col { grid-row: 1; }
+.swarm-col::before { display: none; }
+.swarm-col--a { grid-column: 1; }
+.swarm-col--b { grid-column: 2; }
+.swarm-blank { flex: 1; min-height: 0; }
+
 .rail { grid-column: 1; grid-row: 1 / span 2; }
 .nav-col { grid-column: 2; grid-row: 1; }
 .slam-frame-col { grid-column: 2; grid-row: 2; }
@@ -511,7 +533,7 @@
   color: var(--ink-mute);
 }
 .vslam-pip-head b {
-  max-width: 76px;
+  max-width: 110px;
   overflow: hidden;
   color: var(--green);
   font-weight: 700;
@@ -519,29 +541,56 @@
   white-space: nowrap;
 }
 .vslam-map {
+  position: relative;
   display: block;
   width: 100%;
   aspect-ratio: 1;
+  overflow: hidden;
+  background: #0a1018;
 }
-.map-land { fill: #111923; }
-.map-park { fill: rgba(55, 184, 164, .1); }
-.map-water { fill: rgba(63, 163, 230, .13); }
-.map-minor path {
-  fill: none;
-  stroke: rgba(132, 147, 168, .2);
-  stroke-width: 2.1;
-  stroke-linecap: round;
+.vslam-map-tiles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
 }
-.map-major path {
-  fill: none;
-  stroke: rgba(205, 217, 232, .38);
-  stroke-width: 4.8;
-  stroke-linecap: round;
+.vslam-map-tile {
+  position: absolute;
+  display: block;
+  image-rendering: auto;
+  pointer-events: none;
+  user-select: none;
 }
-.map-blocks rect {
-  fill: rgba(205, 217, 232, .08);
-  stroke: rgba(132, 147, 168, .15);
-  stroke-width: .7;
+.vslam-map-overlay {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.vslam-map-wait {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  font: 700 7px/1.35 var(--mono);
+  letter-spacing: .12em;
+  text-align: center;
+  color: var(--ink-mute);
+}
+.vslam-map-attrib {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  z-index: 2;
+  padding: 1px 3px;
+  font: 600 5.5px/1 var(--mono);
+  letter-spacing: .04em;
+  color: rgba(255,255,255,.72);
+  background: rgba(7, 12, 19, .62);
+  pointer-events: none;
 }
 .map-slam-path {
   fill: none;

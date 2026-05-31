@@ -12,7 +12,10 @@ interface Props {
   onConfirm: (numericId: number, id: string) => void
 }
 
+type CommandTab = 'swarm' | 'drone'
+
 export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
+  const [activeTab, setActiveTab] = useState<CommandTab>('drone')
   const [fullscreenPanel, setFullscreenPanel] = useState<'slam-map' | 'slam-keyframe' | null>(null)
   const clock = 'T+' + String(Math.floor(t.sec / 60)).padStart(2, '0') + ':' + String(t.sec % 60).padStart(2, '0')
   const tracked = t.dets.filter(d => d.st !== 'LOST').length
@@ -29,8 +32,23 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           <b>COMBATOS</b>
           <span>EDGE AUTONOMY STACK</span>
         </div>
-        <nav className="modtabs">
-          <div className="mtab is-active">
+        <nav className="modtabs" role="tablist" aria-label="Command mode">
+          <div
+            role="tab"
+            aria-selected={activeTab === 'swarm'}
+            tabIndex={activeTab === 'swarm' ? 0 : -1}
+            className={'mtab' + (activeTab === 'swarm' ? ' is-active' : '')}
+            onClick={() => setActiveTab('swarm')}
+          >
+            <span className="mt-t">Swarm</span>
+          </div>
+          <div
+            role="tab"
+            aria-selected={activeTab === 'drone'}
+            tabIndex={activeTab === 'drone' ? 0 : -1}
+            className={'mtab' + (activeTab === 'drone' ? ' is-active' : '')}
+            onClick={() => setActiveTab('drone')}
+          >
             <span className="mt-t">Drone</span>
           </div>
         </nav>
@@ -48,6 +66,16 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
       </div>
 
       {/* body */}
+      {activeTab === 'swarm' ? (
+        <div className="cmd-body cmd-body--swarm">
+          <div className="pnl pnl-tile swarm-col swarm-col--a">
+            <div className="hatch swarm-blank" />
+          </div>
+          <div className="pnl pnl-tile swarm-col swarm-col--b">
+            <div className="hatch swarm-blank" />
+          </div>
+        </div>
+      ) : (
       <div className="cmd-body">
         {/* telemetry rail */}
         <div className="pnl rail">
@@ -222,6 +250,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           </div>
         </div>
       </div>
+      )}
 
       {/* log */}
       <div className="logbar">

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { GeoMinimap } from './GeoMinimap'
 import type { SlamPoint, SlamPose } from './useCombatState'
 
 interface Props {
@@ -26,17 +27,6 @@ function boundsFor(points: SlamPoint[], path: SlamPose[], pose: SlamPose | null)
   return { center, radius }
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value))
-}
-
-function mapPoint(point: SlamPoint, origin: SlamPoint, scale: number, size: number) {
-  return {
-    x: clamp(size / 2 + (point.x - origin.x) * scale, 8, size - 8),
-    y: clamp(size / 2 - (point.y - origin.y) * scale, 8, size - 8),
-  }
-}
-
 export function VslamScene({ points, path, pose }: Props) {
   const [chaseEnabled, setChaseEnabled] = useState(true)
   const hostRef = useRef<HTMLDivElement>(null)
@@ -48,12 +38,6 @@ export function VslamScene({ points, path, pose }: Props) {
   const frameRef = useRef<number | null>(null)
   const hasFramedRef = useRef(false)
   const chaseEnabledRef = useRef(true)
-  const mapSize = 150
-  const mapOrigin = pose ?? path[path.length - 1] ?? { x: 0, y: 0, z: 0 }
-  const mapScale = 4.2
-  const mapPose = pose ? mapPoint(pose, mapOrigin, mapScale, mapSize) : null
-  const mapPath = path.slice(-80).map(point => mapPoint(point, mapOrigin, mapScale, mapSize))
-  const mapPathD = mapPath.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ')
 
   useEffect(() => {
     chaseEnabledRef.current = chaseEnabled
@@ -230,44 +214,7 @@ export function VslamScene({ points, path, pose }: Props) {
       >
         {chaseEnabled ? 'CHASE ON' : 'CHASE'}
       </button>
-      <div className="vslam-pip" aria-label="Spoofed OpenStreetMap location inset">
-        <div className="vslam-pip-head">
-          <span>OSM SIM</span>
-          <b>{pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)}` : 'NO POSE'}</b>
-        </div>
-        <svg viewBox={`0 0 ${mapSize} ${mapSize}`} className="vslam-map" role="img">
-          <rect className="map-land" x="0" y="0" width={mapSize} height={mapSize} />
-          <path className="map-park" d="M9 98 C30 83 45 93 62 76 C83 55 111 66 140 46 L150 72 C132 88 119 118 92 130 C57 146 31 128 9 139 Z" />
-          <path className="map-water" d="M0 35 C24 25 39 31 57 20 C82 5 106 9 150 0 L150 18 C119 20 92 16 70 32 C49 47 25 43 0 55 Z" />
-          <g className="map-minor">
-            <path d="M-8 28 L158 118" />
-            <path d="M16 -8 L130 158" />
-            <path d="M-5 125 L153 43" />
-            <path d="M80 -10 L43 160" />
-            <path d="M126 -8 L18 158" />
-          </g>
-          <g className="map-major">
-            <path d="M-10 78 C31 71 50 88 86 72 C113 60 132 42 160 39" />
-            <path d="M34 -8 C31 31 48 58 39 89 C32 113 36 132 52 158" />
-            <path d="M-6 12 C36 42 71 50 104 82 C125 102 137 128 157 143" />
-          </g>
-          <g className="map-blocks">
-            <rect x="19" y="54" width="17" height="10" />
-            <rect x="43" y="35" width="21" height="13" />
-            <rect x="81" y="29" width="18" height="12" />
-            <rect x="105" y="91" width="22" height="14" />
-            <rect x="62" y="112" width="25" height="13" />
-            <rect x="19" y="110" width="20" height="12" />
-          </g>
-          {mapPathD && <path className="map-slam-path" d={mapPathD} />}
-          {mapPose && (
-            <g className="map-pose" transform={`translate(${mapPose.x.toFixed(1)} ${mapPose.y.toFixed(1)})`}>
-              <circle r="6" />
-              <path d="M0 -10 L3 -2 L0 0 L-3 -2 Z" />
-            </g>
-          )}
-        </svg>
-      </div>
+      <GeoMinimap path={path} pose={pose} />
     </div>
   )
 }

@@ -50,26 +50,34 @@ The current implementation is intentionally simple:
 
 The prototype now looks for these files in `pybullet_swarm_video/resources/`:
 
+- `Best_Soldier.zip`
 - `damaged_concrete_floor_4k.blend.zip`
 - `free_military_soldier_rigged.zip`
 - `low-poly-soldiers-rigged-free.zip`
+- `low_poly_container.zip`
+- `low_poly_military_truck.zip`
+- `low_poly_tank.zip`
+- `low_poly_truck_tank.zip`
+- `militarytent.zip`
+- `salt_dome_11_iran.zip`
 - `single_sandbag.zip`
 - `drone_design.zip`
 
 Current behavior:
 
+- the best-soldier archive is preferred as the primary troop mesh;
+  the older military-soldier archive is only used as a fallback if the new one is absent or fails to load
 - the concrete-floor archive is used immediately:
-  the diffuse texture is extracted into `pybullet_swarm_video/resources/.cache/` and applied to the battlefield ground
+  the diffuse texture is extracted into `pybullet_swarm_video/resources/.cache/` and applied to the battlefield ground when the salt-dome terrain is not available
 - the military-soldier archive is extracted into `pybullet_swarm_video/resources/.cache/free_military_soldier_rigged/`
-  and used as the primary 3D troop mesh
+  and used only as the fallback 3D troop mesh
 - the low-poly soldier archive is used immediately:
-  the packaged `texture.png` is extracted into `pybullet_swarm_video/resources/.cache/` and applied to the secondary troop visuals
+  the packaged `texture.png` is extracted into `pybullet_swarm_video/resources/.cache/` and applied only when both higher-fidelity soldier meshes fail
 - the sandbag archive is extracted into `pybullet_swarm_video/resources/.cache/single_sandbag/`
   and used for the emplacements
 - the drone archive is extracted into `pybullet_swarm_video/resources/.cache/drone_design/`
   and used as the drone mesh, with the drone texture applied from the extracted files
-- troops now mix:
-  the extracted 3D soldier mesh and the low-poly textured fallback visual, so both human asset sources are visible in the scene
+- when the salt-dome archive is present, the sim swaps in the textured salt-dome terrain and stages the new trucks, tents, containers, and armor props around it at scene scale
 - if one of the extracted meshes fails to load, the sim falls back to the primitive shape for that actor type instead of failing
 
 This keeps the sim runnable while using the new OBJ/MTL asset bundles directly.

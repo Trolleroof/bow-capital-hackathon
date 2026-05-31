@@ -24,6 +24,28 @@ class PoseMessage(BaseModel):
     tracking: str = "OK"       # "OK" | "NO_LOCK" | "LOST"
 
 
+class SlamStatusMessage(BaseModel):
+    """topic: 'slam_status' — emitted by the ROS2 SLAM bridge."""
+    t: float
+    tracking: str = "NO_LOCK"
+    connected: bool = True
+    camera_frames: int = 0
+    annotated_frames: int = 0
+    dropped_frames: int = 0
+
+
+class SlamFrameMessage(BaseModel):
+    """topic: 'camera_frame' | 'slam_frame' — base64 JPEG test stream."""
+    t: float
+    frame_id: str = ""
+    source: str = ""
+    encoding: Literal["jpeg"] = "jpeg"
+    width: int
+    height: int
+    seq: int
+    data: str
+
+
 class Detection(BaseModel):
     id: int
     cls: str

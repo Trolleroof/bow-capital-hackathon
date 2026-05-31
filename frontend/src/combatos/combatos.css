@@ -388,6 +388,15 @@
   background: linear-gradient(90deg, transparent, #27384f 30%, #27384f 70%, transparent);
 }
 .feed .scan-img { position: absolute; inset: 0; color: #243044; }
+.feed .slam-live-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: .88;
+  filter: contrast(1.05) saturate(.92);
+}
 .feed .scan-img::before {
   content: "";
   position: absolute;
@@ -554,6 +563,84 @@
 .mini-stat .ms b { display: block; font-size: 13px; color: var(--ink); margin-top: 3px; }
 .mini-stat .ms b.green { color: var(--green); }
 .mini-stat .ms b.amber { color: var(--amber); }
+
+/* SLAM test windows */
+.slam-windows {
+  position: absolute;
+  left: 284px;
+  right: 22px;
+  bottom: 42px;
+  z-index: 6;
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(320px, 1fr);
+  gap: 10px;
+  pointer-events: none;
+}
+.slam-window {
+  min-width: 0;
+  border: 1px solid rgba(63,163,230,.28);
+  background: rgba(7, 12, 19, .84);
+  box-shadow: 0 14px 38px rgba(0,0,0,.36);
+  backdrop-filter: blur(12px);
+}
+.sw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 28px;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--line);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .16em;
+  color: var(--ink-dim);
+}
+.sw-head em {
+  font-style: normal;
+  color: var(--green);
+  white-space: nowrap;
+}
+.sw-frame {
+  position: relative;
+  height: 142px;
+  overflow: hidden;
+  background: #04070c;
+}
+.sw-frame img,
+.sw-frame .hatch {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.sw-diag-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+.sw-diag-grid div {
+  min-width: 0;
+  padding: 13px 11px;
+  background: rgba(13, 19, 30, .96);
+}
+.sw-diag-grid span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink-mute);
+  font-size: 8px;
+  letter-spacing: .14em;
+}
+.sw-diag-grid b {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* log bar */
 .logbar {

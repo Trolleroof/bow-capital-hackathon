@@ -104,23 +104,7 @@ function App() {
     toastTimer.current = window.setTimeout(() => setToast(null), 4000)
   }
 
-  const switchView = (next: 'combatos' | 'sim' | 'gym') => {
-    if (next === 'combatos') {
-      window.location.hash = 'combatos'
-      setRoute({ view: 'combatos' })
-    } else if (next === 'gym') {
-      window.location.hash = 'gym'
-      setRoute({ view: 'gym-registry' })
-    } else {
-      goToSim()
-    }
-  }
-
   // ── Navigation ───────────────────────────────────────────────────────────
-
-  if (route.view === 'combatos') {
-    return <CombatOS />
-  }
 
   const goToRegistry = () => {
     const next: AppRoute = { view: 'gym-registry' }
@@ -135,6 +119,13 @@ function App() {
     setRoute(next)
   }
 
+  const goToCombatOS = () => {
+    const next: AppRoute = { view: 'combatos' }
+    pushHash(next)
+    setRoute(next)
+  }
+
+  /** #19 / #23 — attempt to enter Mission Sim. */
   const goToSim = () => {
     if (!simAllowed) {
       showToast('Train a policy in Gym first.')
@@ -196,6 +187,7 @@ function App() {
       </button>
       <button
         type="button"
+        className={route.view === 'combatos' ? 'is-active' : undefined}
         onClick={goToCombatOS}
       >
         CombatOS
@@ -204,6 +196,16 @@ function App() {
   )
 
   // ── Render: fullscreen gym environment ───────────────────────────────────
+  if (route.view === 'combatos') {
+    return (
+      <main className="app-shell app-shell--combatos">
+        <CombatOS />
+        <div className="combatos-nav">{nav}</div>
+      </main>
+    )
+  }
+
+  // ── Render: fullscreen gym environment (#18) ─────────────────────────────
   if (route.view === 'gym-env') {
     return (
       <main className="app-shell app-shell--gym-full">

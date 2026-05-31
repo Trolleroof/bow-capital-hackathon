@@ -34,6 +34,13 @@ log = logging.getLogger(__name__)
 # whenever a remote client (Jetson, etc.) publishes on that topic.
 _TOPIC_MODULE: dict[str, str] = {
     "pose": "nav",
+    "slam_status": "nav",
+    "slam_odometry": "nav",
+    "slam_path": "nav",
+    "slam_diagnostics": "nav",
+    "camera_frame": "nav",
+    "camera_right_frame": "nav",
+    "slam_frame": "nav",
     "detections": "perception",
     "swarm": "swarm",
     "recon": "recon",

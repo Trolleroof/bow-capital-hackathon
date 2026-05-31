@@ -75,6 +75,7 @@ StereoMode::StereoMode() : Node("stereo_node_cpp")
     posePub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/slam/pose", 10);
     odomPub_ = this->create_publisher<nav_msgs::msg::Odometry>("/slam/odometry", 10);
     pathPub_ = this->create_publisher<nav_msgs::msg::Path>("/slam/path", 10);
+    statusPub_ = this->create_publisher<std_msgs::msg::String>("/slam/status", 10);
     trackedImgPub_ = image_transport::create_publisher(this, "/slam/tracked_image");
 
     RCLCPP_INFO(this->get_logger(), "Stereo node initialized - Ready for SLAM!");
@@ -140,6 +141,7 @@ void StereoMode::StereoImg_callback(
 
     // Run ORB-SLAM3 stereo tracking (no IMU data)
     Sophus::SE3f Tcw = pAgent->TrackStereo(cv_left->image, cv_right->image, timestamp);
+    publishTrackingStatus(pAgent->GetTrackingState());
 
     // Publish annotated frame (keypoints, tracking state overlay)
     cv::Mat tracked = pAgent->GetCurrentFrame();
@@ -179,6 +181,7 @@ void StereoMode::publishSLAMOutput(const Sophus::SE3f& Tcw, const rclcpp::Time& 
     pose_msg.pose.orientation.z = q.z();
     pose_msg.pose.orientation.w = q.w();
     posePub_->publish(pose_msg);
+    hasPublishedPose_ = true;
 
     // Odometry
     nav_msgs::msg::Odometry odom_msg;
@@ -193,4 +196,22 @@ void StereoMode::publishSLAMOutput(const Sophus::SE3f& Tcw, const rclcpp::Time& 
     path_msg.header = pose_msg.header;
     path_msg.poses = poseHistory_;
     pathPub_->publish(path_msg);
+}
+
+void StereoMode::publishTrackingStatus(int state)
+{
+    std_msgs::msg::String msg;
+    if (state == 2 || state == 3 || state == 5)
+    {
+        msg.data = "OK";
+    }
+    else if (hasPublishedPose_)
+    {
+        msg.data = "LOST";
+    }
+    else
+    {
+        msg.data = "NO_LOCK";
+    }
+    statusPub_->publish(msg);
 }

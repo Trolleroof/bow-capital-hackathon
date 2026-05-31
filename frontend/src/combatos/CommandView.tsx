@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { LiveFrameCanvas } from './LiveFrameCanvas'
 import type { TelemetryState, LogEntry } from './useCombatState'
 import { TrajPlot, Gauge } from './atoms'
 
@@ -153,7 +154,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           <h4>OAK CAMERA STREAM <em>{liveFeed ? `#${liveFeed.seq}` : 'WAITING'}</em></h4>
           <div className="feed" onClick={onEnterOptic}>
             {liveFeed ? (
-              <img className="slam-live-img" src={liveFeed.data} alt="camera stream" />
+              <LiveFrameCanvas frame={liveFeed} className="slam-live-canvas" fit="cover" />
             ) : (
               <div className="subj-ph hatch" data-cap={'AWAITING\nCAMERA FEED'} />
             )}
@@ -254,7 +255,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm }: Props) {
           {!frameMinimized && (
             <div className="sw-frame">
               {annotatedFeed ? (
-                <img src={annotatedFeed.data} alt="Annotated ORB-SLAM frame" />
+                <LiveFrameCanvas frame={annotatedFeed} className="sw-canvas" fit="contain" />
               ) : (
                 <div className="hatch" data-cap={'WAITING\n/slam/tracked_image'} />
               )}

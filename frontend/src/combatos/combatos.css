@@ -388,12 +388,11 @@
   background: linear-gradient(90deg, transparent, #27384f 30%, #27384f 70%, transparent);
 }
 .feed .scan-img { position: absolute; inset: 0; color: #243044; }
-.feed .slam-live-img {
+.feed .slam-live-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
   opacity: .88;
   filter: contrast(1.05) saturate(.92);
 }
@@ -645,13 +644,12 @@
   overflow: hidden;
   background: #04070c;
 }
-.sw-frame img,
+.sw-frame canvas,
 .sw-frame .hatch {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
 }
 .sw-diag-grid {
   display: grid;
@@ -712,7 +710,7 @@
   font-family: var(--mono);
 }
 .optic .feed-bg { position: absolute; inset: 0; color: #152433; }
-.optic img.feed-bg { object-fit: cover; width: 100%; height: 100%; display: block; }
+.optic .feed-canvas { width: 100%; height: 100%; display: block; }
 .optic .feed-bg::before {
   content: "";
   position: absolute;
@@ -747,6 +745,7 @@
 
 .optic .tape { position: absolute; top: 50%; transform: translateY(-50%); width: 106px; }
 .optic .tape.l { left: 46px; }
+.optic .tape.r { right: 46px; }
 .optic .tape .tl { font-size: 8.5px; letter-spacing: .2em; color: var(--green-dim); margin-bottom: 9px; }
 .optic .tape .tr {
   display: flex;

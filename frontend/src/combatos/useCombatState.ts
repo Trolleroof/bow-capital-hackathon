@@ -22,7 +22,7 @@ export interface SlamFrame {
   width: number
   height: number
   source: string
-  data: string
+  data: Blob
 }
 
 export interface SlamDiagnostics {
@@ -76,13 +76,13 @@ export interface TelemetryState {
   slamDiagnostics: SlamDiagnostics
 }
 
-function base64ToBlobUrl(data: string, mime = 'image/jpeg') {
+function base64ToBlob(data: string, mime = 'image/jpeg') {
   const binary = atob(data)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i)
   }
-  return URL.createObjectURL(new Blob([bytes], { type: mime }))
+  return new Blob([bytes], { type: mime })
 }
 
 function fmtSec(s: number) {
@@ -128,7 +128,7 @@ function toFrame(msg: Record<string, unknown>): SlamFrame | null {
     width: typeof msg.width === 'number' ? msg.width : 0,
     height: typeof msg.height === 'number' ? msg.height : 0,
     source: typeof msg.source === 'string' ? msg.source : '',
-    data: base64ToBlobUrl(msg.data),
+    data: base64ToBlob(msg.data),
   }
 }
 
@@ -288,22 +288,12 @@ export function useCombatState() {
             if (msg.topic === 'camera_frame' || msg.topic === 'fpv_raw') {
               const frame = toFrame(msg)
               if (frame) {
-                setT((p) => {
-                  if (p.cameraFrame?.data.startsWith('blob:')) {
-                    URL.revokeObjectURL(p.cameraFrame.data)
-                  }
-                  return { ...p, cameraFrame: frame }
-                })
+                setT((p) => ({ ...p, cameraFrame: frame }))
               }
             } else if (msg.topic === 'slam_frame' || msg.topic === 'fpv_hud') {
               const frame = toFrame(msg)
               if (frame) {
-                setT((p) => {
-                  if (p.slamFrame?.data.startsWith('blob:')) {
-                    URL.revokeObjectURL(p.slamFrame.data)
-                  }
-                  return { ...p, slamFrame: frame }
-                })
+                setT((p) => ({ ...p, slamFrame: frame }))
               }
             }
           } catch {
@@ -319,15 +309,6 @@ export function useCombatState() {
     return () => {
       clearTimeout(retryTimeout)
       ws?.close()
-      setT((p) => {
-        if (p.cameraFrame?.data.startsWith('blob:')) {
-          URL.revokeObjectURL(p.cameraFrame.data)
-        }
-        if (p.slamFrame?.data.startsWith('blob:')) {
-          URL.revokeObjectURL(p.slamFrame.data)
-        }
-        return p
-      })
     }
   }, [])
 

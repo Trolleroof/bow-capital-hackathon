@@ -25,11 +25,11 @@ load_dotenv()
 YOLO_MODEL = os.getenv("YOLO_MODEL", "yolo11n.pt")
 
 # Minimum per-box confidence score; boxes below this are discarded outright.
-YOLO_CONF  = float(os.getenv("YOLO_CONF", "0.6"))
+YOLO_CONF  = float(os.getenv("YOLO_CONF", "0.4"))
 
 # IoU threshold for non-maximum suppression; lower = more aggressive merging
 # of overlapping boxes (useful when targets are close together).
-YOLO_IOU   = float(os.getenv("YOLO_IOU",  "0.45"))
+YOLO_IOU   = float(os.getenv("YOLO_IOU",  "0.5"))
 
 # Inference device: "cpu", a CUDA index string like "0", or "cuda:0".
 # On Jetson use "0" to hit the TensorRT engine via the CUDA provider.

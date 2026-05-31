@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { LiveFrameCanvas } from '../combatos/LiveFrameCanvas'
 
 interface PoseMessage {
   topic: 'pose'
@@ -39,9 +40,9 @@ interface SlamFrameMessage {
   width: number
   height: number
   seq: number
-  source?: string
+  source: string
   encoding: 'jpeg'
-  data: string
+  data: Blob
 }
 
 interface StatusMessage {
@@ -55,13 +56,13 @@ type BusMessage = PoseMessage | SlamStatusMessage | SlamDiagnosticsMessage | Sla
 const BUS_URL = import.meta.env.VITE_COMBATOS_WS_URL ?? 'ws://localhost:8000'
 const IMAGE_URL = import.meta.env.VITE_COMBATOS_IMAGE_WS_URL ?? 'ws://localhost:8001'
 
-function base64ToBlobUrl(data: string, mime = 'image/jpeg') {
+function base64ToBlob(data: string, mime = 'image/jpeg') {
   const binary = atob(data)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i)
   }
-  return URL.createObjectURL(new Blob([bytes], { type: mime }))
+  return new Blob([bytes], { type: mime })
 }
 
 function fmt(value: number | undefined, digits = 2) {
@@ -136,20 +137,28 @@ export default function SlamTestPanel() {
       ws.onerror = () => ws?.close()
       ws.onmessage = (event) => {
         try {
-          const msg = JSON.parse(event.data) as BusMessage
+          const msg = JSON.parse(event.data) as Record<string, unknown>
           if (msg.topic === 'camera_frame') {
-            setCameraFrame((prev) => {
-              if (prev?.data.startsWith('blob:')) {
-                URL.revokeObjectURL(prev.data)
-              }
-              return { ...msg, data: base64ToBlobUrl(msg.data) }
+            setCameraFrame({
+              topic: 'camera_frame',
+              t: typeof msg.t === 'number' ? msg.t : 0,
+              width: typeof msg.width === 'number' ? msg.width : 0,
+              height: typeof msg.height === 'number' ? msg.height : 0,
+              seq: typeof msg.seq === 'number' ? msg.seq : 0,
+              source: typeof msg.source === 'string' ? msg.source : '',
+              encoding: 'jpeg',
+              data: base64ToBlob(typeof msg.data === 'string' ? msg.data : ''),
             })
           } else if (msg.topic === 'slam_frame') {
-            setSlamFrame((prev) => {
-              if (prev?.data.startsWith('blob:')) {
-                URL.revokeObjectURL(prev.data)
-              }
-              return { ...msg, data: base64ToBlobUrl(msg.data) }
+            setSlamFrame({
+              topic: 'slam_frame',
+              t: typeof msg.t === 'number' ? msg.t : 0,
+              width: typeof msg.width === 'number' ? msg.width : 0,
+              height: typeof msg.height === 'number' ? msg.height : 0,
+              seq: typeof msg.seq === 'number' ? msg.seq : 0,
+              source: typeof msg.source === 'string' ? msg.source : '',
+              encoding: 'jpeg',
+              data: base64ToBlob(typeof msg.data === 'string' ? msg.data : ''),
             })
           }
         } catch {
@@ -163,23 +172,9 @@ export default function SlamTestPanel() {
       closed = true
       if (retry) clearTimeout(retry)
       ws?.close()
-      setCameraFrame((prev) => {
-        if (prev?.data.startsWith('blob:')) {
-          URL.revokeObjectURL(prev.data)
-        }
-        return prev
-      })
-      setSlamFrame((prev) => {
-        if (prev?.data.startsWith('blob:')) {
-          URL.revokeObjectURL(prev.data)
-        }
-        return prev
-      })
     }
   }, [])
 
-  const cameraSrc = useMemo(() => cameraFrame?.data ?? '', [cameraFrame])
-  const slamSrc = useMemo(() => slamFrame?.data ?? '', [slamFrame])
   const tracking = status?.tracking ?? pose?.tracking ?? diagnostics?.tracking ?? 'NO_LOCK'
   const navState = systemStatus?.modules?.nav ?? 'down'
 
@@ -193,13 +188,13 @@ export default function SlamTestPanel() {
       <div className="slam-test-video-grid">
         <figure>
           <div className="slam-test-video">
-            {cameraSrc ? <img src={cameraSrc} alt="OAK left camera stream" /> : <span>Waiting for camera_frame</span>}
+            {cameraFrame ? <LiveFrameCanvas frame={cameraFrame} fit="contain" /> : <span>Waiting for camera_frame</span>}
           </div>
           <figcaption>Camera {cameraFrame ? `#${cameraFrame.seq}` : ''}</figcaption>
         </figure>
         <figure>
           <div className="slam-test-video">
-            {slamSrc ? <img src={slamSrc} alt="Annotated ORB-SLAM frame" /> : <span>Waiting for slam_frame</span>}
+            {slamFrame ? <LiveFrameCanvas frame={slamFrame} fit="contain" /> : <span>Waiting for slam_frame</span>}
           </div>
           <figcaption>Annotated {slamFrame ? `#${slamFrame.seq}` : ''}</figcaption>
         </figure>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { PYBULLET_DEMO_CONFIG } from '../gym/pybulletDemoConfig'
 import { getScenarioById } from '../gym/scenarios'
 import { PYBULLET_WS_URL, startPyBulletSim } from '../gym/trainApi'
 
@@ -41,6 +42,8 @@ interface PyBulletSimPanelProps {
 
 type ConnectionState = 'connecting' | 'online' | 'offline'
 type CameraMode = 'observer' | 'chase' | 'fpv'
+
+const fmt = (value: number, digits = 0) => value.toFixed(digits).replace(/\.0$/, '')
 
 export default function PyBulletSimPanel({
   envId,
@@ -176,12 +179,32 @@ export default function PyBulletSimPanel({
   }, [cameraMode, selectedDrone, switchCamera])
 
   const scenario = getScenarioById(envId)
+  const simConfig = PYBULLET_DEMO_CONFIG.simulation
+  const cameraConfig = simConfig.camera
   const selectedAgent = agents.find((agent) => agent.id === selectedDrone)
   const speed = selectedAgent
     ? Math.hypot(Math.cos(selectedAgent.yaw), Math.sin(selectedAgent.yaw)) * 4.2
     : 0
   const modeLabel = cameraMode === 'fpv' ? 'FPV' : cameraMode.toUpperCase()
-  const visibleAgents = agents.length ? agents : [{ id: 0, alive: true } as AgentPose]
+  const configuredAgents = Array.from(
+    { length: simConfig.numDrones },
+    (_, id) => ({ id, alive: true }) as AgentPose,
+  )
+  const visibleAgents = agents.length ? agents : configuredAgents
+  const simConfigChips = [
+    `DRONES ${simConfig.numDrones}`,
+    `TROOPS ${simConfig.numTroops}`,
+    `FPV ${cameraConfig.width}x${cameraConfig.height}`,
+    `FPS ${PYBULLET_DEMO_CONFIG.recording.fps}`,
+    `FOV ${fmt(cameraConfig.fovDeg)}deg`,
+    `TILT ${fmt(cameraConfig.tiltDeg)}deg`,
+    `ALT ${fmt(simConfig.droneAltitudeM)}M`,
+    `SPEED ${fmt(simConfig.droneSpeedMps)}MPS`,
+    `RING ${fmt(simConfig.droneRingRadiusM)}M`,
+    `WORLD +/-${fmt(simConfig.worldHalfExtentM)}M`,
+    `STEP ${Math.round(simConfig.timeStep * 1000)}MS`,
+    `TROOP STRIDE ${fmt(simConfig.troopStrideMps, 1)}MPS`,
+  ]
 
   return (
     <section className="pybullet-sim" aria-label={`${missionName} PyBullet simulation`}>
@@ -253,16 +276,15 @@ export default function PyBulletSimPanel({
       <div className="pybullet-sidecar" aria-label="Mission telemetry">
         <div className="pybullet-stat-grid">
           <span>Policy {policy}</span>
-          <span>Alive {alive || agents.length}</span>
+          <span>Alive {alive || agents.length}/{simConfig.numDrones}</span>
           <span>Coverage {(coverage * 100).toFixed(0)}%</span>
           <span>Frame {frameTime.toFixed(1)}s</span>
         </div>
 
-        <div className="pybullet-asset-strip" aria-label="Rendered scene assets">
-          <span>Terrain</span>
-          <span>Troops</span>
-          <span>Sandbags</span>
-          <span>Drone mesh</span>
+        <div className="pybullet-config-strip" aria-label="Simulation config">
+          {simConfigChips.map((chip) => (
+            <span key={chip}>{chip}</span>
+          ))}
         </div>
 
         <div className="pybullet-map" aria-label="Coordination map">

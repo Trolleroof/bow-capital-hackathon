@@ -29,25 +29,37 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from swarm.env_config import config_to_json_dict, make_profile_config
-from swarm.eval import EvalResult, eval_policy, is_better
+from swarm.eval import EvalResult, ScriptedPolicy, eval_policy, eval_scripted, is_better
 from swarm.mappo import MAPPO, MAPPOConfig
 from swarm.scenarios import make_scenario_env
 
 # ----------------------------------------------------------- HYPERPARAMETERS ---
 DEFAULTS = dict(
-    timesteps=300_000,
-    rollout_steps=400,
+    timesteps=1_000_000,
+    # Per-env rollout length. Effective batch = rollout_steps * num_envs
+    # (256 * 8 = 2048 transitions/update — far less noisy than the old 400).
+    rollout_steps=256,
+    num_envs=8,
     lr=3e-4,
     gamma=0.99,
     gae_lambda=0.95,
     clip_coef=0.2,
     ent_coef=0.01,
+    # Entropy is annealed linearly ent_coef -> ent_coef_final across training so
+    # exploration is high early and the final policy is decisive (not still random).
+    ent_coef_final=0.001,
     vf_coef=0.5,
     update_epochs=8,
     num_minibatches=4,
     actor_hidden=64,
     critic_hidden=128,
     log_std_init=-0.5,
+    target_kl=0.015,
+    # Optional decentralized behavior-cloning warm start from ScriptedPolicy.
+    # Disabled by default; useful for sparse combat tasks where PPO otherwise
+    # spends most early samples not reaching engagement range.
+    bc_steps=0,
+    bc_batch_size=256,
     seed=0,
 )
 
@@ -85,6 +97,57 @@ def save_json(path: str, payload: dict) -> None:
         fh.write("\n")
 
 
+def behavior_clone_scripted(
+    algo: MAPPO,
+    *,
+    env_id: str,
+    battlefield,
+    steps: int,
+    batch_size: int,
+    seed: int,
+) -> None:
+    if steps <= 0:
+        return
+
+    env = make_scenario_env(env_id, battlefield=battlefield, seed=seed)
+    scripted = ScriptedPolicy(env)
+    obs = env.reset(seed=seed)
+    rng = np.random.default_rng(seed)
+    n = env.n
+    target_batch = max(n, int(batch_size))
+
+    for step in range(1, steps + 1):
+        obs_chunks: list[np.ndarray] = []
+        act_chunks: list[np.ndarray] = []
+        while sum(chunk.shape[0] for chunk in obs_chunks) < target_batch:
+            target = scripted(torch.as_tensor(obs)).numpy().astype(np.float32)
+            obs_chunks.append(obs.astype(np.float32))
+            act_chunks.append(target)
+
+            # Mix scripted and random motion while collecting states so the actor
+            # learns recovery from off-script positions, not just the ideal line.
+            noise = rng.normal(0.0, 0.25, size=target.shape).astype(np.float32)
+            action = np.clip(target + noise, -1.0, 1.0)
+            obs, _, dones, _ = env.step(action)
+            if dones.any():
+                obs = env.reset(seed=int(rng.integers(1 << 30)))
+
+        obs_np = np.concatenate(obs_chunks, axis=0)[:target_batch]
+        act_np = np.concatenate(act_chunks, axis=0)[:target_batch]
+        obs_t = torch.as_tensor(obs_np, device=algo.device)
+        act_t = torch.as_tensor(act_np, device=algo.device)
+
+        pred = algo.actor(obs_t)
+        loss = torch.nn.functional.mse_loss(pred, act_t)
+        algo.opt.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(algo.actor.parameters(), algo.cfg.max_grad_norm)
+        algo.opt.step()
+
+        if step == 1 or step == steps or step % 100 == 0:
+            print(f"[bc] scripted warm-start step {step}/{steps} mse={loss.item():.5f}", flush=True)
+
+
 def main():
     p = argparse.ArgumentParser()
     for k, v in DEFAULTS.items():
@@ -92,6 +155,15 @@ def main():
     p.add_argument("--env-id", type=str, default="search-and-interdict")
     p.add_argument("--profile", choices=["garrison", "combat"], default="combat")
     p.add_argument("--run-name", type=str, default=None)
+    p.add_argument(
+        "--init-from", type=str, default=None,
+        help="warm-start actor+critic from a policy.pt checkpoint (curriculum). "
+        "Obs/act dims must match the new env.",
+    )
+    p.add_argument(
+        "--eval-every", type=int, default=5,
+        help="run a deterministic eval + checkpoint check every N updates",
+    )
     args = p.parse_args()
 
     os.makedirs(CKPT_ROOT, exist_ok=True)
@@ -111,6 +183,7 @@ def main():
 
     cfg = MAPPOConfig(
         rollout_steps=args.rollout_steps,
+        num_envs=args.num_envs,
         lr=args.lr,
         gamma=args.gamma,
         gae_lambda=args.gae_lambda,
@@ -122,11 +195,35 @@ def main():
         actor_hidden=args.actor_hidden,
         critic_hidden=args.critic_hidden,
         log_std_init=args.log_std_init,
+        target_kl=args.target_kl,
         seed=args.seed,
     )
 
     np.random.seed(args.seed)
-    algo = MAPPO(env, cfg)
+
+    # Distinct seeds per parallel env so the rollout samples decorrelated worlds.
+    def _env_fn(idx: int):
+        return make_scenario_env(
+            args.env_id, battlefield=battlefield, seed=args.seed + 1000 * idx
+        )
+
+    algo = MAPPO(env, cfg, env_fn=_env_fn if args.num_envs > 1 else None)
+
+    # Curriculum warm-start: load weights from an earlier-stage checkpoint
+    # (e.g. garrison) before fine-tuning the harder profile.
+    if args.init_from:
+        init_ckpt = torch.load(args.init_from, map_location="cpu", weights_only=False)
+        if init_ckpt.get("obs_dim") not in (None, env.obs_dim):
+            raise ValueError(
+                f"--init-from obs_dim {init_ckpt.get('obs_dim')} != env obs_dim {env.obs_dim}"
+            )
+        algo.actor.load_state_dict(init_ckpt["actor_state_dict"])
+        if "critic_state_dict" in init_ckpt:
+            try:
+                algo.critic.load_state_dict(init_ckpt["critic_state_dict"])
+            except Exception:
+                print("[init] critic shape mismatch, skipping critic warm-start")
+        print(f"[init] warm-started actor from {args.init_from}")
 
     emit_train_event(
         paths["events"],
@@ -158,6 +255,22 @@ def main():
     )
     writer.add_scalar("eval/random_coverage", random_eval.coverage, 0)
     writer.add_scalar(f"eval/random_{random_eval.primary_metric}", random_eval.primary_value, 0)
+
+    scripted_eval = eval_scripted(env_id=args.env_id, battlefield=battlefield, n_episodes=10)
+    print(
+        f"[baseline] scripted (fly-at-objective) {scripted_eval.primary_metric} = "
+        f"{scripted_eval.primary_value:.3f} | coverage = {scripted_eval.coverage:.3f}"
+    )
+    writer.add_scalar(f"eval/scripted_{scripted_eval.primary_metric}", scripted_eval.primary_value, 0)
+
+    behavior_clone_scripted(
+        algo,
+        env_id=args.env_id,
+        battlefield=battlefield,
+        steps=args.bc_steps,
+        batch_size=args.bc_batch_size,
+        seed=args.seed + 17,
+    )
     emit_train_event(
         paths["events"],
         {
@@ -176,8 +289,9 @@ def main():
         },
     )
 
-    obs = env.reset(seed=args.seed)
-    n_updates = max(1, args.timesteps // cfg.rollout_steps)
+    obs = algo.reset(seed=args.seed)
+    steps_per_update = cfg.rollout_steps * algo.num_envs
+    n_updates = max(1, args.timesteps // steps_per_update)
     global_step = 0
     best_eval: EvalResult | None = None
     best_global_step = 0
@@ -186,7 +300,10 @@ def main():
 
     for update in range(1, n_updates + 1):
         batch, obs, stats = algo.collect_rollout(obs)
-        global_step += cfg.rollout_steps
+        global_step += steps_per_update
+        # Linear entropy-coefficient anneal: explore early, commit late.
+        frac = (update - 1) / max(1, n_updates - 1)
+        algo.cfg.ent_coef = args.ent_coef + frac * (args.ent_coef_final - args.ent_coef)
         train = algo.update(batch)
 
         ep_rew = float(np.mean(stats["ep_rewards"])) if stats["ep_rewards"] else 0.0
@@ -240,7 +357,7 @@ def main():
                 f"[{sps} sps]"
             )
 
-        if update % 5 == 0 or update == n_updates:
+        if update % args.eval_every == 0 or update == n_updates:
             det_eval = eval_policy(
                 algo.actor,
                 env_id=args.env_id,
@@ -278,6 +395,7 @@ def main():
                         "params_hash": params_hash,
                         "battlefield": config_to_json_dict(battlefield),
                         "actor_state_dict": algo.actor.state_dict(),
+                        "critic_state_dict": algo.critic.state_dict(),
                         "obs_dim": env.obs_dim,
                         "act_dim": env.act_dim,
                         "actor_hidden": cfg.actor_hidden,
@@ -336,6 +454,8 @@ def main():
         "seed": args.seed,
         "timesteps": args.timesteps,
         "rollout_steps": cfg.rollout_steps,
+        "bc_steps": args.bc_steps,
+        "bc_batch_size": args.bc_batch_size,
         "global_step": global_step,
         "best_global_step": best_global_step,
         "primary_metric": best_eval.primary_metric,

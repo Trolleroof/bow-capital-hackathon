@@ -36,6 +36,7 @@ Layout, in order (all positions/velocities normalized to roughly [-1, 1]):
              sx/h, sy/h). Empty slots stay zero. The same registry drives the
              PyBullet renderer, so what the policy is trained against matches
              what you see in 3D.
+  [ .. .. ]  scenario task features: targets, hostiles, rivals, asset cues.
   [ -1 ]     role/goal flag (float): role index normalized to [0, 1]
 
 Dimensions (defaults N=5, K=3, PATCH=5, M_OBSTACLES=3):
@@ -43,8 +44,9 @@ Dimensions (defaults N=5, K=3, PATCH=5, M_OBSTACLES=3):
   NEIGHBOR_DIM   = 2 * K             (= 6)
   PATCH_DIM      = PATCH * PATCH     (= 25)
   OBSTACLE_DIM   = M_OBSTACLES * 4   (= 12)
+  TASK_DIM       = 16
   ROLE_DIM       = 1
-  OBS_DIM        = 4 + 6 + 25 + 12 + 1   (= 48)
+  OBS_DIM        = 4 + 6 + 25 + 12 + 16 + 1   (= 64)
 
 `obs_dim(K, patch)` recomputes this for non-default configs. The module-level
 constant OBS_DIM is for the defaults so Phase 1/2 can import a fixed shape.
@@ -267,6 +269,7 @@ class SwarmEnv:
         self.rival_score = 0
         self._nav_prev_x: float = -self.world_half    # navigate-to-target x-progress tracker
         self._nav_prev_dist: float = 2.0 * self.world_half  # navigate-to-target dist tracker
+        self._d2d_prev_dist: float = 2.0 * self.world_half  # drone-vs-drone progress tracker
 
         # Scenario obstacles — real 3D props the policy must see + avoid.
         # Default to the registry for this scenario_id; can be overridden for tests.
@@ -326,6 +329,7 @@ class SwarmEnv:
             self.hostile_pos = np.stack([x, y], axis=1).astype(np.float32)
             self.hostile_vel = np.zeros((n_hostile, 2), dtype=np.float32)
             self.hostile_alive = np.ones(n_hostile, dtype=bool)
+            self._d2d_prev_dist = self._drone_vs_drone_mean_nearest_dist()
         elif sid == "moving-target-track":
             self.target_pos = np.array([-0.45 * h, -0.15 * h], dtype=np.float32)
             speed = 0.6
@@ -347,18 +351,6 @@ class SwarmEnv:
             )
             self.hostile_vel = (inward * 0.55).astype(np.float32)
             self.hostile_alive = np.ones(n_hostile, dtype=bool)
-        elif sid == "swarm-vs-swarm-race":
-            n_rival = self.n
-            x = self.rng.uniform(0.15 * h, 0.9 * h, n_rival)
-            y = self.rng.uniform(-0.8 * h, 0.8 * h, n_rival)
-            self.rival_pos = np.stack([x, y], axis=1).astype(np.float32)
-            self.rival_vel = np.zeros((n_rival, 2), dtype=np.float32)
-            contested: list[tuple[int, int]] = []
-            for gx in range(self.grid // 2 - 2, self.grid - 2, 3):
-                for gy in range(3, self.grid - 3, 4):
-                    contested.append((gx, gy))
-            self.contested_cells = np.array(contested, dtype=np.int64)
-            self.contested_owner = np.zeros(len(contested), dtype=np.int8)
         elif sid == "navigate-to-target":
             # Static goal at the right end of the corridor.
             self.target_pos = np.array([0.85 * h, 0.0], dtype=np.float32)
@@ -410,13 +402,6 @@ class SwarmEnv:
                 if not self.hostile_alive[i]:
                     continue
                 self.hostile_pos[i] += self.hostile_vel[i] * DT
-        elif sid == "swarm-vs-swarm-race" and self.rival_pos.shape[0]:
-            target = np.array([-0.05 * h, 0.0], dtype=np.float32)
-            rel = target - self.rival_pos
-            dist = np.maximum(np.linalg.norm(rel, axis=1, keepdims=True), 1e-6)
-            self.rival_vel = (rel / dist * 0.65).astype(np.float32)
-            self.rival_pos += self.rival_vel * DT
-            self.rival_pos = np.clip(self.rival_pos, -h, h)
 
     def _nearest_live_hostile(self, point: np.ndarray) -> tuple[int | None, float]:
         if self.hostile_alive.size == 0 or not self.hostile_alive.any():
@@ -425,6 +410,17 @@ class SwarmEnv:
         d = np.linalg.norm(self.hostile_pos[ids] - point, axis=1)
         k = int(np.argmin(d))
         return int(ids[k]), float(d[k])
+
+    def _drone_vs_drone_mean_nearest_dist(self) -> float:
+        if not self.alive.any() or self.hostile_alive.size == 0 or not self.hostile_alive.any():
+            return 2.0 * self.world_half
+        live_pos = self.pos[self.alive]
+        live_hostile = self.hostile_pos[self.hostile_alive]
+        dist_to_hostiles = np.linalg.norm(
+            live_pos[:, None, :] - live_hostile[None, :, :],
+            axis=-1,
+        )
+        return float(dist_to_hostiles.min(axis=1).mean())
 
     def _compute_task_transitions(self, live_pos: np.ndarray) -> dict[str, float]:
         events: dict[str, float] = {}
@@ -471,26 +467,6 @@ class SwarmEnv:
                     self.hostile_alive[idx] = False
                     self.breaches += 1
                     events["breaches"] = events.get("breaches", 0.0) + 1.0
-        elif sid == "swarm-vs-swarm-race" and self.contested_cells.shape[0]:
-            for idx, (gx, gy) in enumerate(self.contested_cells):
-                if self.contested_owner[idx] != 0:
-                    continue
-                wx = (gx + 0.5) * self.cell - self.world_half
-                wy = (gy + 0.5) * self.cell - self.world_half
-                cell_pos = np.array([wx, wy], dtype=np.float32)
-                blue_hit = np.any(np.linalg.norm(live_pos - cell_pos, axis=1) < 1.2)
-                rival_hit = (
-                    self.rival_pos.shape[0] > 0
-                    and np.any(np.linalg.norm(self.rival_pos - cell_pos, axis=1) < 1.2)
-                )
-                if blue_hit and not rival_hit:
-                    self.contested_owner[idx] = 1
-                    self.contested_score += 1
-                    events["blue_claims"] = events.get("blue_claims", 0.0) + 1.0
-                elif rival_hit and not blue_hit:
-                    self.contested_owner[idx] = -1
-                    self.rival_score += 1
-                    events["rival_claims"] = events.get("rival_claims", 0.0) + 1.0
         elif sid == "navigate-to-target":
             if self.intercept_step is None and live_pos.shape[0] > 0:
                 d = np.linalg.norm(live_pos - self.target_pos, axis=1)
@@ -686,10 +662,6 @@ class SwarmEnv:
             r = rng.uniform(0.42 * h, 0.55 * h, n)
             x = r * np.cos(ang)
             y = r * np.sin(ang)
-        elif sid == "swarm-vs-swarm-race":
-            # blue holds and works the left territory
-            x = rng.uniform(-0.9 * h, -0.15 * h, n)
-            y = rng.uniform(-0.8 * h, 0.8 * h, n)
         elif sid == "navigate-to-target":
             # single drone starts at the left end of the corridor
             x = rng.uniform(-0.92 * h, -0.75 * h, n)
@@ -724,8 +696,6 @@ class SwarmEnv:
                 [0.5 * h * math.sin(t * 0.18) + 0.15 * h, 0.5 * h * math.cos(t * 0.27)],
                 dtype=np.float32,
             )
-        if sid == "swarm-vs-swarm-race":
-            return np.array([-0.5 * h, 0.0], dtype=np.float32)  # own territory
         if sid == "navigate-to-target":
             return self.target_pos.copy()
         return None
@@ -832,21 +802,6 @@ class SwarmEnv:
                 "task_score": float(task_score),
                 "primary_value": float(asset_integrity),
             })
-        elif sid == "swarm-vs-swarm-race":
-            total = max(1, int(self.contested_cells.shape[0]))
-            blue = self.contested_score / total
-            rival = self.rival_score / total
-            margin = blue - rival
-            territory = float((self.contested_owner == 1).sum()) / total if total else 0.0
-            task_score = 0.7 * ((margin + 1.0) * 0.5) + 0.3 * territory
-            metrics.update({
-                "blue_contested_score": float(blue),
-                "rival_contested_score": float(rival),
-                "contested_margin": float(margin),
-                "territory_control": float(territory),
-                "task_score": float(task_score),
-                "primary_value": float(margin),
-            })
         elif sid == "navigate-to-target":
             reached = 1.0 if self.intercept_step is not None else 0.0
             dist_norm = 1.0
@@ -880,6 +835,10 @@ class SwarmEnv:
                 )
                 nearest_hostile_idx = np.argmin(dist_to_hostiles, axis=1)
                 d = dist_to_hostiles[np.arange(live_pos.shape[0]), nearest_hostile_idx]
+                mean_d = float(d.mean())
+                progress = (self._d2d_prev_dist - mean_d) / (2.0 * self.world_half)
+                reward += weights.get("progress", 0.0) * float(np.clip(progress, -1.0, 1.0))
+                self._d2d_prev_dist = mean_d
                 reward += weights.get("approach", 0.0) * float(
                     (1.0 - np.clip(d / (2.0 * self.world_half), 0.0, 1.0)).mean()
                 )
@@ -922,12 +881,6 @@ class SwarmEnv:
             reward += weights.get("ring", 0.0) * float(ring)
             reward += weights.get("intercept", 0.0) * events.get("kills", 0.0)
             reward -= weights.get("breach", 0.0) * events.get("breaches", 0.0)
-        elif sid == "swarm-vs-swarm-race":
-            total = max(1, int(self.contested_cells.shape[0]))
-            margin = (self.contested_score - self.rival_score) / total
-            reward += weights.get("claim", 0.0) * events.get("blue_claims", 0.0)
-            reward -= weights.get("rival", 0.0) * events.get("rival_claims", 0.0)
-            reward += weights.get("margin", 0.0) * margin
         elif sid == "navigate-to-target":
             if live_pos.shape[0] > 0:
                 d = float(np.linalg.norm(live_pos[0] - self.target_pos))
@@ -967,6 +920,8 @@ class SwarmEnv:
                     base = slot * 3
                     feats[base:base + 2] = (self.hostile_pos[hid] - own) / h
                     feats[base + 2] = 1.0
+                    vbase = 12 + slot * 2
+                    feats[vbase:vbase + 2] = np.clip(self.hostile_vel[hid] / MAX_SPEED, -1.0, 1.0)
             total = max(1, int(self.hostile_alive.size))
             feats[6] = float(self.hostile_alive.sum()) / total if self.hostile_alive.size else 0.0
             feats[7:9] = -own / h
@@ -1015,31 +970,6 @@ class SwarmEnv:
             actual = math.atan2(own[1], own[0])
             feats[10] = math.sin(actual - desired)
             feats[11] = self.breaches / max(1, self._hostile_count())
-        elif sid == "swarm-vs-swarm-race":
-            if self.rival_pos.shape[0]:
-                d = np.linalg.norm(self.rival_pos - own, axis=1)
-                rid = int(np.argmin(d))
-                feats[0:2] = (self.rival_pos[rid] - own) / h
-                feats[10] = 1.0 - np.clip(float(d[rid]) / h, 0.0, 1.0)
-            if self.contested_cells.shape[0]:
-                unclaimed = np.where(self.contested_owner == 0)[0]
-                ids = unclaimed if unclaimed.size else np.arange(self.contested_cells.shape[0])
-                world = (self.contested_cells[ids].astype(np.float32) + 0.5) * self.cell - h
-                d = np.linalg.norm(world - own, axis=1)
-                cid = int(ids[int(np.argmin(d))])
-                cell_world = (self.contested_cells[cid].astype(np.float32) + 0.5) * self.cell - h
-                feats[2:4] = (cell_world - own) / h
-                total = max(1, self.contested_cells.shape[0])
-                feats[4] = self.contested_score / total
-                feats[5] = self.rival_score / total
-                cx, cy = self._world_to_cell(own[None, :])
-                local = np.where((self.contested_cells[:, 0] == int(cx[0])) & (self.contested_cells[:, 1] == int(cy[0])))[0]
-                if local.size:
-                    owner = int(self.contested_owner[int(local[0])])
-                    feats[6] = 1.0
-                    feats[7] = 1.0 if owner == 1 else 0.0
-                    feats[8] = 1.0 if owner == -1 else 0.0
-            feats[9] = 1.0 if own[0] > 0.0 else -1.0
         elif sid == "navigate-to-target":
             rel = self.target_pos - own
             dist = float(np.linalg.norm(rel))
@@ -1295,12 +1225,6 @@ class SwarmEnv:
                     feats[1:3] = centroid / h
             feats[3] = self.breaches / max(1, self._hostile_count())
             feats[4] = self.intercepts / max(1, self._hostile_count())
-        elif self.scenario_id == "swarm-vs-swarm-race":
-            total = max(1, self.contested_cells.shape[0])
-            feats[0] = self.contested_score / total
-            feats[1] = self.rival_score / total
-            if self.rival_pos.shape[0]:
-                feats[2:4] = self.rival_pos.mean(axis=0) / h
         elif self.scenario_id == "navigate-to-target":
             feats[0:2] = self.target_pos / h
             feats[2] = 1.0 if self.intercept_step is not None else 0.0

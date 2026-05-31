@@ -16,6 +16,7 @@ entropy bonus, gradient clipping, several update epochs over minibatches.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 import numpy as np
 import torch
@@ -43,6 +44,13 @@ class MAPPOConfig:
     actor_hidden: int = 64
     critic_hidden: int = 128
     log_std_init: float = -0.5
+    # KL early-stop: abort the PPO epoch loop once the average update this epoch
+    # has moved the policy past target_kl. 0/None disables it. Guards against the
+    # late-training collapse where approx_kl spikes then crashes to 0.
+    target_kl: float = 0.015
+    # Synchronous parallel envs per rollout. >1 decorrelates samples and is the
+    # main SB3-style throughput/stability win. Effective batch = rollout_steps*num_envs.
+    num_envs: int = 1
     # misc
     device: str = "cpu"
     seed: int = 0
@@ -51,9 +59,15 @@ class MAPPOConfig:
 class MAPPO:
     """Holds the actor, critic, optimizer, and the rollout/update logic."""
 
-    def __init__(self, env: SwarmEnv, cfg: MAPPOConfig):
+    def __init__(
+        self,
+        env: SwarmEnv,
+        cfg: MAPPOConfig,
+        env_fn: Callable[[int], SwarmEnv] | None = None,
+    ):
         self.env = env
         self.cfg = cfg
+        self.num_envs = max(1, cfg.num_envs)
         torch.manual_seed(cfg.seed)
         self.device = torch.device(cfg.device)
 
@@ -65,68 +79,98 @@ class MAPPO:
             lr=cfg.lr, eps=1e-5,
         )
 
+        # Parallel env pool. env index 0 is the primary (metadata) env; the rest
+        # come from env_fn(idx) with distinct seeds for decorrelated rollouts.
+        if self.num_envs > 1:
+            if env_fn is None:
+                raise ValueError("num_envs > 1 requires an env_fn(idx) factory")
+            self.envs = [env] + [env_fn(i + 1) for i in range(self.num_envs - 1)]
+        else:
+            self.envs = [env]
+
+    def reset(self, seed: int | None = None) -> np.ndarray:
+        """Reset every env (env i with seed+i) -> stacked obs (num_envs, n, obs_dim)."""
+        obs = [
+            e.reset(seed=None if seed is None else seed + i)
+            for i, e in enumerate(self.envs)
+        ]
+        return np.stack(obs, axis=0).astype(np.float32)
+
     # ------------------------------------------------------------ rollout ---
     @torch.no_grad()
     def collect_rollout(self, obs: np.ndarray):
-        """Run one rollout of cfg.rollout_steps. Returns a batch dict + the
-        next obs (for the next rollout) and episode stats.
+        """Run one rollout of cfg.rollout_steps across num_envs parallel envs.
 
-        Buffers are stored per (step, agent) for actor data and per step for
-        the shared critic. Dead agents are masked out of the policy loss.
+        ``obs`` is the stacked (num_envs, n, obs_dim) observation from reset()/the
+        previous rollout. Buffers are (T, E, ...); they flatten to per-(step,env)
+        for the shared critic and per-(step,env,agent) for the actor. Dead agents
+        are masked out of the policy loss. Returns a batch dict, the next stacked
+        obs, and episode stats.
         """
-        cfg, env, n = self.cfg, self.env, self.env.n
+        cfg = self.cfg
+        E = self.num_envs
+        n = self.env.n
+        od = self.env.obs_dim
+        ad = self.env.act_dim
+        sd = self.env.state_dim
         T = cfg.rollout_steps
 
-        obs_buf = np.zeros((T, n, env.obs_dim), dtype=np.float32)
-        act_buf = np.zeros((T, n, env.act_dim), dtype=np.float32)
-        logp_buf = np.zeros((T, n), dtype=np.float32)
-        alive_buf = np.zeros((T, n), dtype=np.float32)
-        state_buf = np.zeros((T, env.state_dim), dtype=np.float32)
-        rew_buf = np.zeros(T, dtype=np.float32)     # shared team reward
-        val_buf = np.zeros(T, dtype=np.float32)
-        done_buf = np.zeros(T, dtype=np.float32)
+        obs_buf = np.zeros((T, E, n, od), dtype=np.float32)
+        act_buf = np.zeros((T, E, n, ad), dtype=np.float32)
+        logp_buf = np.zeros((T, E, n), dtype=np.float32)
+        alive_buf = np.zeros((T, E, n), dtype=np.float32)
+        state_buf = np.zeros((T, E, sd), dtype=np.float32)
+        rew_buf = np.zeros((T, E), dtype=np.float32)   # shared team reward per env
+        val_buf = np.zeros((T, E), dtype=np.float32)
+        done_buf = np.zeros((T, E), dtype=np.float32)
 
         ep_rewards, ep_coverage, ep_task_score, ep_primary_value = [], [], [], []
-        ep_ret = 0.0
+        ep_ret = np.zeros(E, dtype=np.float32)
 
         for t in range(T):
-            state = env.global_state()
-            obs_t = torch.as_tensor(obs, device=self.device)
-            action, logp = self.actor.sample(obs_t)
-            value = self.critic(torch.as_tensor(state, device=self.device).unsqueeze(0))
+            states = np.stack([e.global_state() for e in self.envs], axis=0)  # (E, sd)
+            flat_obs = torch.as_tensor(obs.reshape(E * n, od), device=self.device)
+            action, logp = self.actor.sample(flat_obs)
+            values = self.critic(torch.as_tensor(states, device=self.device))  # (E,)
 
-            a_np = action.cpu().numpy().astype(np.float32)
-            next_obs, rewards, dones, info = env.step(a_np)
+            a_np = action.cpu().numpy().astype(np.float32).reshape(E, n, ad)
+            logp_np = logp.cpu().numpy().reshape(E, n)
 
             obs_buf[t] = obs
             act_buf[t] = a_np
-            logp_buf[t] = logp.cpu().numpy()
-            alive_buf[t] = env.alive.astype(np.float32)
-            state_buf[t] = state
-            # team reward: take the shared scalar (max over agents; dead get 0)
-            rew_buf[t] = float(rewards.max()) if rewards.size else 0.0
-            val_buf[t] = float(value.item())
-            done_buf[t] = float(dones.any())
+            logp_buf[t] = logp_np
+            state_buf[t] = states
+            val_buf[t] = values.cpu().numpy().reshape(E)
 
-            ep_ret += rew_buf[t]
+            next_obs = np.zeros_like(obs)
+            for e, env in enumerate(self.envs):
+                o, rewards, dones, info = env.step(a_np[e])
+                alive_buf[t, e] = env.alive.astype(np.float32)
+                rew_buf[t, e] = float(rewards.max()) if rewards.size else 0.0
+                done_buf[t, e] = float(dones.any())
+                ep_ret[e] += rew_buf[t, e]
+                if dones.any():
+                    ep_rewards.append(float(ep_ret[e]))
+                    ep_ret[e] = 0.0
+                    ep_coverage.append(info["coverage"])
+                    ep_task_score.append(float(info.get("task_score", info["coverage"])))
+                    ep_primary_value.append(
+                        float(info.get("primary_value", info.get("task_score", info["coverage"])))
+                    )
+                    o = env.reset(seed=int(env.rng.integers(1 << 30)))
+                next_obs[e] = o
             obs = next_obs
 
-            if dones.any():
-                ep_rewards.append(ep_ret)
-                ep_coverage.append(info["coverage"])
-                ep_task_score.append(float(info.get("task_score", info["coverage"])))
-                ep_primary_value.append(float(info.get("primary_value", info.get("task_score", info["coverage"]))))
-                ep_ret = 0.0
-                obs = env.reset(seed=int(env.rng.integers(1 << 30)))
-
-        # bootstrap value for the final state
+        # bootstrap value per env
         with torch.no_grad():
-            last_state = torch.as_tensor(env.global_state(), device=self.device).unsqueeze(0)
-            last_val = float(self.critic(last_state).item())
+            last_states = np.stack([e.global_state() for e in self.envs], axis=0)
+            last_val = self.critic(
+                torch.as_tensor(last_states, device=self.device)
+            ).cpu().numpy().reshape(E)
 
-        # ---- GAE on the shared (per-step) reward/value track ----
-        adv = np.zeros(T, dtype=np.float32)
-        last_gae = 0.0
+        # ---- GAE per env on the shared (per-step) reward/value track ----
+        adv = np.zeros((T, E), dtype=np.float32)
+        last_gae = np.zeros(E, dtype=np.float32)
         for t in reversed(range(T)):
             next_nonterm = 1.0 - done_buf[t]
             next_val = last_val if t == T - 1 else val_buf[t + 1]
@@ -135,17 +179,17 @@ class MAPPO:
             adv[t] = last_gae
         ret = adv + val_buf
 
+        # Flatten [t, env, agent] for the actor, [t, env] for the critic.
         batch = {
-            "obs": torch.as_tensor(obs_buf.reshape(T * n, env.obs_dim)),
-            "act": torch.as_tensor(act_buf.reshape(T * n, env.act_dim)),
-            "logp": torch.as_tensor(logp_buf.reshape(T * n)),
-            "alive": torch.as_tensor(alive_buf.reshape(T * n)),
-            # broadcast per-step advantage/return/value to each agent
-            "adv": torch.as_tensor(np.repeat(adv, n)),
-            "ret": torch.as_tensor(np.repeat(ret, n)),
-            "state": torch.as_tensor(state_buf),       # (T, state_dim) for critic
-            "val": torch.as_tensor(val_buf),           # (T,)
-            "ret_step": torch.as_tensor(ret),          # (T,)
+            "obs": torch.as_tensor(obs_buf.reshape(T * E * n, od)),
+            "act": torch.as_tensor(act_buf.reshape(T * E * n, ad)),
+            "logp": torch.as_tensor(logp_buf.reshape(T * E * n)),
+            "alive": torch.as_tensor(alive_buf.reshape(T * E * n)),
+            "adv": torch.as_tensor(np.repeat(adv.reshape(-1), n)),
+            "ret": torch.as_tensor(np.repeat(ret.reshape(-1), n)),
+            "state": torch.as_tensor(state_buf.reshape(T * E, sd)),
+            "val": torch.as_tensor(val_buf.reshape(-1)),
+            "ret_step": torch.as_tensor(ret.reshape(-1)),
         }
         stats = {
             "ep_rewards": ep_rewards,
@@ -187,6 +231,7 @@ class MAPPO:
         for _ in range(cfg.update_epochs):
             np.random.shuffle(agent_idx)
             np.random.shuffle(step_idx)
+            epoch_kl, epoch_mb = 0.0, 0
             for start in range(0, n_agent, mb_agent):
                 ai = agent_idx[start:start + mb_agent]
                 # --- actor (policy) loss over a minibatch of agent transitions ---
@@ -233,7 +278,14 @@ class MAPPO:
                 stats["v_loss"] += float(v_loss.item())
                 stats["entropy"] += float(ent.item())
                 stats["approx_kl"] += float(approx_kl.item())
+                epoch_kl += float(approx_kl.item())
+                epoch_mb += 1
                 n_updates += 1
+
+            # KL early-stop: stop before the next (collapse-prone) epoch once the
+            # average update this epoch already moved the policy past target_kl.
+            if cfg.target_kl and epoch_mb and (epoch_kl / epoch_mb) > cfg.target_kl:
+                break
 
         for k in stats:
             stats[k] /= max(1, n_updates)

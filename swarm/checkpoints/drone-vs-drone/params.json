@@ -6,7 +6,7 @@
     "spoofing_enabled": false
   },
   "logistics": {
-    "attrition_inject_rate": 0.06,
+    "attrition_inject_rate": 0.0,
     "battery_envelope_sec": 320,
     "swarm_size": 6
   },

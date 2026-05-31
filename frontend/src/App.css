@@ -517,7 +517,7 @@
 }
 
 .pybullet-title-stack span,
-.pybullet-asset-strip span,
+.pybullet-config-strip span,
 .pybullet-live-cluster span {
   color: var(--accent);
   font: 700 0.68rem/1 'Fira Code', monospace;
@@ -541,7 +541,7 @@
 }
 
 .pybullet-live-cluster span,
-.pybullet-asset-strip span {
+.pybullet-config-strip span {
   min-height: 28px;
   display: inline-flex;
   align-items: center;
@@ -656,7 +656,7 @@
   top: 86px;
   display: grid;
   gap: 12px;
-  width: min(270px, calc(100vw - 36px));
+  width: min(340px, calc(100vw - 36px));
   padding: 12px;
 }
 
@@ -678,10 +678,18 @@
   white-space: nowrap;
 }
 
-.pybullet-asset-strip {
-  display: flex;
-  flex-wrap: wrap;
+.pybullet-config-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+
+.pybullet-config-strip span {
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pybullet-map {
@@ -1725,13 +1733,12 @@
     right: 32px;
     left: 32px;
     width: auto;
-    max-height: calc(100% - 276px);
+    max-height: min(154px, calc(100% - 276px));
     overflow: auto;
   }
 
   .pybullet-map {
-    aspect-ratio: 1.5;
-    max-height: 112px;
+    display: none;
   }
 
   .pybullet-feed-rail {

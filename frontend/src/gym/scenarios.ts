@@ -80,21 +80,6 @@ export const scenarios: ScenarioCard[] = [
     telemetryLabels: ['Breaches', 'Shield integrity', 'Interceptors'],
   },
   {
-    id: 'swarm-vs-swarm-race',
-    name: 'Swarm vs Swarm Coverage Race',
-    label: 'Competitive sweep',
-    summary: 'Two teams race to map contested cells first while comms stay denied and lanes stay noisy.',
-    status: 'Ready',
-    observation: 'Coverage patch, nearest rival offset, nearest contested cell, ownership flags, and rival pressure.',
-    action: '2D velocity command with the same point-mass dynamics as the base swarm env.',
-    reward: 'Points for first-touch coverage and holding contested zones; penalties for collisions and dead zones.',
-    notes: [
-      'Optional in the issue, but cheap to wire once the scenario registry exists.',
-      'Good for demos because the scoreboard moves constantly without needing weapon semantics.',
-    ],
-    telemetryLabels: ['Blue score', 'Red score', 'Contested'],
-  },
-  {
     id: 'navigate-to-target',
     name: 'Navigate to Target',
     label: 'Obstacle avoidance',

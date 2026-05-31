@@ -340,35 +340,6 @@ function renderDefendAsset(tick: number): StageFrame {
   }
 }
 
-function renderCoverageRace(tick: number): StageFrame {
-  const blueScore = clamp(24 + tick * 1.2, 24, 96)
-  const redScore  = clamp(21 + tick * 1.08, 21, 91)
-  const contested = clamp(18 + Math.sin(tick / 7) * 8, 4, 28)
-  return {
-    obstacles: [
-      { id: 'jammer-a', x: 36, y: 46, width: 10, height: 18, rotation: 10, kind: 'jammer' },
-      { id: 'jammer-b', x: 64, y: 52, width: 10, height: 18, rotation: -10, kind: 'jammer' },
-      { id: 'score-gate-a', x: 50, y: 24, width: 28, height: 5, kind: 'barrier' },
-      { id: 'score-gate-b', x: 50, y: 76, width: 28, height: 5, kind: 'barrier' },
-    ],
-    zones: [
-      { id: 'blue-territory', x: 25, y: 50, width: 42, height: 78, kind: 'blue-territory' },
-      { id: 'red-territory', x: 75, y: 50, width: 42, height: 78, kind: 'red-territory' },
-      { id: 'jammer-field-a', x: 36, y: 46, radius: 12, kind: 'jammer', avoid: true },
-      { id: 'jammer-field-b', x: 64, y: 52, radius: 12, kind: 'jammer', avoid: true },
-    ],
-    agents: [
-      ...[0, 1, 2].map(i => ({ id: `race-blue-${i}`, team: 'blue' as const, ...orbit(30, 52, 12 + i * 5, tick * 0.032 + i, 0.8) })),
-      ...[0, 1, 2].map(i => ({ id: `race-red-${i}`,  team: 'red'  as const, ...orbit(70, 48, 12 + i * 5, -tick * 0.032 + i, 0.8) })),
-    ],
-    telemetry: [
-      { label: 'Blue score', value: `${Math.round(blueScore)}` },
-      { label: 'Red score',  value: `${Math.round(redScore)}` },
-      { label: 'Contested',  value: `${Math.round(contested)} cells` },
-    ],
-  }
-}
-
 function renderFrame(scenario: ScenarioCard, tick: number): StageFrame {
   const frame = (() => {
     switch (scenario.id) {
@@ -376,7 +347,6 @@ function renderFrame(scenario: ScenarioCard, tick: number): StageFrame {
       case 'moving-target-track': return renderMovingTargetTrack(tick)
       case 'search-and-interdict':return renderSearchAndInterdict(tick)
       case 'defend-asset':        return renderDefendAsset(tick)
-      case 'swarm-vs-swarm-race': return renderCoverageRace(tick)
       default:                    return renderSearchAndInterdict(tick)
     }
   })()

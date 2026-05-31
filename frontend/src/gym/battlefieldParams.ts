@@ -224,15 +224,6 @@ export const SCENARIO_DEFAULTS: Record<string, BattlefieldParams> = {
     roe:      { engagementAuthority: 'weapons-tight', minStandoffM: 5, civilianDensity: 0, timeLimitSec: 280 },
     logistics:{ swarmSize: 5, batteryEnvelopeSec: 280, attritionInjectRate: 0.05 },
   },
-  'swarm-vs-swarm-race': {
-    envId: 'swarm-vs-swarm-race',
-    weather:  { windSpeed: 5.0, windDirRad: Math.PI / 4, visibility: 0.8, temperatureC: 10 },
-    ew:       { gpsDenialLevel: 0.5, jamDutyCycle: 0.4, spoofingEnabled: false },
-    terrain:  { elevRoughness: 0.0, urbanDensity: 0.0 },
-    threat:   { hostileUasCount: 6, movingTargetSpeed: 0.6 },
-    roe:      { engagementAuthority: 'weapons-free', minStandoffM: 0, civilianDensity: 0, timeLimitSec: 320 },
-    logistics:{ swarmSize: 6, batteryEnvelopeSec: 320, attritionInjectRate: 0.04 },
-  },
 }
 
 /**

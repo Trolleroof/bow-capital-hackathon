@@ -251,7 +251,6 @@ class PyBulletSwarmRuntime:
             "moving-target-track": [(-4.0, 0.0), (0.0, 2.4), (4.0, -1.6)],
             "search-and-interdict": [(-3.8, -3.2), (-1.4, 2.8), (2.8, 1.1), (4.3, -3.4)],
             "defend-asset": [(-4.4, 0.0), (4.4, 0.0), (0.0, -4.4), (0.0, 4.4)],
-            "swarm-vs-swarm-race": [(-5.0, -2.0), (-1.8, 2.0), (1.8, -2.0), (5.0, 2.0)],
         }
         for idx, (x, y) in enumerate(layouts.get(self.env_id, layouts["search-and-interdict"])):
             height = 0.45 + 0.18 * (idx % 2)
@@ -265,9 +264,6 @@ class PyBulletSwarmRuntime:
             self._cylinder(0.95, 0.2, [0.0, 0.0, 0.1], [0.28, 0.78, 0.56, 1])
         elif self.env_id == "moving-target-track":
             self._box([0.6, 0.32, 0.16], [2.5, -2.7, 0.18], [0.88, 0.34, 0.16, 1])
-        elif self.env_id == "swarm-vs-swarm-race":
-            for x in (-6.0, -2.0, 2.0, 6.0):
-                self._box([1.25, 0.25, 0.018], [x, 0, 0.03], [0.13, 0.38, 0.26, 1])
 
     def _spawn_drones(self) -> list[int]:
         bodies = []

@@ -36,7 +36,7 @@ export function setActiveEnvId(envId: string | null): void {
   _activeEnvId = envId
 }
 
-const DEFAULT_ENV_ID = 'search-and-interdict'
+const DEFAULT_ENV_ID = 'drone-vs-drone'
 
 /**
  * Probe whether a trained checkpoint exists for envId.
@@ -101,7 +101,7 @@ function resolvePolicyPath(envIdOrUrl: string): string {
  * URL resolution order:
  *  1. Explicit url argument (legacy / test override)
  *  2. /policies/<_activeEnvId>/policy.onnx when an env is active (#23)
- *  3. /policies/search-and-interdict/policy.onnx (default env)
+ *  3. /policies/drone-vs-drone/policy.onnx (default env)
  */
 export async function loadPolicy(url?: string): Promise<Policy> {
   const resolvedUrl = resolvePolicyPath(

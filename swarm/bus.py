@@ -72,16 +72,18 @@ async def broadcast(topic: str, payload: dict) -> None:
 def swarm_message(env: SwarmEnv) -> dict:
     """Build the `swarm` bus payload from current env state (SWARM.md §4)."""
     agents = []
+    is_3d = env.pos.shape[1] >= 3
     for i in range(env.n):
         vx, vy = float(env.vel[i, 0]), float(env.vel[i, 1])
         yaw = math.atan2(vy, vx) if (vx or vy) else 0.0
         role = ROLES[env.roles[i]] if env.roles[i] < len(ROLES) else "scout"
+        z = float(env.pos[i, 2]) if is_3d else float(ALTITUDE)
         agents.append(
             {
                 "id": i,
                 "x": round(float(env.pos[i, 0]), 3),
                 "y": round(float(env.pos[i, 1]), 3),
-                "z": round(float(ALTITUDE), 3),
+                "z": round(z, 3),
                 "yaw": round(float(yaw), 3),
                 "role": role,
                 "alive": bool(env.alive[i]),
@@ -89,15 +91,29 @@ def swarm_message(env: SwarmEnv) -> dict:
         )
     msg: dict = {"t": round(float(env.t), 3), "comms": "denied", "agents": agents}
     # Expose target position so the PyBullet renderer can draw it correctly.
+    # 3D envs (hunt-and-seek) carry a z component; 2D envs draw at ALTITUDE.
     if hasattr(env, "target_pos") and env.target_pos is not None:
-        msg["target_pos"] = [round(float(env.target_pos[0]), 3), round(float(env.target_pos[1]), 3)]
+        tp = env.target_pos
+        target = [round(float(tp[0]), 3), round(float(tp[1]), 3)]
+        if len(tp) >= 3:
+            target.append(round(float(tp[2]), 3))
+        msg["target_pos"] = target
+        if hasattr(env, "contact"):
+            msg["target_visible"] = bool(env.contact)
+    # Hunt scenario success telemetry so the operator can see catches happen live.
+    if hasattr(env, "captures"):
+        msg["captures"] = int(env.captures)
+    if hasattr(env, "contact"):
+        msg["contact"] = bool(env.contact)
     return msg
 
 
 def _random_policy(env: SwarmEnv):
     """A policy_fn that ignores observations and acts randomly (Phase 0)."""
+    act_dim = getattr(env, "act_dim", 2)
+
     def act(_obs):
-        return env.rng.uniform(-1, 1, size=(env.n, 2)).astype(np.float32)
+        return env.rng.uniform(-1, 1, size=(env.n, act_dim)).astype(np.float32)
     return act
 
 

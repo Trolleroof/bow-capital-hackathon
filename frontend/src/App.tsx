@@ -23,9 +23,13 @@ const scenarioExists = (envId: string) => getScenarioById(envId) != null
 
 const parseRoute = (): AppRoute => {
   const hash = window.location.hash.replace(/^#\/?/, '')
+  if (!hash) return { view: 'outcast-virus' }
+
   const [view, envId] = hash.split('/')
 
   if (view === 'outcast-virus') return { view: 'outcast-virus' }
+
+  if (view === 'menu') return { view: 'menu' }
 
   if (view === 'gym' && envId && scenarioExists(envId)) {
     return { view: 'gym', envId }
@@ -63,7 +67,8 @@ export default function App() {
 
   useEffect(() => {
     if (!window.location.hash) {
-      setHashRoute('menu')
+      setHashRoute('outcast-virus')
+      setRoute({ view: 'outcast-virus' })
     }
 
     const onHashChange = () => setRoute(parseRoute())

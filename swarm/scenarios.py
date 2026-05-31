@@ -34,24 +34,6 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
         action="Continuous 2D velocity command per drone.",
         reward="Reward hostile elimination, approach pressure, post-kill orbit discipline, and deconfliction.",
     ),
-    "moving-target-track": ScenarioDefinition(
-        id="moving-target-track",
-        name="Moving Target Track",
-        summary="Shadow one or more ground movers without dropping visual custody.",
-        env_kwargs={"n_agents": 4, "grid": 22, "max_steps": 300},
-        observation="Target-relative position/velocity, custody flags, target distance, and angular slot error.",
-        action="Continuous 2D velocity command around moving target tracks.",
-        reward="Reward continuous custody and multi-angle coverage; penalize lost track.",
-    ),
-    "search-and-interdict": ScenarioDefinition(
-        id="search-and-interdict",
-        name="Search & Interdict",
-        summary="Search cluttered space under GPS denial, then converge on contact.",
-        env_kwargs={"n_agents": 5, "grid": 24, "max_steps": 360},
-        observation="Coverage patch, obstacles, search/contact/intercept phase, last-seen target cue, and intercept distance.",
-        action="Continuous 2D velocity command with decentralized local observations only.",
-        reward="New search coverage before contact, then rapid intercept once found.",
-    ),
     "defend-asset": ScenarioDefinition(
         id="defend-asset",
         name="Defend Asset",
@@ -60,6 +42,15 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
         observation="Asset bearing, nearest inbound hostile position/velocity, breach risk, ring error, and sector error.",
         action="Continuous 2D velocity command around a fixed defended asset.",
         reward="Reward keeping hostiles outside the ring and intercepting early.",
+    ),
+    "hunt-and-seek": ScenarioDefinition(
+        id="hunt-and-seek",
+        name="Hunt & Seek (3D)",
+        summary="3D swarm searches a volumetric obstacle field, finds an evading target, and corners it.",
+        env_kwargs={"n_agents": 5, "grid": 20, "max_steps": 360},
+        observation="3D own pos/vel, K neighbor offsets, nearest volumetric obstacles, and a target block (relative offset, distance, visible-now, team-contact, last-seen age).",
+        action="Continuous 3D velocity command per drone (x, y, z).",
+        reward="Dense closing-distance pull, first-contact bonus, then a large team capture reward when ≥2 drones box the target in. Obstacle/crowd/bounds penalties.",
     ),
     "navigate-to-target": ScenarioDefinition(
         id="navigate-to-target",
@@ -107,7 +98,15 @@ def make_scenario_env(
                       take precedence via the SwarmEnv constructor.
     """
     scenario = get_scenario(scenario_id)
+    env_kwargs = {**scenario.env_kwargs, **overrides}
+
+    # The 3D hunt scenario uses a dedicated environment (Hunt3DEnv), not the
+    # 2D point-mass SwarmEnv. It does not consume BattlefieldConfig P0 effects.
+    if scenario_id == "hunt-and-seek":
+        from .hunt_env import Hunt3DEnv
+
+        return Hunt3DEnv(**env_kwargs, scenario_id=scenario_id)
+
     if battlefield is None:
         battlefield = get_scenario_defaults(scenario_id)
-    env_kwargs = {**scenario.env_kwargs, **overrides}
     return SwarmEnv(**env_kwargs, battlefield=battlefield, scenario_id=scenario_id)

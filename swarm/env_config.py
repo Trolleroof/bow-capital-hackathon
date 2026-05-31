@@ -147,22 +147,6 @@ SCENARIO_DEFAULTS: dict[str, BattlefieldConfig] = {
         roe=ROEConfig(engagement_authority="weapons-tight", time_limit_sec=320),
         logistics=LogisticsConfig(swarm_size=6, battery_envelope_sec=320, attrition_inject_rate=0.0),
     ),
-    "moving-target-track": BattlefieldConfig(
-        env_id="moving-target-track",
-        weather=WeatherConfig(wind_speed=2.0, wind_dir_rad=_pi(1/3)),
-        ew=EWConfig(gps_denial_level=0.0, jam_duty_cycle=0.0),
-        threat=ThreatConfig(moving_target_speed=0.8),
-        roe=ROEConfig(engagement_authority="weapons-tight", time_limit_sec=300),
-        logistics=LogisticsConfig(swarm_size=4, battery_envelope_sec=300, attrition_inject_rate=0.02),
-    ),
-    "search-and-interdict": BattlefieldConfig(
-        env_id="search-and-interdict",
-        weather=WeatherConfig(wind_speed=4.0, wind_dir_rad=_pi(1/4), visibility=0.6, temperature_c=15),
-        ew=EWConfig(gps_denial_level=0.7, jam_duty_cycle=0.4),
-        threat=ThreatConfig(hostile_uas_count=1, moving_target_speed=0.7),
-        roe=ROEConfig(engagement_authority="weapons-tight", time_limit_sec=360),
-        logistics=LogisticsConfig(swarm_size=5, battery_envelope_sec=360, attrition_inject_rate=0.02),
-    ),
     "defend-asset": BattlefieldConfig(
         env_id="defend-asset",
         weather=WeatherConfig(wind_speed=2.0, wind_dir_rad=_pi(1/2)),

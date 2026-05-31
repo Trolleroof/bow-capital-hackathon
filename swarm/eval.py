@@ -48,6 +48,12 @@ class ScriptedPolicy:
 
     def __init__(self, env):
         self.scenario_id = env.scenario_id
+        # The 3D hunt env has a different observation layout (no coverage patch);
+        # it exposes the target block offset directly as env.target_off.
+        self.is_hunt = self.scenario_id == "hunt-and-seek"
+        if self.is_hunt:
+            self.target_off = env.target_off
+            return
         self.patch = env.patch
         self.patch_off = 4 + 2 * env.k
         self.obstacle_off = 4 + 2 * env.k + env.patch * env.patch
@@ -55,6 +61,16 @@ class ScriptedPolicy:
 
     def __call__(self, obs):
         o = obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor) else np.asarray(obs)
+
+        if self.is_hunt:
+            # Fly straight at the (estimated) target: the target block's first
+            # three features are the normalized 3D relative offset. 3D action.
+            off = self.target_off
+            bearing3 = o[:, off:off + 3]
+            nrm = np.linalg.norm(bearing3, axis=1, keepdims=True)
+            action = (bearing3 / np.maximum(nrm, 1e-6)).astype(np.float32)
+            return torch.from_numpy(action)
+
         bearing = o[:, self.task_off:self.task_off + 2]
 
         if self.scenario_id == "defend-asset":

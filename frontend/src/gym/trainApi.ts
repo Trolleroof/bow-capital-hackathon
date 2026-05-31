@@ -104,13 +104,14 @@ export async function startPyBulletSim(
   envId: string,
   cameraMode: 'observer' | 'chase' | 'fpv' = 'observer',
   selectedDrone = 0,
+  policy: 'trained' | 'random' = 'trained',
 ): Promise<{ ok: boolean; wsUrl: string; error?: string }> {
   const res = await fetch(`${TRAIN_API_BASE}/api/sim/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       env_id: envId,
-      policy: 'trained',
+      policy,
       camera_mode: cameraMode,
       selected_drone: selectedDrone,
     }),
@@ -125,4 +126,26 @@ export async function startPyBulletSim(
     wsUrl: data.ws_url ?? PYBULLET_WS_URL,
     error: data.error,
   }
+}
+
+export async function fetchPolicyDeployed(envId: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${TRAIN_API_BASE}/api/sim/policy?env_id=${encodeURIComponent(envId)}`,
+    )
+    const data = (await res.json()) as { deployed?: boolean }
+    return Boolean(data.deployed)
+  } catch {
+    return false
+  }
+}
+
+export async function decommissionPolicy(envId: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${TRAIN_API_BASE}/api/sim/decommission`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ env_id: envId }),
+  })
+  const data = (await res.json()) as { ok?: boolean; error?: string }
+  return { ok: Boolean(data.ok), error: data.error }
 }

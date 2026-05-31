@@ -318,6 +318,14 @@ def _build_world(p, env_id: str) -> list[dict]:
 
             scripted.append({"body": body, "fn": fn})
 
+    elif env_id == "hunt-and-seek":
+        # The evading "user": a single bright mover driven LIVE from the env's
+        # target_pos (3D) carried on each pose message — NOT time-scripted. We
+        # create the body here and update it in the main loop. A faint ground
+        # ring tracks beneath it so the operator can see where it is.
+        target = _drone_body(p, [0.0, 0.0, 2.0], RED, scale=1.15)
+        scripted.append({"body": target, "hunt_target": True, "alive": True})
+
     elif env_id == "navigate-to-target":
         # Static goal beacon at the far end of the obstacle corridor.
         # SwarmEnv places it at [0.85 * world_half, 0.0] = [8.5, 0.0].
@@ -334,12 +342,28 @@ def _build_world(p, env_id: str) -> list[dict]:
 
 def _update_scripted(p, scripted: list[dict], t: float) -> None:
     for entity in scripted:
+        # Hunt target is driven live from the pose message, not by a time fn.
+        if entity.get("hunt_target"):
+            continue
         if not entity.get("alive", True):
             p.resetBasePositionAndOrientation(entity["body"], [0.0, 0.0, -20.0], [0, 0, 0, 1])
             continue
         pos, yaw = entity["fn"](t)
         quat = p.getQuaternionFromEuler([0.0, 0.0, yaw])
         p.resetBasePositionAndOrientation(entity["body"], pos, quat)
+
+
+def _update_hunt_target(p, scripted: list[dict], message: dict) -> None:
+    """Drive the hunt-and-seek evader body from the live target_pos in the message."""
+    tp = message.get("target_pos")
+    if not tp:
+        return
+    x = float(tp[0])
+    y = float(tp[1])
+    z = float(tp[2]) if len(tp) >= 3 else 2.0
+    for entity in scripted:
+        if entity.get("hunt_target"):
+            p.resetBasePositionAndOrientation(entity["body"], [x, y, z], [0, 0, 0, 1])
 
 
 def _apply_drone_engagement(scripted: list[dict], agents: list[dict], t: float, radius: float = 2.5) -> None:
@@ -372,6 +396,10 @@ def _update_bodies(p, bodies: dict[int, int], agents: list[dict], scale: float =
         yaw = float(agent.get("yaw", 0.0))
         if agent_id not in bodies:
             bodies[agent_id] = _spawn_drone(p, pos, scale=scale)
+        # Killed agents are removed from the scene (sunk far below the floor).
+        if not agent.get("alive", True):
+            p.resetBasePositionAndOrientation(bodies[agent_id], [pos[0], pos[1], -50.0], [0, 0, 0, 1])
+            continue
         quat = p.getQuaternionFromEuler([0.0, 0.0, yaw])
         p.resetBasePositionAndOrientation(bodies[agent_id], pos, quat)
 
@@ -491,8 +519,12 @@ def _render_frame(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render policy poses in PyBullet")
     parser.add_argument("--env-id", default="search-and-interdict")
-    parser.add_argument("--width", type=int, default=960)
-    parser.add_argument("--height", type=int, default=540)
+    # Default kept modest so the raw-RGBA fallback (when Pillow is absent in the
+    # renderer's Python) stays under the 1 MB WebSocket frame limit: 512x288 RGBA
+    # base64 ≈ 786 KB. With Pillow present, frames are JPEG and far smaller, so a
+    # higher resolution can be requested via --width/--height.
+    parser.add_argument("--width", type=int, default=512)
+    parser.add_argument("--height", type=int, default=288)
     parser.add_argument(
         "--camera-mode",
         choices=["observer", "chase", "fpv"],
@@ -522,6 +554,8 @@ def main() -> None:
                 _apply_drone_engagement(scripted, agents, t)
             _update_bodies(p, bodies, agents, scale=drone_scale)
             _update_scripted(p, scripted, t)
+            if args.env_id == "hunt-and-seek":
+                _update_hunt_target(p, scripted, message)
             p.stepSimulation()
             frame = _render_frame(
                 p,

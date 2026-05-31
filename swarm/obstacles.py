@@ -76,6 +76,18 @@ SCENARIO_OBSTACLES: dict[str, list[Obstacle]] = {
         _box(0.0,  4.6, 2.0, 0.6, h=0.5, z=0.5),  # hardpoint north
         _box(0.0, -4.6, 2.0, 0.6, h=0.5, z=0.5),  # hardpoint south
     ],
+    "hunt-and-seek": [
+        # Volumetric 3D field: tall towers the swarm must fly between, plus short
+        # blocks it can fly OVER — so altitude is a real tactical choice. Heights
+        # (h = z_extent) vary; the target uses these for cover/line-of-sight breaks.
+        _cyl(-2.5,  3.0, 0.9, h=2.8, z=2.8),   # tall tower NW
+        _cyl( 3.4, -2.2, 0.9, h=2.8, z=2.8),   # tall tower SE
+        _box( 0.0,  0.0, 1.3, 1.3, h=1.6, z=1.6),  # central mid-rise block
+        _box(-4.6, -3.8, 1.0, 0.6, h=0.9, z=0.9),  # short block (flyable-over)
+        _box( 4.8,  3.6, 0.7, 1.1, h=2.2, z=2.2),  # tall slab NE
+        _cyl( 1.0,  4.8, 0.7, h=1.2, z=1.2),   # short pillar (flyable-over) N
+        _cyl(-4.4,  1.0, 0.7, h=2.4, z=2.4),   # tall pillar W
+    ],
     "navigate-to-target": [
         # Corridor obstacles the single drone must weave through left→right.
         _box(-4.0,  2.5, 0.5, 1.2, h=1.2, z=0.6),   # obstacle row 1 top

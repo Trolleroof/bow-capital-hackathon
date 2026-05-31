@@ -92,6 +92,15 @@ PROFILES: dict[str, TaskProfile] = {
             "breach": 4.0,
         },
     ),
+    "hunt-and-seek": TaskProfile(
+        env_id="hunt-and-seek",
+        primary_metric="captures",
+        primary_mode="max",
+        coverage_weight=0.0,  # 3D hunt env owns its own search/coverage shaping
+        phase_names=("search", "pursue", "capture"),
+        metric_label="Captures",
+        reward_weights={},  # reward shaping lives in swarm/hunt_env.py
+    ),
     "navigate-to-target": TaskProfile(
         env_id="navigate-to-target",
         primary_metric="task_score",

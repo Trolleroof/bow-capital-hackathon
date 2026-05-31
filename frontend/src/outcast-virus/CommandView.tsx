@@ -5,6 +5,7 @@ import { Gauge } from './atoms'
 import { VslamScene } from './VslamScene'
 import { makeDetectionOverlay } from './OpticView'
 import type { CommandPanelId } from './panels'
+import { SwarmHuntView } from './SwarmHuntView'
 
 interface Props {
   t: TelemetryState
@@ -118,26 +119,7 @@ export function CommandView({ t, log, onEnterOptic, onConfirm, onExpandPanel }: 
 
       {/* body */}
       {activeTab === 'swarm' ? (
-        <div className="cmd-body cmd-body--swarm">
-          <div className="pnl pnl-tile swarm-col swarm-col--a">
-            <h4>
-              <span>SWARM · SECTOR A</span>
-              <span className="panel-head-actions">
-                <PanelExpandBtn panel="swarm-a" onExpandPanel={onExpandPanel} />
-              </span>
-            </h4>
-            <div className="hatch swarm-blank" />
-          </div>
-          <div className="pnl pnl-tile swarm-col swarm-col--b">
-            <h4>
-              <span>SWARM · SECTOR B</span>
-              <span className="panel-head-actions">
-                <PanelExpandBtn panel="swarm-b" onExpandPanel={onExpandPanel} />
-              </span>
-            </h4>
-            <div className="hatch swarm-blank" />
-          </div>
-        </div>
+        <SwarmHuntView />
       ) : (
       <div className="cmd-body">
         {/* telemetry rail */}

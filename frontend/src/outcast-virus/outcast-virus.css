@@ -396,6 +396,8 @@
   grid-template-rows: 1fr 1fr;
   gap: 1px;
   background: var(--line);
+  min-height: 0;
+  overflow: hidden;
 }
 .cmd-body--swarm {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -406,6 +408,78 @@
 .swarm-col--a { grid-column: 1; }
 .swarm-col--b { grid-column: 2; }
 .swarm-blank { flex: 1; min-height: 0; }
+
+/* hunt-and-seek 3D view: left controls, right live sim feed */
+.cmd-body--hunt {
+  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-rows: 1fr;
+}
+.hunt-controls,
+.hunt-feed { grid-row: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.hunt-controls { grid-column: 1; }
+.hunt-controls > h4 { flex-shrink: 0; }
+.hunt-controls__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.hunt-feed { grid-column: 2; }
+.hunt-feed__viewport { flex: 1; min-height: 0; position: relative; display: flex; }
+.hunt-feed__viewport .pybullet-sim { flex: 1; min-height: 0; min-width: 0; }
+
+.hunt-status {
+  font-size: 9px; letter-spacing: .18em; padding: 2px 7px;
+  border: 1px solid var(--line); color: var(--ink-mute); border-radius: 2px;
+}
+.hunt-status--running { color: #6fe3b0; border-color: #2c7a5a; }
+.hunt-status--completed { color: #5bc0ff; border-color: #2a6488; }
+.hunt-status--failed { color: #ff8a8a; border-color: #8a3a3a; }
+
+.hunt-section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.hunt-section__head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.hunt-section__head span { font-size: 11px; font-weight: 700; letter-spacing: .14em; color: var(--ink); }
+.hunt-section__head em { font-style: normal; font-size: 8px; letter-spacing: .14em; color: var(--ink-mute); }
+.hunt-blurb { font-size: 10.5px; line-height: 1.5; color: var(--ink-mute); margin: 0 0 10px; }
+.hunt-blurb strong { color: var(--ink); font-weight: 600; }
+
+.hunt-btn-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.hunt-btn {
+  flex: 1; padding: 8px 10px; font-size: 10px; font-weight: 700; letter-spacing: .1em;
+  background: transparent; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 3px; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.hunt-btn:hover:not(:disabled) { border-color: var(--ink-mute); }
+.hunt-btn:disabled { opacity: .4; cursor: not-allowed; }
+.hunt-btn--primary { background: #18324a; border-color: #2a5d86; color: #cfe9ff; }
+.hunt-btn--primary:hover:not(:disabled) { background: #1f4262; }
+
+.hunt-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
+.hunt-metric { background: var(--panel, #0b1016); padding: 7px 9px; display: flex; flex-direction: column; gap: 2px; }
+.hunt-metric__lab { font-size: 8px; letter-spacing: .16em; color: var(--ink-mute); }
+.hunt-metric__val { font-size: 14px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hunt-error { font-size: 10px; color: #ff8a8a; margin: 4px 0 0; }
+
+.hunt-toggle { display: flex; gap: 1px; margin-bottom: 10px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.hunt-toggle__opt {
+  flex: 1; padding: 7px 8px; font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  background: var(--panel, #0b1016); color: var(--ink-mute); border: 0; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.hunt-toggle__opt:hover { color: var(--ink); }
+.hunt-toggle__opt.is-active { background: #18324a; color: #cfe9ff; }
+.hunt-running { font-size: 10px; letter-spacing: .1em; color: #6fe3b0; margin: 8px 0 0; }
+.hunt-running strong { color: #9af0c6; }
+
+.hunt-chart { margin-top: 10px; }
+.hunt-chart__lab { font-size: 8px; letter-spacing: .16em; color: var(--ink-mute); margin-bottom: 5px; }
+
+.hunt-btn--danger { background: rgba(60, 16, 16, 0.55); border-color: #7a2c2c; color: #ff9a8c; margin-top: 10px; }
+.hunt-btn--danger:hover:not(:disabled) { background: rgba(120, 30, 30, 0.8); border-color: #b24a4a; color: #ffc4ba; }
+.hunt-decom { font-size: 10px; letter-spacing: .08em; color: #ff8a8a; margin: 8px 0 0; }
 
 .rail { grid-column: 1; grid-row: 1 / span 2; }
 .nav-col { grid-column: 2; grid-row: 1; }

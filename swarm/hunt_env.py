@@ -1,0 +1,680 @@
+"""3D multi-agent HUNT environment — find an evading target and run it down.
+
+This is a **new** environment (not a variant of ``SwarmEnv``) built for the
+``hunt-and-seek`` scenario. The previous coverage env was 2D (velocity in the
+XY plane, z frozen at a fixed altitude) and its reward was "paint the floor" —
+there was no entity to *find* and no payoff for *catching* anything, which is
+why a swarm trained on it never looked like it was hunting. This env fixes both:
+
+  * **True 3D.** Position and velocity are ``(x, y, z)``; the action is a 3D
+    velocity command. Obstacles are volumetric pillars of varying height — the
+    swarm can fly *between* them and *over* the short ones, so altitude is a real
+    tactical degree of freedom.
+  * **A slower evading target ("the user").** One entity flees from its nearest
+    pursuer (slower than the drones, so a coordinated swarm can corner it) and is
+    only *observable* when a drone has line-of-sight within sensor range. When
+    nobody sees it, agents share only a decaying last-seen estimate.
+  * **Dense find → pursue → capture reward.** A smooth shaping term pulls the
+    team toward the target the whole episode (this is the gradient the old sparse
+    coverage reward lacked), with a first-contact bonus and a big team capture
+    bonus when ≥2 drones box the target inside the capture radius.
+
+MAPPO / CTDE is unchanged: the shared-parameter ``Actor`` consumes only the
+local per-agent observation; the centralized ``Critic`` consumes
+``global_state()`` at train time only. Actors never see global state and send
+zero messages to each other.
+
+Public API matches ``SwarmEnv`` so the trainer, ONNX export, bus, and PyBullet
+renderer treat it as a drop-in: ``reset`` / ``step`` / ``global_state`` /
+``state_dim`` / ``kill`` / ``revive`` / ``coverage_fraction`` /
+``battlefield_hash``, with attributes ``n / obs_dim / act_dim / pos / vel /
+alive / covered / roles / t / target_pos``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+
+import numpy as np
+
+try:
+    from .obstacles import Obstacle, obstacles_for
+    from .task_profiles import get_task_profile
+except ImportError:  # direct-script execution
+    from obstacles import Obstacle, obstacles_for  # type: ignore
+    from task_profiles import get_task_profile  # type: ignore
+
+# ------------------------------------------------------------------ defaults ---
+N_AGENTS = 5
+K_NEIGHBORS = 3
+M_OBSTACLES = 3          # how many nearest obstacles enter each local obs
+GRID = 20                # coarse coverage grid (telemetry + light search shaping)
+
+WORLD_HALF = 10.0        # world spans [-WORLD_HALF, WORLD_HALF] in x and y
+Z_MIN = 0.6              # floor clearance
+Z_MAX = 6.0              # ceiling
+
+DT = 0.1
+MAX_SPEED = 4.5          # drone world-units / second at full throttle
+TARGET_SPEED_FRAC = 0.38  # target is deliberately SLOWER than the drones (~2.6x)
+TARGET_SPEED = MAX_SPEED * TARGET_SPEED_FRAC
+
+AGENT_RADIUS = 0.4       # body half-extent used for collision push-out
+SENSOR_RANGE = 7.0       # a drone detects the target within this range + LOS
+CAPTURE_RADIUS = 2.3     # a drone "on" the target within this range
+CAPTURE_MIN_DRONES = 1   # one drone reaching the target counts as a catch
+FLEE_RADIUS = 6.0        # target only actively flees when a drone is this close
+
+# ── reward weights ───────────────────────────────────────────────────────────
+APPROACH_REWARD = 0.6     # weight on (prev_min_dist - cur_min_dist), the dense pull
+FIRST_CONTACT_REWARD = 4.0
+PURSUE_REWARD = 1.2       # post-contact closing bonus (scales the approach term)
+CAPTURE_REWARD = 25.0     # big team payoff for boxing the target in
+LOST_CONTACT_PENALTY = 0.5
+CROWD_PENALTY = 0.04
+CROWD_RADIUS = 1.4
+COLLISION_PENALTY = 0.5
+BOUNDS_PENALTY = 0.4      # smooth penalty for pushing past the soft boundary
+EDGE_SOFT_FRAC = 0.85
+SEARCH_REWARD = 0.15      # light pre-contact coverage shaping so they spread to search
+
+ROLES = ("hunter", "hunter", "hunter", "hunter", "hunter")
+
+
+def obs_dim(k: int = K_NEIGHBORS, m_obstacles: int = M_OBSTACLES) -> int:
+    """Local observation vector length for a given K / obstacle count.
+
+    Layout (per agent, LOCAL ONLY):
+      own pos (3) + own vel (3)              = 6
+      K nearest-neighbor relative pos (3K)
+      M nearest obstacles (5 each: dx,dy,dz,r_xy,h_z)
+      target block (7): rel dx,dy,dz, dist, visible_now, team_contact, age
+      role flag (1)
+    """
+    return 6 + 3 * k + 5 * m_obstacles + 7 + 1
+
+
+OWN_DIM = 6
+ACT_DIM = 3
+OBS_DIM = obs_dim()
+
+
+class Hunt3DEnv:
+    """Vectorized 3D hunt env. See module docstring for the full spec."""
+
+    def __init__(
+        self,
+        n_agents: int = N_AGENTS,
+        k_neighbors: int = K_NEIGHBORS,
+        m_obstacles: int = M_OBSTACLES,
+        grid: int = GRID,
+        world_half: float = WORLD_HALF,
+        max_steps: int = 360,
+        seed: int | None = None,
+        scenario_id: str | None = "hunt-and-seek",
+        obstacles: list[Obstacle] | None = None,
+        battlefield=None,  # accepted for API parity; only max_steps/n are read
+    ) -> None:
+        if battlefield is not None:
+            n_agents = getattr(battlefield, "n_agents", n_agents)
+            max_steps = getattr(battlefield, "max_steps", max_steps)
+        self.battlefield = battlefield
+        self.scenario_id = scenario_id
+        self.n = int(n_agents)
+        self.k = int(k_neighbors)
+        self.m_obstacles = int(m_obstacles)
+        self.grid = int(grid)
+        self.world_half = float(world_half)
+        self.max_steps = int(max_steps)
+        self.obs_dim = obs_dim(self.k, self.m_obstacles)
+        self.act_dim = ACT_DIM
+        self.cell = (2.0 * self.world_half) / self.grid
+        self.rng = np.random.default_rng(seed)
+        # task profile (primary_metric etc.) consumed by train.py / eval.py
+        self.task_profile = get_task_profile(scenario_id)
+        # offset where the per-agent target block begins in the local obs vector
+        self.target_off = 6 + 3 * self.k + 5 * self.m_obstacles
+
+        # state (filled by reset)
+        self.pos = np.zeros((self.n, 3), dtype=np.float32)
+        self.vel = np.zeros((self.n, 3), dtype=np.float32)
+        self.alive = np.ones(self.n, dtype=bool)
+        self.roles = np.zeros(self.n, dtype=np.int64)
+        self.covered = np.zeros((self.grid, self.grid), dtype=bool)
+        self.t = 0.0
+        self.steps = 0
+
+        # target ("the user") — kept as 3D internally; target_pos exposes [x,y,z]
+        self.target_pos = np.zeros(3, dtype=np.float32)
+        self.target_vel = np.zeros(3, dtype=np.float32)
+        self._target_waypoint = np.zeros(3, dtype=np.float32)
+
+        # detection / contact bookkeeping
+        self.contact = False             # target currently visible to any drone
+        self.ever_contact = False        # has the team ever seen it this episode
+        self.last_seen = np.zeros(3, dtype=np.float32)
+        self.last_seen_age = 0           # steps since last seen (capped)
+        self.captures = 0
+        self.contact_step: int | None = None
+        self._prev_min_dist = 2.0 * self.world_half
+
+        # obstacles (volumetric: xy footprint + z span)
+        if obstacles is None and scenario_id is not None:
+            obstacles = obstacles_for(scenario_id)
+        self.obstacles: list[Obstacle] = list(obstacles or [])
+        if self.obstacles:
+            self._obs_centers = np.array([[o.cx, o.cy] for o in self.obstacles], dtype=np.float32)
+            self._obs_half = np.array([[o.sx, o.sy] for o in self.obstacles], dtype=np.float32)
+            self._obs_zc = np.array([o.z_center for o in self.obstacles], dtype=np.float32)
+            self._obs_zh = np.array([o.z_extent for o in self.obstacles], dtype=np.float32)
+            self._obs_is_circle = np.array([o.kind == "cylinder" for o in self.obstacles], dtype=bool)
+        else:
+            self._obs_centers = np.zeros((0, 2), dtype=np.float32)
+            self._obs_half = np.zeros((0, 2), dtype=np.float32)
+            self._obs_zc = np.zeros(0, dtype=np.float32)
+            self._obs_zh = np.zeros(0, dtype=np.float32)
+            self._obs_is_circle = np.zeros(0, dtype=bool)
+
+    # ------------------------------------------------------------------ reset ---
+    def reset(self, seed: int | None = None) -> np.ndarray:
+        if seed is not None:
+            self.rng = np.random.default_rng(seed)
+        h = self.world_half
+        # spawn the swarm clustered along one edge, looking inward
+        base_x = -0.8 * h
+        self.pos = np.zeros((self.n, 3), dtype=np.float32)
+        self.pos[:, 0] = base_x + self.rng.uniform(-0.8, 0.8, self.n)
+        self.pos[:, 1] = self.rng.uniform(-0.55 * h, 0.55 * h, self.n)
+        self.pos[:, 2] = self.rng.uniform(Z_MIN + 0.5, Z_MAX - 1.5, self.n)
+        self.vel = np.zeros((self.n, 3), dtype=np.float32)
+        self.alive = np.ones(self.n, dtype=bool)
+        self.roles = np.zeros(self.n, dtype=np.int64)
+        self.covered = np.zeros((self.grid, self.grid), dtype=bool)
+        self.t = 0.0
+        self.steps = 0
+
+        self._spawn_target()
+        self.contact = False
+        self.ever_contact = False
+        self.last_seen = self.target_pos.copy()
+        self.last_seen_age = 0
+        self.captures = 0
+        self.contact_step = None
+        self._prev_min_dist = self._min_dist_to_target()
+        self._mark_covered()
+        return self._obs()
+
+    def _spawn_target(self) -> None:
+        """Place the target on the far side, away from the swarm spawn edge."""
+        h = self.world_half
+        self.target_pos = np.array(
+            [
+                self.rng.uniform(0.3 * h, 0.8 * h),
+                self.rng.uniform(-0.7 * h, 0.7 * h),
+                self.rng.uniform(Z_MIN + 0.4, Z_MAX - 1.5),
+            ],
+            dtype=np.float32,
+        )
+        # nudge out of any obstacle it spawned inside
+        self.target_pos = self._push_point_out(self.target_pos)
+        self.target_vel = np.zeros(3, dtype=np.float32)
+        self._roll_waypoint()
+
+    def _roll_waypoint(self) -> None:
+        h = self.world_half
+        self._target_waypoint = np.array(
+            [
+                self.rng.uniform(-0.85 * h, 0.85 * h),
+                self.rng.uniform(-0.85 * h, 0.85 * h),
+                self.rng.uniform(Z_MIN + 0.4, Z_MAX - 1.0),
+            ],
+            dtype=np.float32,
+        )
+
+    # ------------------------------------------------------------------- step ---
+    def step(self, actions: np.ndarray):
+        actions = np.asarray(actions, dtype=np.float32).reshape(self.n, self.act_dim)
+        actions = np.clip(actions, -1.0, 1.0)
+        self.vel = actions  # record applied command (used in obs/yaw)
+
+        live = self.alive
+        start = self.pos.copy()
+        self.pos[live] += actions[live] * MAX_SPEED * DT
+        self._clip_to_world()
+        n_collisions = self._resolve_collisions(live, start)
+
+        self._update_target()
+
+        live_pos = self.pos[live]
+        new_cells = self._mark_covered()
+
+        # ── detection (partial observability) ─────────────────────────────
+        visible = self._target_visible(live_pos)
+        self.contact = visible
+        first_contact = visible and not self.ever_contact
+        if visible:
+            self.ever_contact = True
+            self.last_seen = self.target_pos.copy()
+            self.last_seen_age = 0
+            if self.contact_step is None:
+                self.contact_step = self.steps
+        else:
+            self.last_seen_age = min(self.last_seen_age + 1, 999)
+
+        # ── reward ─────────────────────────────────────────────────────────
+        cur_min = self._min_dist_to_target()
+        reward = 0.0
+
+        # dense pull toward the target (the gradient the old reward lacked)
+        closing = self._prev_min_dist - cur_min
+        approach_w = APPROACH_REWARD + (PURSUE_REWARD if self.ever_contact else 0.0)
+        reward += approach_w * float(closing)
+
+        # light search shaping pre-contact so they spread out to find it
+        if not self.ever_contact:
+            reward += SEARCH_REWARD * float(new_cells)
+
+        if first_contact:
+            reward += FIRST_CONTACT_REWARD
+        if self.ever_contact and not visible and self.last_seen_age == 1:
+            reward -= LOST_CONTACT_PENALTY
+
+        # capture: ≥CAPTURE_MIN_DRONES boxing the target in
+        n_capturing = self._n_drones_within(live_pos, CAPTURE_RADIUS)
+        captured = visible and n_capturing >= CAPTURE_MIN_DRONES
+        if captured:
+            reward += CAPTURE_REWARD
+            self.captures += 1
+            # respawn the target elsewhere so the episode yields repeated catches
+            self._spawn_target()
+            self.contact = False
+            self.last_seen = self.target_pos.copy()
+            self.last_seen_age = 0
+            cur_min = self._min_dist_to_target()
+
+        # crowding
+        if live_pos.shape[0] > 1:
+            d = np.linalg.norm(live_pos[:, None, :] - live_pos[None, :, :], axis=-1)
+            iu = np.triu_indices(live_pos.shape[0], k=1)
+            reward -= CROWD_PENALTY * int((d[iu] < CROWD_RADIUS).sum())
+
+        # smooth boundary penalty (xy)
+        if live_pos.shape[0] > 0:
+            dist_c = np.linalg.norm(live_pos[:, :2], axis=1) / self.world_half
+            excess = np.clip(dist_c - EDGE_SOFT_FRAC, 0.0, None)
+            reward -= BOUNDS_PENALTY * float((excess ** 2).sum())
+
+        if n_collisions:
+            reward -= COLLISION_PENALTY * float(n_collisions)
+
+        self._prev_min_dist = cur_min
+        self.steps += 1
+        self.t += DT
+        done = self.steps >= self.max_steps
+
+        rewards = np.where(self.alive, np.float32(reward), np.float32(0.0)).astype(np.float32)
+        dones = np.full(self.n, done, dtype=bool)
+        info: dict = {
+            "new_cells": int(new_cells),
+            "coverage": self.coverage_fraction(),
+            "n_alive": int(self.alive.sum()),
+            "n_collisions": int(n_collisions),
+            "contact": bool(self.contact),
+            "captures": int(self.captures),
+            "min_dist": float(cur_min),
+            "task_metrics": {
+                "min_dist": float(cur_min),
+                "captures": float(self.captures),
+                "contact": 1.0 if self.contact else 0.0,
+            },
+        }
+        return self._obs(), rewards, dones, info
+
+    # ------------------------------------------------------------- target AI ---
+    def _update_target(self) -> None:
+        """Slower-than-drones evasion: flee nearest pursuer, else wander."""
+        live_pos = self.pos[self.alive]
+        if live_pos.shape[0]:
+            deltas = self.target_pos[None, :] - live_pos
+            dists = np.linalg.norm(deltas, axis=1)
+            nearest = int(np.argmin(dists))
+            nearest_d = float(dists[nearest])
+        else:
+            nearest_d = 1e9
+
+        if nearest_d < FLEE_RADIUS:
+            flee = self.target_pos - live_pos[nearest]
+            norm = np.linalg.norm(flee)
+            direction = flee / norm if norm > 1e-6 else self.rng.uniform(-1, 1, 3)
+            # bias back toward the open center when near a wall so it doesn't pin
+            to_center = -self.target_pos.copy()
+            to_center[2] = 0.0
+            cdist = np.linalg.norm(self.target_pos[:2])
+            if cdist > 0.78 * self.world_half:
+                direction = 0.6 * direction + 0.4 * (to_center / (np.linalg.norm(to_center) + 1e-6))
+            speed = TARGET_SPEED
+        else:
+            # wander toward a roaming waypoint at reduced speed
+            to_wp = self._target_waypoint - self.target_pos
+            if np.linalg.norm(to_wp) < 1.0:
+                self._roll_waypoint()
+                to_wp = self._target_waypoint - self.target_pos
+            direction = to_wp / (np.linalg.norm(to_wp) + 1e-6)
+            speed = 0.45 * TARGET_SPEED
+
+        direction = self._avoid_obstacles(self.target_pos, direction)
+        norm = np.linalg.norm(direction)
+        if norm > 1e-6:
+            direction = direction / norm
+        self.target_vel = (direction * speed).astype(np.float32)
+        nxt = self.target_pos + self.target_vel * DT
+        nxt[0] = float(np.clip(nxt[0], -self.world_half, self.world_half))
+        nxt[1] = float(np.clip(nxt[1], -self.world_half, self.world_half))
+        nxt[2] = float(np.clip(nxt[2], Z_MIN, Z_MAX))
+        self.target_pos = self._push_point_out(nxt).astype(np.float32)
+
+    def _avoid_obstacles(self, point: np.ndarray, direction: np.ndarray) -> np.ndarray:
+        """Add a steering push away from any obstacle whose z-span the point shares."""
+        if not self.obstacles:
+            return direction
+        steer = direction.copy()
+        for k in range(len(self.obstacles)):
+            if not self._z_overlaps(point[2], k):
+                continue
+            d2 = point[:2] - self._obs_centers[k]
+            reach = float(self._obs_half[k].max()) + 1.6
+            dist = float(np.linalg.norm(d2))
+            if dist < reach:
+                away = d2 / (dist + 1e-6)
+                steer[:2] += (reach - dist) / reach * away * 1.5
+        return steer
+
+    # ----------------------------------------------------------- observations ---
+    def _obs(self) -> np.ndarray:
+        out = np.zeros((self.n, self.obs_dim), dtype=np.float32)
+        h = self.world_half
+        for i in range(self.n):
+            j = 0
+            # own pos (xy normalized by world_half, z by Z_MAX) + vel
+            out[i, 0] = self.pos[i, 0] / h
+            out[i, 1] = self.pos[i, 1] / h
+            out[i, 2] = (self.pos[i, 2] - Z_MIN) / (Z_MAX - Z_MIN) * 2.0 - 1.0
+            out[i, 3:6] = self.vel[i]
+            j = 6
+            # K nearest live neighbors (relative position)
+            j = self._fill_neighbors(out, i, j)
+            # M nearest obstacles
+            j = self._fill_obstacles(out, i, j)
+            # target block
+            j = self._fill_target(out, i, j)
+            # role flag
+            out[i, j] = float(self.roles[i]) / max(1, len(ROLES) - 1)
+        return out
+
+    def _fill_neighbors(self, out: np.ndarray, i: int, j: int) -> int:
+        h = self.world_half
+        others = [
+            (np.linalg.norm(self.pos[m] - self.pos[i]), m)
+            for m in range(self.n)
+            if m != i and self.alive[m]
+        ]
+        others.sort(key=lambda t: t[0])
+        for s in range(self.k):
+            if s < len(others):
+                m = others[s][1]
+                rel = (self.pos[m] - self.pos[i])
+                out[i, j + 0] = rel[0] / h
+                out[i, j + 1] = rel[1] / h
+                out[i, j + 2] = rel[2] / (Z_MAX - Z_MIN)
+            j += 3
+        return j
+
+    def _fill_obstacles(self, out: np.ndarray, i: int, j: int) -> int:
+        h = self.world_half
+        if self.obstacles:
+            d = np.linalg.norm(self._obs_centers - self.pos[i, :2], axis=1)
+            order = np.argsort(d)[: self.m_obstacles]
+        else:
+            order = []
+        for s in range(self.m_obstacles):
+            if s < len(order):
+                k = int(order[s])
+                out[i, j + 0] = (self._obs_centers[k, 0] - self.pos[i, 0]) / h
+                out[i, j + 1] = (self._obs_centers[k, 1] - self.pos[i, 1]) / h
+                out[i, j + 2] = (self._obs_zc[k] - self.pos[i, 2]) / (Z_MAX - Z_MIN)
+                out[i, j + 3] = float(self._obs_half[k].max()) / h
+                out[i, j + 4] = float(self._obs_zh[k]) / (Z_MAX - Z_MIN)
+            j += 5
+        return j
+
+    def _fill_target(self, out: np.ndarray, i: int, j: int) -> int:
+        h = self.world_half
+        # personally visible? else fall back to shared last-seen estimate
+        seen_now = self._los_clear(self.pos[i]) and (
+            np.linalg.norm(self.target_pos - self.pos[i]) < SENSOR_RANGE
+        )
+        est = self.target_pos if seen_now else self.last_seen
+        rel = est - self.pos[i]
+        dist = float(np.linalg.norm(rel))
+        out[i, j + 0] = rel[0] / h
+        out[i, j + 1] = rel[1] / h
+        out[i, j + 2] = rel[2] / (Z_MAX - Z_MIN)
+        out[i, j + 3] = min(dist / (2.0 * h), 1.0)
+        out[i, j + 4] = 1.0 if seen_now else 0.0
+        out[i, j + 5] = 1.0 if self.contact else 0.0
+        out[i, j + 6] = min(self.last_seen_age / 50.0, 1.0)
+        return j + 7
+
+    # --------------------------------------------------------- detection / LOS ---
+    def _target_visible(self, live_pos: np.ndarray) -> bool:
+        for p in live_pos:
+            if np.linalg.norm(self.target_pos - p) < SENSOR_RANGE and self._los_clear(p):
+                return True
+        return False
+
+    def _los_clear(self, src: np.ndarray) -> bool:
+        """Line-of-sight from a drone to the target, blocked by tall obstacles."""
+        if not self.obstacles:
+            return True
+        sx, sy = float(src[0]), float(src[1])
+        ex, ey = float(self.target_pos[0]), float(self.target_pos[1])
+        mid_z = 0.5 * (float(src[2]) + float(self.target_pos[2]))
+        for k in range(len(self.obstacles)):
+            if not self._z_overlaps(mid_z, k):
+                continue  # we (or the target) are above this obstacle — clear
+            if self._segment_hits_xy(sx, sy, ex, ey, k):
+                return False
+        return True
+
+    def _segment_hits_xy(self, sx, sy, ex, ey, k: int) -> bool:
+        cx, cy = float(self._obs_centers[k, 0]), float(self._obs_centers[k, 1])
+        dx, dy = ex - sx, ey - sy
+        if self._obs_is_circle[k]:
+            r = float(self._obs_half[k, 0])
+            ox, oy = sx - cx, sy - cy
+            a = dx * dx + dy * dy
+            if a < 1e-9:
+                return False
+            b = 2.0 * (ox * dx + oy * dy)
+            c = ox * ox + oy * oy - r * r
+            disc = b * b - 4.0 * a * c
+            if disc < 0.0:
+                return False
+            root = math.sqrt(disc)
+            t0, t1 = (-b - root) / (2 * a), (-b + root) / (2 * a)
+            return not (t1 < 0.0 or t0 > 1.0)
+        hx, hy = float(self._obs_half[k, 0]), float(self._obs_half[k, 1])
+        t_enter, t_exit = 0.0, 1.0
+        for start, delta, lo, hi in (
+            (sx, dx, cx - hx, cx + hx),
+            (sy, dy, cy - hy, cy + hy),
+        ):
+            if abs(delta) < 1e-9:
+                if start < lo or start > hi:
+                    return False
+                continue
+            a = (lo - start) / delta
+            b = (hi - start) / delta
+            if a > b:
+                a, b = b, a
+            t_enter = max(t_enter, a)
+            t_exit = min(t_exit, b)
+            if t_enter > t_exit:
+                return False
+        return not (t_exit < 0.0 or t_enter > 1.0)
+
+    # --------------------------------------------------------------- collisions ---
+    def _z_overlaps(self, z: float, k: int) -> bool:
+        lo = float(self._obs_zc[k]) - float(self._obs_zh[k]) - AGENT_RADIUS
+        hi = float(self._obs_zc[k]) + float(self._obs_zh[k]) + AGENT_RADIUS
+        return lo <= z <= hi
+
+    def _point_inside(self, x: float, y: float, z: float, k: int) -> bool:
+        if not self._z_overlaps(z, k):
+            return False  # flying over (or under) the obstacle — no collision
+        cx, cy = float(self._obs_centers[k, 0]), float(self._obs_centers[k, 1])
+        if self._obs_is_circle[k]:
+            r = float(self._obs_half[k, 0]) + AGENT_RADIUS
+            return (x - cx) ** 2 + (y - cy) ** 2 < r * r
+        hx = float(self._obs_half[k, 0]) + AGENT_RADIUS
+        hy = float(self._obs_half[k, 1]) + AGENT_RADIUS
+        return abs(x - cx) < hx and abs(y - cy) < hy
+
+    def _resolve_collisions(self, live_mask: np.ndarray, start_pos: np.ndarray) -> int:
+        n_hits = 0
+        for i in range(self.n):
+            if not live_mask[i]:
+                continue
+            x, y, z = float(self.pos[i, 0]), float(self.pos[i, 1]), float(self.pos[i, 2])
+            for k in range(len(self.obstacles)):
+                if self._point_inside(x, y, z, k):
+                    x, y = self._push_out_xy(x, y, k)
+                    n_hits += 1
+            self.pos[i, 0] = x
+            self.pos[i, 1] = y
+        self._clip_to_world()
+        return n_hits
+
+    def _push_out_xy(self, x: float, y: float, k: int) -> tuple[float, float]:
+        cx, cy = float(self._obs_centers[k, 0]), float(self._obs_centers[k, 1])
+        if self._obs_is_circle[k]:
+            r = float(self._obs_half[k, 0]) + AGENT_RADIUS + 1e-3
+            dx, dy = x - cx, y - cy
+            d = math.hypot(dx, dy)
+            if d < 1e-6:
+                dx, dy, d = 1.0, 0.0, 1.0
+            return cx + dx / d * r, cy + dy / d * r
+        hx = float(self._obs_half[k, 0]) + AGENT_RADIUS + 1e-3
+        hy = float(self._obs_half[k, 1]) + AGENT_RADIUS + 1e-3
+        dx, dy = x - cx, y - cy
+        # push out along the axis of least penetration
+        pen_x = hx - abs(dx)
+        pen_y = hy - abs(dy)
+        if pen_x < pen_y:
+            x = cx + math.copysign(hx, dx if dx != 0 else 1.0)
+        else:
+            y = cy + math.copysign(hy, dy if dy != 0 else 1.0)
+        return x, y
+
+    def _push_point_out(self, p: np.ndarray) -> np.ndarray:
+        x, y, z = float(p[0]), float(p[1]), float(p[2])
+        for k in range(len(self.obstacles)):
+            if self._point_inside(x, y, z, k):
+                x, y = self._push_out_xy(x, y, k)
+        return np.array([x, y, z], dtype=np.float32)
+
+    # -------------------------------------------------------------------- misc ---
+    def _clip_to_world(self) -> None:
+        self.pos[:, 0] = np.clip(self.pos[:, 0], -self.world_half, self.world_half)
+        self.pos[:, 1] = np.clip(self.pos[:, 1], -self.world_half, self.world_half)
+        self.pos[:, 2] = np.clip(self.pos[:, 2], Z_MIN, Z_MAX)
+
+    def _min_dist_to_target(self) -> float:
+        live_pos = self.pos[self.alive]
+        if not live_pos.shape[0]:
+            return 2.0 * self.world_half
+        return float(np.linalg.norm(live_pos - self.target_pos[None, :], axis=1).min())
+
+    def _n_drones_within(self, live_pos: np.ndarray, radius: float) -> int:
+        if not live_pos.shape[0]:
+            return 0
+        return int((np.linalg.norm(live_pos - self.target_pos[None, :], axis=1) < radius).sum())
+
+    def _world_to_cell(self, p: np.ndarray) -> tuple[int, int]:
+        h = self.world_half
+        cx = int(np.clip((p[0] + h) / self.cell, 0, self.grid - 1))
+        cy = int(np.clip((p[1] + h) / self.cell, 0, self.grid - 1))
+        return cx, cy
+
+    def _mark_covered(self) -> int:
+        new = 0
+        for i in range(self.n):
+            if not self.alive[i]:
+                continue
+            cx, cy = self._world_to_cell(self.pos[i])
+            if not self.covered[cx, cy]:
+                self.covered[cx, cy] = True
+                new += 1
+        return new
+
+    # -------------------------------------------------- CTDE centralized state ---
+    def global_state(self) -> np.ndarray:
+        h = self.world_half
+        parts = [
+            (self.pos[:, :2] / h).reshape(-1),
+            ((self.pos[:, 2:3] - Z_MIN) / (Z_MAX - Z_MIN)).reshape(-1),
+            self.vel.reshape(-1),
+            self.alive.astype(np.float32),
+            np.array([
+                self.target_pos[0] / h,
+                self.target_pos[1] / h,
+                (self.target_pos[2] - Z_MIN) / (Z_MAX - Z_MIN),
+                self.target_vel[0] / MAX_SPEED,
+                self.target_vel[1] / MAX_SPEED,
+                self.target_vel[2] / MAX_SPEED,
+                1.0 if self.contact else 0.0,
+                1.0 if self.ever_contact else 0.0,
+            ], dtype=np.float32),
+            self.covered.astype(np.float32).reshape(-1),
+        ]
+        return np.concatenate(parts).astype(np.float32)
+
+    @property
+    def state_dim(self) -> int:
+        # pos: n*2 (xy) + n (z); vel: n*3; alive: n; target block: 8; coverage grid
+        return self.n * 2 + self.n + self.n * 3 + self.n + 8 + self.grid * self.grid
+
+    def battlefield_hash(self) -> str:
+        if self.battlefield is None:
+            return "hunt-3d"
+        from dataclasses import asdict
+        raw = json.dumps(asdict(self.battlefield), sort_keys=True)
+        return hashlib.sha256(raw.encode()).hexdigest()[:12]
+
+    def coverage_fraction(self) -> float:
+        return float(self.covered.sum()) / float(self.grid * self.grid)
+
+    def kill(self, agent_id: int) -> None:
+        self.alive[agent_id] = False
+        self.vel[agent_id] = 0.0
+
+    def revive(self, agent_id: int) -> None:
+        self.alive[agent_id] = True
+
+
+if __name__ == "__main__":
+    env = Hunt3DEnv(seed=0)
+    obs = env.reset()
+    assert obs.shape == (env.n, OBS_DIM), (obs.shape, OBS_DIM)
+    info = {}
+    for t in range(400):
+        a = env.rng.uniform(-1, 1, size=(env.n, env.act_dim)).astype(np.float32)
+        obs, r, d, info = env.step(a)
+        if t == 200:
+            env.kill(0)
+    print(
+        f"OK obs={obs.shape} state_dim={env.state_dim} act_dim={env.act_dim} "
+        f"captures={info['captures']} min_dist={info['min_dist']:.2f} alive={info['n_alive']}"
+    )

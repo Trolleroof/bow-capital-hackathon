@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -199,6 +200,40 @@ def _popen(*args: Any, **kwargs: Any) -> subprocess.Popen:
     return subprocess.Popen(*args, **kwargs)
 
 
+_BC_PROGRESS_RE = re.compile(r"\[bc\].*step\s+(\d+)/(\d+)\s+mse=([0-9.eE+-]+)")
+
+
+def _broadcast_warm_start_progress(env_id: str, line: str, last: dict[str, Any]) -> dict[str, Any] | None:
+    match = _BC_PROGRESS_RE.search(line)
+    if not match:
+        return None
+
+    step = int(match.group(1))
+    total = int(match.group(2))
+    mse = float(match.group(3))
+    event = {
+        "topic": "train",
+        "env_id": env_id,
+        "profile": last.get("profile", "combat"),
+        "phase": "warm_start",
+        "step": step,
+        "reward_mean": last.get("reward_mean", 0.0),
+        "coverage": last.get("coverage", 0.0),
+        "task_score": step / max(1, total),
+        "primary_metric": "bc_mse",
+        "primary_value": mse,
+        "task_metrics": {"bc_step": step, "bc_total": total, "bc_mse": mse},
+        "losses": {"pg_loss": 0.0, "v_loss": mse, "entropy": 0.0},
+        "params_hash": last.get("params_hash", ""),
+    }
+    with _LOCK:
+        job = _JOBS.get(env_id, {})
+        job["last"] = event
+        _JOBS[env_id] = job
+    _broadcast_sync_line(json.dumps(event))
+    return event
+
+
 def _tail_training(env_id: str, proc: subprocess.Popen) -> None:
     """Read train.py stdout (NDJSON) and fan out to WebSocket clients."""
     assert proc.stdout is not None
@@ -210,6 +245,9 @@ def _tail_training(env_id: str, proc: subprocess.Popen) -> None:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            progress = _broadcast_warm_start_progress(env_id, line, last)
+            if progress is not None:
+                last = progress
             print(f"[train] {line}", flush=True)
             continue
         if event.get("topic") == "train":

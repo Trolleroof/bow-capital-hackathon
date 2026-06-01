@@ -2147,6 +2147,71 @@
    Training stats overlay — bottom strip inside .gym-scene (#17)
    ═══════════════════════════════════════════════════════════════════════════ */
 
+.gym-bc-loader {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(110, 240, 163, 0.28);
+  border-radius: 14px;
+  background: rgba(4, 12, 16, 0.6);
+  backdrop-filter: blur(8px);
+  max-width: 420px;
+}
+
+.gym-bc-loader__header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.gym-bc-loader__spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(110, 240, 163, 0.25);
+  border-top-color: rgba(110, 240, 163, 0.95);
+  animation: gym-bc-spin 0.7s linear infinite;
+}
+
+@keyframes gym-bc-spin {
+  to { transform: rotate(360deg); }
+}
+
+.gym-bc-loader__title {
+  color: var(--text);
+  font: 700 0.9rem/1 'Fira Sans', sans-serif;
+  letter-spacing: 0.01em;
+}
+
+.gym-bc-loader__pct {
+  margin-left: auto;
+  color: rgba(110, 240, 163, 0.95);
+  font: 700 0.82rem/1 'Fira Code', monospace;
+}
+
+.gym-bc-loader__track {
+  margin-top: 11px;
+  height: 7px;
+  border-radius: 99px;
+  background: rgba(120, 154, 180, 0.18);
+  overflow: hidden;
+}
+
+.gym-bc-loader__fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, rgba(110, 240, 163, 0.7), rgba(110, 240, 163, 1));
+  transition: width 0.3s ease;
+}
+
+.gym-bc-loader__meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  color: var(--muted);
+  font: 600 0.7rem/1 'Fira Code', monospace;
+  letter-spacing: 0.04em;
+}
+
 .gym-stats-overlay {
   position: absolute;
   bottom: 13px;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PYBULLET_DEMO_CONFIG } from '../gym/pybulletDemoConfig'
 import { getScenarioById } from '../gym/scenarios'
-import { PYBULLET_WS_URL, startPyBulletSim } from '../gym/trainApi'
+import { PYBULLET_WS_URL, fetchSimStatus, startPyBulletSim } from '../gym/trainApi'
 
 interface AgentPose {
   id: number
@@ -66,16 +66,18 @@ export default function PyBulletSimPanel({
   const [selectedDrone, setSelectedDrone] = useState(0)
   const [switchingCamera, setSwitchingCamera] = useState(false)
   const reconnectTimer = useRef<number | null>(null)
+  const lastWsUrlRef = useRef(wsUrl)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
     let disposed = false
     let socket: WebSocket | null = null
+    let statusTimer: ReturnType<typeof setTimeout> | null = null
 
     const connect = () => {
       if (disposed) return
       setConnection('connecting')
-      socket = new WebSocket(wsUrl)
+      socket = new WebSocket(lastWsUrlRef.current)
 
       socket.onopen = () => {
         if (!disposed) setConnection('online')
@@ -137,13 +139,36 @@ export default function PyBulletSimPanel({
       }
     }
 
-    connect()
+    const pollStatus = async () => {
+      if (disposed) return
+      try {
+        const status = await fetchSimStatus()
+        if (status.running) {
+          if (status.ws_url) lastWsUrlRef.current = status.ws_url
+          if (!socket || socket.readyState === WebSocket.CLOSED) {
+            connect()
+          }
+          return
+        }
+        setConnection('offline')
+        socket?.close()
+      } catch {
+        setConnection('offline')
+      } finally {
+        if (!disposed) statusTimer = window.setTimeout(pollStatus, 1500)
+      }
+    }
+
+    void pollStatus()
 
     return () => {
       disposed = true
       if (reconnectTimer.current != null) {
         window.clearTimeout(reconnectTimer.current)
         reconnectTimer.current = null
+      }
+      if (statusTimer != null) {
+        window.clearTimeout(statusTimer)
       }
       socket?.close()
     }
@@ -160,6 +185,7 @@ export default function PyBulletSimPanel({
     setSelectedDrone(nextDrone)
     try {
       const result = await startPyBulletSim(envId, nextMode, nextDrone)
+      if (result.wsUrl) lastWsUrlRef.current = result.wsUrl
       if (!result.ok) setConnection('offline')
     } finally {
       setSwitchingCamera(false)
@@ -244,20 +270,6 @@ export default function PyBulletSimPanel({
           <span>{modeLabel}</span>
           <span>{frameTime.toFixed(1)}s</span>
         </div>
-      </div>
-
-      <div className="pybullet-camera-controls" aria-label="Camera controls">
-        {(['observer', 'chase', 'fpv'] as CameraMode[]).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            className={cameraMode === mode ? 'is-active' : ''}
-            disabled={switchingCamera}
-            onClick={() => void switchCamera(mode)}
-          >
-            {mode === 'fpv' ? 'FPV' : mode.toUpperCase()}
-          </button>
-        ))}
       </div>
 
       <div className="pybullet-feed-rail" aria-label="Drone feeds">

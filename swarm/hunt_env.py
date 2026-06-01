@@ -66,7 +66,7 @@ AGENT_RADIUS = 0.4       # body half-extent used for collision push-out
 OBSTACLE_CLEARANCE = 0.35
 SENSOR_RANGE = 7.0       # a drone detects the target within this range + LOS
 CAPTURE_RADIUS = 2.3     # a drone "on" the target within this range
-CAPTURE_MIN_DRONES = 1   # one drone reaching the target counts as a catch
+CAPTURE_MIN_DRONES = 2   # at least two drones must box the target for a catch
 FLEE_RADIUS = 6.0        # target only actively flees when a drone is this close
 
 # ── reward weights ───────────────────────────────────────────────────────────
@@ -75,8 +75,11 @@ FIRST_CONTACT_REWARD = 4.0
 PURSUE_REWARD = 1.2       # post-contact closing bonus (scales the approach term)
 CAPTURE_REWARD = 25.0     # big team payoff for boxing the target in
 LOST_CONTACT_PENALTY = 0.5
-CROWD_PENALTY = 0.04
-CROWD_RADIUS = 1.4
+CROWD_PENALTY = 0.14
+CROWD_RADIUS = 1.7
+MIN_AGENT_SEPARATION = 1.5
+DECONFLICT_RADIUS = 3.0
+SEPARATION_STEER = 1.6
 COLLISION_PENALTY = 5.0
 BOUNDS_PENALTY = 0.4      # smooth penalty for pushing past the soft boundary
 EDGE_SOFT_FRAC = 0.85
@@ -338,6 +341,7 @@ class Hunt3DEnv:
                 -1.0,
                 1.0,
             ).astype(np.float32)
+        actions, n_deconflicted = self._apply_swarm_deconfliction(actions)
         actions, n_avoidance = self._apply_obstacle_clearance(actions)
         if n_avoidance:
             self.obstacle_avoidance_count += int(n_avoidance)
@@ -351,6 +355,18 @@ class Hunt3DEnv:
         if n_projected:
             self.obstacle_avoidance_count += int(n_projected)
         n_collisions = self._resolve_collisions(live, start)
+        n_separated = 0
+        for _ in range(3):
+            separated = self._resolve_agent_separation(live)
+            projected = self._enforce_obstacle_clearance(live, OBSTACLE_CLEARANCE)
+            extra_collisions = self._resolve_collisions(live, self.pos.copy())
+            n_separated += separated
+            if projected:
+                self.obstacle_avoidance_count += int(projected)
+            if extra_collisions:
+                n_collisions += int(extra_collisions)
+            if not separated and not projected and not extra_collisions:
+                break
 
         self._update_target()
 
@@ -437,18 +453,22 @@ class Hunt3DEnv:
             "n_collisions": int(n_collisions),
             "collision_count": int(self.collision_count),
             "obstacle_avoidance_count": int(self.obstacle_avoidance_count),
+            "deconflict_count": int(n_deconflicted + n_separated),
             "contact": bool(self.contact),
             "captures": int(self.captures),
             "safe_captures": float(self.captures) - 0.03 * float(self.collision_count),
             "min_dist": float(cur_min),
+            "min_agent_spacing": float(self._min_agent_spacing()),
             "hunt_stage": self.curriculum_stage,
             "pursuit_assist": self.pursuit_assist,
             "task_metrics": {
                 "min_dist": float(cur_min),
+                "min_agent_spacing": float(self._min_agent_spacing()),
                 "captures": float(self.captures),
                 "safe_captures": float(self.captures) - 0.03 * float(self.collision_count),
                 "collision_count": float(self.collision_count),
                 "obstacle_avoidance_count": float(self.obstacle_avoidance_count),
+                "deconflict_count": float(n_deconflicted + n_separated),
                 "contact": 1.0 if self.contact else 0.0,
                 "capture_pressure": float(
                     np.clip((max(self.stage.capture_radius * 2.5, 1e-6) - cur_min) / max(self.stage.capture_radius * 2.5, 1e-6), 0.0, 1.0)
@@ -605,10 +625,10 @@ class Hunt3DEnv:
     def expert_action(self) -> np.ndarray:
         """Decentralized hunt expert used for BC and residual pursuit assist.
 
-        Before contact, the team flies as a compact wedge toward the best target
-        estimate. After contact, it expands into a ring around the target. This
-        avoids teaching PPO the bad "scatter everywhere" search pattern while
-        still producing capture pressure once the evader is found.
+        Before contact, the team flies as a spread search wedge toward the best
+        target estimate. After contact, it expands into a ring around the target.
+        This avoids both "scatter everywhere" search and the bad visual failure
+        mode where every drone collapses onto one pursuit point.
         """
         goal = self.target_pos if self.contact or self.ever_contact else self.last_seen
         out = np.zeros((self.n, self.act_dim), dtype=np.float32)
@@ -624,26 +644,28 @@ class Hunt3DEnv:
         lateral = np.array([-forward[1], forward[0], 0.0], dtype=np.float32)
         lat_norm = float(np.linalg.norm(lateral))
         lateral = lateral / lat_norm if lat_norm > 1e-6 else np.array([0.0, 1.0, 0.0], dtype=np.float32)
-        center_pull = centroid - self.pos
+        center_offset = self.pos - centroid
 
         if not self.ever_contact:
             slots = np.linspace(-1.0, 1.0, max(1, live_ids.shape[0]), dtype=np.float32)
             for order, i in enumerate(live_ids):
-                # Compact wedge: small lateral separation and slight trailing
-                # offsets keep agents visually grouped during search.
-                desired = centroid + forward * 1.1 + lateral * slots[order] * 0.75
-                desired -= forward * (abs(float(slots[order])) * 0.35)
-                desired[2] = float(np.clip(goal[2], Z_MIN + 0.4, Z_MAX - 0.4))
+                # Search wedge: enough lateral/vertical lane spacing that drones
+                # stay visibly distinct while still pushing toward the estimate.
+                lane = float(slots[order])
+                desired = centroid + forward * 1.4 + lateral * lane * 1.65
+                desired -= forward * (abs(lane) * 0.55)
+                desired[2] = float(np.clip(goal[2] + lane * 0.75, Z_MIN + 0.4, Z_MAX - 0.4))
                 vec = desired - self.pos[i]
-                vec += 0.65 * (goal - self.pos[i])
-                vec += 0.30 * center_pull[i]
+                vec += 0.50 * (goal - self.pos[i])
+                vec += 0.18 * center_offset[i]
+                vec += 0.45 * self._separation_vector(int(i))
                 vec = self._avoid_obstacles(self.pos[i], vec)
                 norm = float(np.linalg.norm(vec))
                 if norm > 1e-6:
                     out[i] = vec / norm
             return out
 
-        radius = max(self.stage.capture_radius * 0.45, 0.65)
+        radius = max(self.stage.capture_radius, 1.35)
         for order, i in enumerate(live_ids):
             angle = (2.0 * math.pi * order) / max(1, live_ids.shape[0])
             flank = np.array(
@@ -655,8 +677,9 @@ class Hunt3DEnv:
             desired[1] = float(np.clip(desired[1], -self.world_half, self.world_half))
             desired[2] = float(np.clip(desired[2], Z_MIN + 0.2, Z_MAX - 0.2))
             vec = desired - self.pos[i]
-            vec += 0.55 * (goal - self.pos[i])
-            vec += 0.12 * center_pull[i]
+            vec += 0.20 * (goal - self.pos[i])
+            vec += 0.10 * center_offset[i]
+            vec += 0.55 * self._separation_vector(int(i))
             vec = self._avoid_obstacles(self.pos[i], vec)
             norm = float(np.linalg.norm(vec))
             if norm > 1e-6:
@@ -733,6 +756,76 @@ class Hunt3DEnv:
         hx = float(self._obs_half[k, 0]) + AGENT_RADIUS + margin
         hy = float(self._obs_half[k, 1]) + AGENT_RADIUS + margin
         return abs(x - cx) < hx and abs(y - cy) < hy
+
+    def _separation_vector(self, agent_id: int, radius: float = DECONFLICT_RADIUS) -> np.ndarray:
+        """Steering vector that keeps live drones from collapsing into one stack."""
+        if not self.alive[agent_id]:
+            return np.zeros(3, dtype=np.float32)
+        steer = np.zeros(3, dtype=np.float32)
+        p = self.pos[agent_id]
+        for other_id in range(self.n):
+            if other_id == agent_id or not self.alive[other_id]:
+                continue
+            delta_xy = p[:2] - self.pos[other_id, :2]
+            dist = float(np.linalg.norm(delta_xy))
+            if dist >= radius:
+                continue
+            if dist < 1e-5:
+                angle = (agent_id * 2.399963229728653 + other_id) % (2.0 * math.pi)
+                away_xy = np.array([math.cos(angle), math.sin(angle)], dtype=np.float32)
+                dist = 1e-5
+            else:
+                away_xy = (delta_xy / dist).astype(np.float32)
+            strength = ((radius - dist) / radius) ** 2
+            steer[:2] += away_xy * strength
+            z_gap = float(p[2] - self.pos[other_id, 2])
+            if abs(z_gap) < 0.45 and dist < MIN_AGENT_SEPARATION:
+                steer[2] += (1.0 if z_gap >= 0.0 else -1.0) * strength * 0.35
+        return steer
+
+    def _apply_swarm_deconfliction(self, actions: np.ndarray) -> tuple[np.ndarray, int]:
+        safe = actions.copy()
+        adjusted = 0
+        for i in range(self.n):
+            if not self.alive[i]:
+                continue
+            steer = self._separation_vector(i)
+            if np.linalg.norm(steer) <= 1e-6:
+                continue
+            safe[i] += SEPARATION_STEER * steer
+            adjusted += 1
+        return np.clip(safe, -1.0, 1.0).astype(np.float32), adjusted
+
+    def _resolve_agent_separation(self, live_mask: np.ndarray) -> int:
+        live_ids = np.where(live_mask)[0]
+        if live_ids.size < 2:
+            return 0
+        adjusted = 0
+        for _ in range(6):
+            moved = False
+            for a_idx in range(live_ids.size):
+                i = int(live_ids[a_idx])
+                for b_idx in range(a_idx + 1, live_ids.size):
+                    j = int(live_ids[b_idx])
+                    delta = self.pos[i, :2] - self.pos[j, :2]
+                    dist = float(np.linalg.norm(delta))
+                    if dist >= MIN_AGENT_SEPARATION:
+                        continue
+                    if dist < 1e-5:
+                        angle = (i * 2.399963229728653 + j) % (2.0 * math.pi)
+                        away = np.array([math.cos(angle), math.sin(angle)], dtype=np.float32)
+                        dist = 1e-5
+                    else:
+                        away = (delta / dist).astype(np.float32)
+                    push = 0.5 * (MIN_AGENT_SEPARATION - dist + 1e-2) * away
+                    self.pos[i, :2] += push
+                    self.pos[j, :2] -= push
+                    moved = True
+                    adjusted += 1
+            if not moved:
+                break
+            self._clip_to_world()
+        return adjusted
 
     def _apply_obstacle_clearance(self, actions: np.ndarray) -> tuple[np.ndarray, int]:
         if not self.obstacles:
@@ -835,6 +928,14 @@ class Hunt3DEnv:
             return 2.0 * self.world_half
         return float(np.linalg.norm(live_pos - self.target_pos[None, :], axis=1).min())
 
+    def _min_agent_spacing(self) -> float:
+        live_pos = self.pos[self.alive]
+        if live_pos.shape[0] < 2:
+            return 2.0 * self.world_half
+        d = np.linalg.norm(live_pos[:, None, :] - live_pos[None, :, :], axis=-1)
+        np.fill_diagonal(d, np.inf)
+        return float(np.min(d))
+
     def _n_drones_within(self, live_pos: np.ndarray, radius: float) -> int:
         if not live_pos.shape[0]:
             return 0
@@ -894,6 +995,9 @@ class Hunt3DEnv:
                     "stage_config": self.stage.__dict__,
                     "collision_penalty": COLLISION_PENALTY,
                     "obstacle_clearance": OBSTACLE_CLEARANCE,
+                    "min_agent_separation": MIN_AGENT_SEPARATION,
+                    "deconflict_radius": DECONFLICT_RADIUS,
+                    "capture_min_drones": CAPTURE_MIN_DRONES,
                     "pursuit_assist": round(self.pursuit_assist, 4),
                 },
                 sort_keys=True,
@@ -907,6 +1011,9 @@ class Hunt3DEnv:
                 "stage_config": asdict(self.stage),
                 "collision_penalty": COLLISION_PENALTY,
                 "obstacle_clearance": OBSTACLE_CLEARANCE,
+                "min_agent_separation": MIN_AGENT_SEPARATION,
+                "deconflict_radius": DECONFLICT_RADIUS,
+                "capture_min_drones": CAPTURE_MIN_DRONES,
                 "pursuit_assist": round(self.pursuit_assist, 4),
             },
             sort_keys=True,

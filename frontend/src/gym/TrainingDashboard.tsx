@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BattlefieldParams } from './battlefieldParams'
 import {
+  DEFAULT_TRAIN_TIMESTEPS,
   TRAIN_WS_URL,
   type TrainEvent,
   fetchTrainStatus,
@@ -25,15 +26,21 @@ export interface TrainingMetrics {
   primary_value: number
   n_alive: number
   params_hash: string
+  phase: string
+  bc_step: number
+  bc_total: number
+  bc_mse: number
 }
 
 export type TrainingStatus = 'idle' | 'running' | 'stopped' | 'completed' | 'failed'
 
 function eventToMetrics(event: TrainEvent, swarmSize: number): TrainingMetrics {
   const losses = event.losses ?? {}
+  const step = Number.isFinite(event.step) ? event.step : 0
+  const taskMetrics = event.task_metrics ?? {}
   return {
-    step: event.step,
-    episode: Math.floor(event.step / 200),
+    step,
+    episode: Math.floor(step / 200),
     reward: event.reward_mean ?? 0,
     actor_loss: losses.pg_loss ?? 0,
     critic_loss: losses.v_loss ?? 0,
@@ -44,6 +51,10 @@ function eventToMetrics(event: TrainEvent, swarmSize: number): TrainingMetrics {
     primary_value: event.primary_value ?? event.task_score ?? event.coverage ?? 0,
     n_alive: swarmSize,
     params_hash: (event.params_hash ?? '').slice(0, 8).toUpperCase(),
+    phase: event.phase ?? '',
+    bc_step: taskMetrics.bc_step ?? 0,
+    bc_total: taskMetrics.bc_total ?? 0,
+    bc_mse: taskMetrics.bc_mse ?? 0,
   }
 }
 
@@ -173,6 +184,16 @@ export function useTraining(
         })
         return
       }
+    } catch (err) {
+      closeSocket()
+      setStatus('failed')
+      Promise.resolve().then(() => {
+        optionsRef.current?.onError?.(
+          err instanceof Error
+            ? err.message
+            : 'Training service request failed. Confirm swarm.backend is running on 127.0.0.1:8787.',
+        )
+      })
     } finally {
       startingRef.current = false
     }
@@ -252,6 +273,36 @@ export function useTraining(
   return { status, metrics, history, start, stop }
 }
 
+interface BehavioralCloningLoaderProps {
+  metrics: TrainingMetrics | null
+  status: TrainingStatus
+}
+
+/** Left-side loader shown while the policy is warm-started via behavioral cloning. */
+export function BehavioralCloningLoader({ metrics, status }: BehavioralCloningLoaderProps) {
+  if (status !== 'running' || !metrics || metrics.phase !== 'warm_start') return null
+
+  const total = metrics.bc_total > 0 ? metrics.bc_total : 1
+  const pct = Math.min(100, Math.max(0, Math.round((metrics.bc_step / total) * 100)))
+
+  return (
+    <div className="gym-bc-loader" aria-live="polite" aria-label="Behavioral cloning progress">
+      <div className="gym-bc-loader__header">
+        <span className="gym-bc-loader__spinner" aria-hidden="true" />
+        <span className="gym-bc-loader__title">Behavioral Cloning</span>
+        <span className="gym-bc-loader__pct">{pct}%</span>
+      </div>
+      <div className="gym-bc-loader__track">
+        <div className="gym-bc-loader__fill" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="gym-bc-loader__meta">
+        <span>step {metrics.bc_step.toLocaleString()} / {metrics.bc_total.toLocaleString()}</span>
+        <span>mse {metrics.bc_mse.toFixed(4)}</span>
+      </div>
+    </div>
+  )
+}
+
 interface TrainingStatsDrawerProps {
   metrics: TrainingMetrics | null
   status: TrainingStatus
@@ -269,17 +320,28 @@ export function TrainingStatsDrawer({ metrics, status }: TrainingStatsDrawerProp
           ? 'FAILED'
           : 'STOPPED'
 
+  const simFrames = Math.max(0, Math.round(metrics.step))
+  const progress = DEFAULT_TRAIN_TIMESTEPS > 0
+    ? Math.min(1, simFrames / DEFAULT_TRAIN_TIMESTEPS)
+    : 0
+  const objectiveScore = Math.round(Math.max(metrics.task_score, metrics.primary_value, 0) * 100)
+  const mappedAo = Math.round(Math.max(0, Math.min(1, metrics.coverage)) * 100)
+  const swarmOnline = Math.max(0, metrics.n_alive)
+  const readiness = status === 'completed'
+    ? 'Exported'
+    : progress >= 0.75
+      ? 'Final pass'
+      : progress >= 0.35
+        ? 'Learning'
+        : 'Warming up'
+
   const chips = [
-    { label: 'Step', value: metrics.step.toLocaleString() },
-    { label: 'Episode', value: String(metrics.episode) },
-    { label: 'Reward', value: metrics.reward.toFixed(2), accent: metrics.reward > 0 },
-    { label: 'Task', value: metrics.task_score.toFixed(2), accent: true },
-    { label: metrics.primary_metric.replaceAll('_', ' '), value: metrics.primary_value.toFixed(2), accent: true },
-    { label: 'Actor ℒ', value: metrics.actor_loss.toFixed(3) },
-    { label: 'Critic ℒ', value: metrics.critic_loss.toFixed(3) },
-    { label: 'Coverage', value: `${Math.round(metrics.coverage * 100)}%`, accent: true },
-    { label: 'N Alive', value: String(metrics.n_alive) },
-    { label: 'Hash', value: metrics.params_hash.slice(0, 7) },
+    { label: 'Sim frames', value: simFrames.toLocaleString(), accent: simFrames > 0 },
+    { label: 'Mission score', value: `${objectiveScore}%`, accent: objectiveScore > 0 },
+    { label: 'Engagements', value: metrics.primary_value.toFixed(2), accent: metrics.primary_value > 0 },
+    { label: 'Mapped AO', value: `${mappedAo}%`, accent: mappedAo > 0 },
+    { label: 'Swarm online', value: `${swarmOnline}/${swarmOnline}`, accent: swarmOnline > 0 },
+    { label: 'Deploy gate', value: readiness, accent: status === 'completed' || progress >= 0.75 },
   ]
 
   return (

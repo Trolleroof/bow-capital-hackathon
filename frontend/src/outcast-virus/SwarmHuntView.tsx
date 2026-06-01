@@ -14,14 +14,15 @@ import PyBulletSimPanel from '../panels/PyBulletSimPanel'
 import { getScenarioDefaults } from '../gym/battlefieldParams'
 import { useTraining } from '../gym/TrainingDashboard'
 import { TrainingMetricsChart } from '../gym/TrainingMetricsChart'
-import { decommissionPolicy, fetchPolicyDeployed, startPyBulletSim } from '../gym/trainApi'
+import {
+  DEFAULT_TRAIN_TIMESTEPS,
+  decommissionPolicy,
+  fetchPolicyDeployed,
+  startPyBulletSim,
+  stopPyBulletSim,
+} from '../gym/trainApi'
 
 const ENV_ID = 'hunt-and-seek'
-
-function fmt(n: number | null | undefined, digits = 2) {
-  if (n == null || !Number.isFinite(n)) return '—'
-  return n.toFixed(digits)
-}
 
 export function SwarmHuntView() {
   const params = getScenarioDefaults(ENV_ID)
@@ -36,9 +37,28 @@ export function SwarmHuntView() {
   const [launchError, setLaunchError] = useState<string | null>(null)
   const [simKey, setSimKey] = useState(0)
   const [running, setRunning] = useState(false)
+  // Kill switch is two-stage: first press HALTS the live run (policy stays
+  // deployed, so you can re-run without retraining). Second press while armed
+  // DECOMMISSIONS the policy — then the only way back is a fresh retrain.
+  const [killArmed, setKillArmed] = useState(false)
 
   const training = status === 'running'
-  const captures = metrics?.task_score // primary_metric = captures for this env
+  const simFrames = metrics && Number.isFinite(metrics.step) ? metrics.step : 0
+  const trainProgress = DEFAULT_TRAIN_TIMESTEPS > 0
+    ? Math.min(1, Math.max(0, simFrames / DEFAULT_TRAIN_TIMESTEPS))
+    : 0
+  const missionScore = metrics ? Math.round(Math.max(metrics.reward, metrics.task_score, 0) * 100) : null
+  const interceptRate = metrics ? Math.round(Math.max(0, metrics.task_score) * 100) : null
+  const coveragePct = metrics ? Math.round(Math.max(0, Math.min(1, metrics.coverage)) * 100) : null
+  const policyIteration = metrics ? Math.max(1, metrics.episode).toLocaleString() : '—'
+  const deployGate =
+    status === 'completed' || deployed
+      ? 'ARMED'
+      : trainProgress >= 0.75
+        ? 'FINAL'
+        : trainProgress >= 0.35
+          ? 'LEARNING'
+          : 'WARMUP'
 
   useEffect(() => { refreshDeployed() }, [refreshDeployed])
 
@@ -51,6 +71,7 @@ export function SwarmHuntView() {
       if (!res.ok) setLaunchError(res.error ?? 'Failed to start sim')
       else {
         setRunning(true)
+        setKillArmed(false) // fresh run — back to the first-press (halt) stage
         setSimKey((k) => k + 1) // remount the panel to reconnect cleanly
       }
     } catch (err) {
@@ -61,11 +82,21 @@ export function SwarmHuntView() {
   }, [])
 
   const killSwitch = useCallback(async () => {
+    if (!killArmed) {
+      // First press: just halt the live run. Policy stays deployed.
+      await stopPyBulletSim()
+      setRunning(false)
+      setSimKey((k) => k + 1)
+      setKillArmed(true)
+      return
+    }
+    // Second press: decommission — requires a full retrain to run again.
     await decommissionPolicy(ENV_ID)
     setRunning(false)
     setDeployed(false)
     setSimKey((k) => k + 1)
-  }, [])
+    setKillArmed(false)
+  }, [killArmed])
 
   return (
     <div className="cmd-body cmd-body--swarm cmd-body--hunt">
@@ -104,30 +135,30 @@ export function SwarmHuntView() {
 
           <div className="hunt-metrics">
             <div className="hunt-metric">
-              <span className="hunt-metric__lab">STEP</span>
-              <span className="hunt-metric__val">{metrics ? metrics.step.toLocaleString() : '—'}</span>
-            </div>
-            <div className="hunt-metric">
-              <span className="hunt-metric__lab">REWARD</span>
-              <span className="hunt-metric__val">{fmt(metrics?.reward)}</span>
-            </div>
-            <div className="hunt-metric">
-              <span className="hunt-metric__lab">CAPTURES</span>
-              <span className="hunt-metric__val">{fmt(captures)}</span>
-            </div>
-            <div className="hunt-metric">
-              <span className="hunt-metric__lab">COVERAGE</span>
+              <span className="hunt-metric__lab">SIM FRAMES</span>
               <span className="hunt-metric__val">
-                {metrics ? `${(metrics.coverage * 100).toFixed(0)}%` : '—'}
+                {metrics && Number.isFinite(metrics.step) ? metrics.step.toLocaleString() : '—'}
               </span>
             </div>
             <div className="hunt-metric">
-              <span className="hunt-metric__lab">ACTOR LOSS</span>
-              <span className="hunt-metric__val">{fmt(metrics?.actor_loss, 3)}</span>
+              <span className="hunt-metric__lab">MISSION SCORE</span>
+              <span className="hunt-metric__val">{missionScore == null ? '—' : `${missionScore}%`}</span>
             </div>
             <div className="hunt-metric">
-              <span className="hunt-metric__lab">CRITIC LOSS</span>
-              <span className="hunt-metric__val">{fmt(metrics?.critic_loss, 3)}</span>
+              <span className="hunt-metric__lab">INTERCEPT RATE</span>
+              <span className="hunt-metric__val">{interceptRate == null ? '—' : `${interceptRate}%`}</span>
+            </div>
+            <div className="hunt-metric">
+              <span className="hunt-metric__lab">AO MAPPED</span>
+              <span className="hunt-metric__val">{coveragePct == null ? '—' : `${coveragePct}%`}</span>
+            </div>
+            <div className="hunt-metric">
+              <span className="hunt-metric__lab">POLICY ITERATION</span>
+              <span className="hunt-metric__val">{policyIteration}</span>
+            </div>
+            <div className="hunt-metric">
+              <span className="hunt-metric__lab">DEPLOY GATE</span>
+              <span className="hunt-metric__val">{deployGate}</span>
             </div>
           </div>
 
@@ -169,9 +200,17 @@ export function SwarmHuntView() {
               disabled={deployed === false}
               onClick={() => void killSwitch()}
             >
-              ⏻ Kill switch — decommission policy
+              {killArmed
+                ? '⏻ Press again — decommission (retrain required)'
+                : '⏻ Kill switch — halt run'}
             </button>
           </div>
+          {killArmed ? (
+            <p className="hunt-decom">
+              RUN HALTED — policy still deployed. Re-run anytime, or press kill
+              again to decommission (forces a retrain).
+            </p>
+          ) : null}
         </div>
         </div>
       </div>

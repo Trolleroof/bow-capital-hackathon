@@ -53,8 +53,11 @@ interface StatusMessage {
 
 type BusMessage = PoseMessage | SlamStatusMessage | SlamDiagnosticsMessage | SlamFrameMessage | StatusMessage
 
-const BUS_URL = import.meta.env.VITE_OUTCAST_VIRUS_WS_URL ?? 'ws://localhost:8000'
-const IMAGE_URL = import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL ?? 'ws://localhost:8001'
+const BUS_URL = import.meta.env.VITE_OUTCAST_VIRUS_WS_URL ?? '/outcast/ws'
+const IMAGE_URL = import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL ?? '/outcast/image-ws'
+const OUTCAST_WS_ENABLED =
+  import.meta.env.VITE_OUTCAST_VIRUS_ENABLE_WS === '1' ||
+  Boolean(import.meta.env.VITE_OUTCAST_VIRUS_WS_URL || import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL)
 
 function base64ToBlob(data: string, mime = 'image/jpeg') {
   const binary = atob(data)
@@ -79,6 +82,8 @@ export default function SlamTestPanel() {
   const [slamFrame, setSlamFrame] = useState<SlamFrameMessage | null>(null)
 
   useEffect(() => {
+    if (!OUTCAST_WS_ENABLED) return
+
     let ws: WebSocket | null = null
     let retry: ReturnType<typeof setTimeout> | null = null
     let closed = false
@@ -119,6 +124,8 @@ export default function SlamTestPanel() {
   }, [])
 
   useEffect(() => {
+    if (!OUTCAST_WS_ENABLED) return
+
     let ws: WebSocket | null = null
     let retry: ReturnType<typeof setTimeout> | null = null
     let closed = false

@@ -430,6 +430,7 @@ def _camera_vectors(
     t: float,
     mode: CameraMode,
     selected_drone: int,
+    observer_distance: float = 24.0,
 ) -> tuple[list[float], list[float], float]:
     if mode in {"chase", "fpv"}:
         agent = _selected_agent(agents, selected_drone)
@@ -458,7 +459,7 @@ def _camera_vectors(
 
     focus = _mean_agent_position(agents)
     yaw = math.radians(38.0 + 18.0 * math.sin(t * 0.08))
-    distance = 24.0
+    distance = observer_distance
     pitch = math.radians(36.0)
     eye = [
         focus[0] + math.cos(yaw) * math.cos(pitch) * distance,
@@ -469,6 +470,36 @@ def _camera_vectors(
     return eye, target, 58.0
 
 
+def _encode_png(raw: bytes, width: int, height: int) -> str:
+    """Encode RGBA bytes as base64 PNG using only numpy + stdlib zlib.
+
+    The renderer's Python has no Pillow, and raw RGBA frames are too large for
+    the WebSocket once resolution climbs. PNG losslessly compresses the desert
+    scene to a fraction of the size, so we can stream crisp high-res frames.
+    """
+    import struct
+    import zlib
+
+    import numpy as np
+
+    rgb = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 4)[:, :, :3]
+    # PNG wants a filter byte (0 = none) prepended to each scanline.
+    rows = np.hstack([np.zeros((height, 1), np.uint8), rgb.reshape(height, width * 3)])
+    compressed = zlib.compress(rows.tobytes(), 6)
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + _chunk(b"IDAT", compressed)
+        + _chunk(b"IEND", b"")
+    )
+    return base64.b64encode(png).decode("ascii")
+
+
 def _render_frame(
     p,
     width: int,
@@ -477,16 +508,34 @@ def _render_frame(
     t: float,
     camera_mode: CameraMode,
     selected_drone: int,
+    lit: bool = False,
+    observer_distance: float = 24.0,
 ) -> dict:
-    eye, target, fov = _camera_vectors(agents, t, camera_mode, selected_drone)
+    eye, target, fov = _camera_vectors(agents, t, camera_mode, selected_drone, observer_distance)
     view = p.computeViewMatrix(eye, target, [0.0, 0.0, 1.0])
-    proj = p.computeProjectionMatrixFOV(fov, width / height, 0.05, 120)
+    proj = p.computeProjectionMatrixFOV(fov, width / height, 0.05, 400)
+    # ``lit`` adds directional light + shadows so the photoreal hunt scene reads
+    # well; the primitive worlds keep the cheaper flat render.
+    light_kwargs = (
+        dict(
+            lightDirection=[0.42, 0.18, 1.0],
+            lightColor=[1.0, 0.96, 0.9],
+            lightAmbientCoeff=0.55,
+            lightDiffuseCoeff=0.68,
+            lightSpecularCoeff=0.08,
+            # Shadows ~2x the TinyRenderer cost; off keeps the hunt sim high-fps.
+            shadow=0,
+        )
+        if lit
+        else {}
+    )
     _, _, rgba, _, _ = p.getCameraImage(
         width,
         height,
         view,
         proj,
         renderer=p.ER_TINY_RENDERER,
+        **light_kwargs,
     )
     try:
         raw = bytes(rgba)
@@ -500,10 +549,12 @@ def _render_frame(
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=72)
         encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-        encoding: Literal["jpeg", "rgba"] = "jpeg"
+        encoding: Literal["jpeg", "rgba", "png"] = "jpeg"
     else:
-        encoded = base64.b64encode(raw).decode("ascii")
-        encoding = "rgba"
+        # No Pillow: PNG (numpy+zlib) instead of raw RGBA — far smaller, so the
+        # frame stays under the WS limit even at high resolution.
+        encoded = _encode_png(raw, width, height)
+        encoding = "png"
 
     return {
         "topic": "pybullet_frame",
@@ -516,23 +567,358 @@ def _render_frame(
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Render policy poses in PyBullet")
-    parser.add_argument("--env-id", default="search-and-interdict")
-    # Default kept modest so the raw-RGBA fallback (when Pillow is absent in the
-    # renderer's Python) stays under the 1 MB WebSocket frame limit: 512x288 RGBA
-    # base64 ≈ 786 KB. With Pillow present, frames are JPEG and far smaller, so a
-    # higher resolution can be requested via --width/--height.
-    parser.add_argument("--width", type=int, default=512)
-    parser.add_argument("--height", type=int, default=288)
-    parser.add_argument(
-        "--camera-mode",
-        choices=["observer", "chase", "fpv"],
-        default="observer",
-    )
-    parser.add_argument("--selected-drone", type=int, default=0)
-    args = parser.parse_args()
+# ── rich hunt-and-seek scene (pybullet_swarm_video assets) ───────────────────
 
+
+# TinyRenderer is a software rasterizer with a per-frame cost that scales with
+# triangle count, so the whole scene must stay low-poly. We decimate any heavy
+# mesh once (grid vertex clustering, numpy-only) toward a face budget and cache
+# the low-poly result next to the source obj. Terrain keeps more detail (it's a
+# single backdrop mesh); drones/soldiers are cut hard since they're replicated.
+_DECIMATE_THRESHOLD = 8_000      # leave anything lighter than this untouched
+_TERRAIN_SRC_FACES = 600_000     # meshes above this are terrain (keep detail)
+_TERRAIN_TARGET = 20_000
+_PROP_TARGET = 4_000
+
+
+def _parse_obj(path) -> tuple["object", "object"]:
+    import numpy as np
+
+    verts: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    with open(path) as fh:
+        for line in fh:
+            if line.startswith("v "):
+                parts = line.split()
+                verts.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            elif line.startswith("f "):
+                idx = [int(tok.split("/")[0]) for tok in line.split()[1:]]
+                for i in range(1, len(idx) - 1):  # fan-triangulate, 1-based → 0-based
+                    faces.append((idx[0] - 1, idx[i] - 1, idx[i + 1] - 1))
+    return np.asarray(verts, dtype=np.float64), np.asarray(faces, dtype=np.int64)
+
+
+def _decimate(verts, faces, ncells: int):
+    import numpy as np
+
+    lo = verts.min(0)
+    hi = verts.max(0)
+    span = hi - lo
+    span[span == 0] = 1e-9
+    cell = float(span.max()) / ncells
+    keys = np.floor((verts - lo) / cell).astype(np.int64)
+    _, inv = np.unique(keys, axis=0, return_inverse=True)
+    inv = inv.reshape(-1)
+    nclust = int(inv.max()) + 1
+    rep = np.zeros((nclust, 3))
+    cnt = np.zeros(nclust)
+    np.add.at(rep, inv, verts)
+    np.add.at(cnt, inv, 1)
+    rep /= cnt[:, None]
+    nf = inv[faces]
+    good = (nf[:, 0] != nf[:, 1]) & (nf[:, 1] != nf[:, 2]) & (nf[:, 0] != nf[:, 2])
+    nf = nf[good]
+    used = np.unique(nf)
+    remap = -np.ones(nclust, dtype=np.int64)
+    remap[used] = np.arange(len(used))
+    return rep[used], remap[nf]
+
+
+def _decimate_to(verts, faces, target: int):
+    """Decimate toward ``target`` faces by searching grid resolutions."""
+    best = None
+    for ncells in (220, 170, 130, 96, 70, 50, 34, 22, 14):
+        v, f = _decimate(verts, faces, ncells)
+        best = (v, f)
+        if len(f) <= target:
+            break
+    return best
+
+
+def _write_obj(path, verts, faces) -> None:
+    with open(path, "w") as out:
+        out.write("".join("v %.5f %.5f %.5f\n" % (v[0], v[1], v[2]) for v in verts))
+        out.write("".join("f %d %d %d\n" % (f[0], f[1], f[2]) for f in faces + 1))
+
+
+def _decimated_obj(obj_path):
+    """Return a cached low-poly copy of ``obj_path`` (decimating on first use)."""
+    from pathlib import Path
+
+    obj_path = Path(obj_path)
+    lo_path = obj_path.with_suffix(".lo.obj")
+    try:
+        if lo_path.exists() and lo_path.stat().st_mtime >= obj_path.stat().st_mtime:
+            return lo_path
+        # Cheap scan first so small props don't pay a full numpy parse each launch.
+        with open(obj_path) as fh:
+            n_face_lines = sum(1 for line in fh if line.startswith("f "))
+        if n_face_lines <= _DECIMATE_THRESHOLD:
+            return obj_path
+        verts, faces = _parse_obj(obj_path)
+        target = _TERRAIN_TARGET if n_face_lines >= _TERRAIN_SRC_FACES else _PROP_TARGET
+        verts, faces = _decimate_to(verts, faces, target)
+        _write_obj(lo_path, verts, faces)
+        print(
+            f"[pybullet-renderer] decimated {obj_path.name}: {len(faces)} faces",
+            file=sys.stderr,
+            flush=True,
+        )
+        return lo_path
+    except Exception as exc:  # noqa: BLE001 - fall back to full-res mesh on any error
+        print(f"[pybullet-renderer] decimate failed for {obj_path.name}: {exc}", file=sys.stderr, flush=True)
+        return obj_path
+
+
+def _spawn_extra_drone(sim, p, position) -> int:
+    """Fallback drone body when a pose arrives for an id beyond the spawned ring."""
+    asset = getattr(sim, "_drone_mesh_asset_ref", None)
+    cid = sim.client_id
+    collision = p.createCollisionShape(
+        p.GEOM_BOX, halfExtents=[0.25, 0.25, 0.08], physicsClientId=cid
+    )
+    if asset is not None:
+        visual = sim._create_mesh_visual(asset)
+    else:
+        visual = None
+    if visual is None:
+        visual = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=[0.25, 0.25, 0.08],
+            rgbaColor=[0.90, 0.90, 0.92, 1.0],
+            physicsClientId=cid,
+        )
+    body = p.createMultiBody(
+        baseMass=0.0,
+        baseCollisionShapeIndex=collision,
+        baseVisualShapeIndex=visual,
+        basePosition=list(position),
+        physicsClientId=cid,
+    )
+    if asset is not None:
+        sim._apply_body_texture(body, asset.texture_path)
+    return body
+
+
+def _sync_rich_drones(sim, p, agents: list[dict], ground_offset: float) -> None:
+    """Drive the FPV drone meshes from incoming PPO poses (blue swarm = "us")."""
+    cid = sim.client_id
+    ref = getattr(sim, "_drone_mesh_asset_ref", None)
+    roll = ref.roll_offset if ref else 0.0
+    pitch = ref.pitch_offset if ref else 0.0
+    yaw_off = ref.yaw_offset if ref else 0.0
+    vz = ref.vertical_offset if ref else 0.0
+    for agent in agents:
+        idx = int(agent["id"])
+        x = float(agent["x"])
+        y = float(agent["y"])
+        z = float(agent["z"]) + ground_offset
+        if idx >= len(sim.drone_ids):
+            sim.drone_ids.append(_spawn_extra_drone(sim, p, [x, y, z]))
+            sim._drone_marker_ids.append(None)
+        body = sim.drone_ids[idx]
+        if not agent.get("alive", True):
+            p.resetBasePositionAndOrientation(body, [x, y, -50.0], [0, 0, 0, 1], physicsClientId=cid)
+            marker = sim._drone_marker_ids[idx] if idx < len(sim._drone_marker_ids) else None
+            if marker is not None:
+                p.resetBasePositionAndOrientation(marker, [x, y, -50.0], [0, 0, 0, 1], physicsClientId=cid)
+            continue
+        yaw = float(agent.get("yaw", 0.0))
+        quat = p.getQuaternionFromEuler([roll, pitch, yaw + yaw_off])
+        p.resetBasePositionAndOrientation(body, [x, y, z + vz], quat, physicsClientId=cid)
+        marker = sim._drone_marker_ids[idx] if idx < len(sim._drone_marker_ids) else None
+        if marker is not None:
+            p.resetBasePositionAndOrientation(marker, [x, y, z + 0.9], [0, 0, 0, 1], physicsClientId=cid)
+
+
+def _sync_hunt_human(sim, p, message: dict, ground_offset: float, state: dict) -> None:
+    """Drive troop[0] (a soldier mesh) from the live target_pos — the hunted human."""
+    tp = message.get("target_pos")
+    if not tp or not sim.troop_ids:
+        return
+    x = float(tp[0])
+    y = float(tp[1])
+    idx = 0
+    cid = sim.client_id
+    use_mesh = bool(sim._troop_mesh_mask[idx]) if len(sim._troop_mesh_mask) else False
+    base_z = 1.0 + ground_offset + (sim._troop_visual_z_offset if use_mesh else 0.0)
+    prev = state.get("human_xy")
+    if prev is not None:
+        dx, dy = x - prev[0], y - prev[1]
+        if math.hypot(dx, dy) > 0.01:
+            state["human_yaw"] = math.atan2(dy, dx)
+    state["human_xy"] = (x, y)
+    yaw = state.get("human_yaw", 0.0) + sim._troop_visual_yaw_offset
+    roll = sim._troop_mesh_asset_ref.roll_offset if (use_mesh and sim._troop_mesh_asset_ref) else 0.0
+    pitch = sim._troop_mesh_asset_ref.pitch_offset if (use_mesh and sim._troop_mesh_asset_ref) else 0.0
+    quat = p.getQuaternionFromEuler([roll, pitch, yaw])
+    p.resetBasePositionAndOrientation(sim.troop_ids[idx], [x, y, base_z], quat, physicsClientId=cid)
+    if idx < len(sim._troop_marker_ids) and sim._troop_marker_ids[idx] is not None:
+        p.resetBasePositionAndOrientation(
+            sim._troop_marker_ids[idx], [x, y, base_z + 1.4], [0, 0, 0, 1], physicsClientId=cid
+        )
+
+
+def _run_rich_hunt(args) -> bool:
+    """Render hunt-and-seek with pybullet_swarm_video scenery + assets.
+
+    Returns ``True`` once it has taken over the stdin→stdout loop (i.e. the
+    rich scene built successfully). Returns ``False`` if setup fails *before*
+    any stdin is consumed, so the caller can fall back to the primitive world.
+    """
+    try:
+        from pathlib import Path
+
+        here = Path(__file__).resolve()
+        pkg_root = here.parents[1] / "pybullet_swarm_video"
+        if str(pkg_root) not in sys.path:
+            sys.path.insert(0, str(pkg_root))
+
+        # The renderer's Python ships a bare pybullet .so without the
+        # ``pybullet_data`` package, which simulation.py imports for the ground
+        # plane. Provide a tiny shim backed by vendored plane data so the rich
+        # scene works without altering the Python install.
+        if "pybullet_data" not in sys.modules:
+            try:
+                import pybullet_data  # noqa: F401  (real package if present)
+            except ImportError:
+                import types
+
+                data_dir = str(here.parent / "_bullet_data")
+                shim = types.ModuleType("pybullet_data")
+                shim.getDataPath = lambda: data_dir  # type: ignore[attr-defined]
+                sys.modules["pybullet_data"] = shim
+
+        from pybullet_swarm_video.config import SimulationConfig
+        from pybullet_swarm_video.simulation import DroneSurveillanceSimulation
+        import pybullet as p
+
+        config = SimulationConfig(
+            num_drones=5,          # matches hunt-and-seek N_AGENTS
+            num_troops=4,          # 1 hunted human (idx 0) + a few ambient soldiers
+            resources_dir=pkg_root / "resources",
+        )
+        sim = DroneSurveillanceSimulation(config, gui=False)
+        # The sim logs asset issues via print() → stdout, which is our JSON
+        # frame channel. Reroute to stderr so a missing texture can't corrupt
+        # the stream the dashboard parses.
+        sim._log_asset = lambda msg, _seen=sim._asset_messages: (  # type: ignore[assignment]
+            None if msg in _seen else (_seen.add(msg), print(f"[sim-asset] {msg}", file=sys.stderr, flush=True))[0]
+        )
+        # Decimate heavy meshes (salt dome, FPV drone) on the way through the
+        # asset pipeline so TinyRenderer stays fast. _strip_uv_obj runs on every
+        # mesh right before bounds/scale are computed, so swapping in the
+        # low-poly obj here keeps all of the sim's placement logic intact.
+        _orig_strip = sim._strip_uv_obj
+        sim._strip_uv_obj = lambda obj_path: _decimated_obj(_orig_strip(obj_path))  # type: ignore[assignment]
+
+        # The damaged-concrete ground texture is high-frequency, so TinyRenderer
+        # point-samples it into heavy speckle noise (and it's the worst thing on
+        # screen). Drop it for a flat sand colour — cleaner and a touch faster.
+        sim._ground_texture_path = lambda: None  # type: ignore[assignment]
+
+        # The FPV drone renders at a realistic ~1.6m, which is a speck from the
+        # observer cam. Scale it up so the swarm actually reads as drones.
+        import dataclasses
+
+        _orig_drone_asset = sim._drone_mesh_asset
+
+        def _bigger_drone():
+            asset = _orig_drone_asset()
+            if asset is None:
+                return None
+            return dataclasses.replace(
+                asset, scale_xyz=tuple(s * 2.2 for s in asset.scale_xyz)
+            )
+
+        sim._drone_mesh_asset = _bigger_drone  # type: ignore[assignment]
+        sim.reset()
+    except Exception as exc:  # noqa: BLE001 - any failure → primitive fallback
+        print(f"[pybullet-renderer] rich hunt setup failed: {exc}", file=sys.stderr, flush=True)
+        return False
+
+    ground_offset = float(getattr(sim, "_ground_offset_z", 0.0))
+    cid = sim.client_id
+
+    # Drop the orange marker spheres above each drone — the FPV drone mesh is the
+    # drone now. Remove the bodies and null the slots so the pose sync skips them.
+    for marker in list(sim._drone_marker_ids):
+        if marker is not None:
+            try:
+                p.removeBody(marker, physicsClientId=cid)
+            except Exception:
+                pass
+    sim._drone_marker_ids = [None] * len(sim._drone_marker_ids)
+
+    # Highlight the hunted human (troop 0) with a red marker; ambient soldiers
+    # stay green. Everything else in the scene is static scenery.
+    if sim.troop_ids and sim._troop_marker_ids and sim._troop_marker_ids[0] is not None:
+        try:
+            p.changeVisualShape(
+                sim._troop_marker_ids[0], -1, rgbaColor=[0.95, 0.22, 0.24, 0.95], physicsClientId=cid
+            )
+        except Exception:
+            pass
+
+    human_state: dict = {}
+
+    def _next_message():
+        """Block for a pose line, then drain to the freshest one available.
+
+        Each render (~100ms) is slower than the pose feed (~50ms), so without
+        draining the renderer falls progressively behind real time. Skipping to
+        the latest buffered pose keeps the displayed frame current.
+        """
+        import select
+
+        line = sys.stdin.readline()
+        if line == "":
+            return None  # EOF
+        while select.select([sys.stdin], [], [], 0)[0]:
+            nxt = sys.stdin.readline()
+            if nxt == "":
+                break
+            if nxt.strip():
+                line = nxt
+        return line
+
+    try:
+        while True:
+            raw = _next_message()
+            if raw is None:
+                break
+            if not raw.strip():
+                continue
+            message = json.loads(raw)
+            agents = message.get("agents", [])
+            t = float(message.get("t", 0.0))
+            _sync_rich_drones(sim, p, agents, ground_offset)
+            _sync_hunt_human(sim, p, message, ground_offset, human_state)
+            p.stepSimulation(physicsClientId=cid)
+            frame = _render_frame(
+                p,
+                args.width,
+                args.height,
+                [
+                    {**a, "z": float(a["z"]) + ground_offset}
+                    for a in agents
+                    if a.get("alive", True)
+                ],
+                t,
+                args.camera_mode,
+                args.selected_drone,
+                lit=True,
+                observer_distance=15.0,  # tighter framing on the hunt
+            )
+            frame["t"] = message.get("t", 0)
+            frame["env_id"] = message.get("env_id", args.env_id)
+            print(json.dumps(frame), flush=True)
+    finally:
+        sim.close()
+    return True
+
+
+def _run_primitive(args) -> None:
     import pybullet as p
     client = p.connect(p.DIRECT)
     p.setGravity(0, 0, -9.81)
@@ -571,6 +957,31 @@ def main() -> None:
             print(json.dumps(frame), flush=True)
     finally:
         p.disconnect(client)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Render policy poses in PyBullet")
+    parser.add_argument("--env-id", default="search-and-interdict")
+    # Default kept modest so the raw-RGBA fallback (when Pillow is absent in the
+    # renderer's Python) stays under the 1 MB WebSocket frame limit: 512x288 RGBA
+    # base64 ≈ 786 KB. With Pillow present, frames are JPEG and far smaller, so a
+    # higher resolution can be requested via --width/--height.
+    parser.add_argument("--width", type=int, default=960)
+    parser.add_argument("--height", type=int, default=540)
+    parser.add_argument(
+        "--camera-mode",
+        choices=["observer", "chase", "fpv"],
+        default="observer",
+    )
+    parser.add_argument("--selected-drone", type=int, default=0)
+    args = parser.parse_args()
+
+    # hunt-and-seek gets the photoreal pybullet_swarm_video scenery; everything
+    # else keeps the lightweight primitive world. The pose/frame protocol is
+    # identical for both paths.
+    if args.env_id == "hunt-and-seek" and _run_rich_hunt(args):
+        return
+    _run_primitive(args)
 
 
 if __name__ == "__main__":

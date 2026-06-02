@@ -131,6 +131,9 @@ MAX_SPEED = 6.0      # world-units / second at full throttle
 COVERAGE_REWARD = 1.0
 CROWD_PENALTY = 0.05
 CROWD_RADIUS = 1.5
+MIN_AGENT_SEPARATION = 1.25
+DECONFLICT_RADIUS = 2.6
+SEPARATION_STEER = 1.1
 
 # ── boundary handling (issue: agents drift out and park at the wall) ─────────
 # Old behaviour penalized only agents *already sitting on* the edge with a tiny
@@ -618,6 +621,72 @@ class SwarmEnv:
                 collided += 1
         return collided
 
+    def _separation_vector(self, agent_id: int, radius: float = DECONFLICT_RADIUS) -> np.ndarray:
+        """Steering vector that keeps live drones from collapsing into one point."""
+        if not self.alive[agent_id]:
+            return np.zeros(2, dtype=np.float32)
+        steer = np.zeros(2, dtype=np.float32)
+        p = self.pos[agent_id]
+        for other_id in range(self.n):
+            if other_id == agent_id or not self.alive[other_id]:
+                continue
+            delta = p - self.pos[other_id]
+            dist = float(np.linalg.norm(delta))
+            if dist >= radius:
+                continue
+            if dist < 1e-5:
+                angle = (agent_id * 2.399963229728653 + other_id) % (2.0 * math.pi)
+                away = np.array([math.cos(angle), math.sin(angle)], dtype=np.float32)
+                dist = 1e-5
+            else:
+                away = (delta / dist).astype(np.float32)
+            steer += away * (((radius - dist) / radius) ** 2)
+        return steer
+
+    def _apply_swarm_deconfliction(self, actions: np.ndarray) -> tuple[np.ndarray, int]:
+        safe = actions.copy()
+        adjusted = 0
+        for i in range(self.n):
+            if not self.alive[i]:
+                continue
+            steer = self._separation_vector(i)
+            if np.linalg.norm(steer) <= 1e-6:
+                continue
+            safe[i] += SEPARATION_STEER * steer
+            adjusted += 1
+        return np.clip(safe, -1.0, 1.0).astype(np.float32), adjusted
+
+    def _resolve_agent_separation(self, live_mask: np.ndarray) -> int:
+        live_ids = np.where(live_mask)[0]
+        if live_ids.size < 2:
+            return 0
+        adjusted = 0
+        for _ in range(5):
+            moved = False
+            for a_idx in range(live_ids.size):
+                i = int(live_ids[a_idx])
+                for b_idx in range(a_idx + 1, live_ids.size):
+                    j = int(live_ids[b_idx])
+                    delta = self.pos[i] - self.pos[j]
+                    dist = float(np.linalg.norm(delta))
+                    if dist >= MIN_AGENT_SEPARATION:
+                        continue
+                    if dist < 1e-5:
+                        angle = (i * 2.399963229728653 + j) % (2.0 * math.pi)
+                        away = np.array([math.cos(angle), math.sin(angle)], dtype=np.float32)
+                        dist = 1e-5
+                    else:
+                        away = (delta / dist).astype(np.float32)
+                    push = 0.5 * (MIN_AGENT_SEPARATION - dist + 1e-2) * away
+                    self.pos[i] += push
+                    self.pos[j] -= push
+                    moved = True
+                    adjusted += 1
+            if not moved:
+                break
+            self.pos = np.clip(self.pos, -self.world_half, self.world_half)
+        return adjusted
+
     def _world_to_cell(self, p: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Map world (x, y) -> integer grid indices (cx, cy), clipped to grid."""
         idx = ((p + self.world_half) / self.cell).astype(np.int64)
@@ -1020,6 +1089,7 @@ class SwarmEnv:
                     self.kill(aid)
 
         live = self.alive
+        actions, n_deconflicted = self._apply_swarm_deconfliction(actions)
         self.vel = actions  # record applied command (used in obs)
         start_pos = self.pos.copy()
         # only live agents move
@@ -1038,6 +1108,16 @@ class SwarmEnv:
         n_collisions = self._resolve_obstacle_collisions_from(live, start_pos)
         if n_collisions:
             self.pos = np.clip(self.pos, -bound, bound)
+        n_separated = 0
+        for _ in range(3):
+            separated = self._resolve_agent_separation(live)
+            extra_collisions = self._resolve_obstacle_collisions_from(live, self.pos.copy())
+            n_separated += separated
+            if extra_collisions:
+                n_collisions += int(extra_collisions)
+                self.pos = np.clip(self.pos, -bound, bound)
+            if not separated and not extra_collisions:
+                break
 
         self._update_task_entities()
 
@@ -1082,6 +1162,7 @@ class SwarmEnv:
             "coverage": self.coverage_fraction(),
             "n_alive": int(self.alive.sum()),
             "n_collisions": n_collisions,
+            "deconflict_count": int(n_deconflicted + n_separated),
         }
         task_metrics = self._task_metrics(self.pos[self.alive])
         info.update(task_metrics)
@@ -1245,8 +1326,23 @@ class SwarmEnv:
         its parameter set (issue #15 acceptance criterion).
         """
         if self.battlefield is None:
-            return "garrison"
-        raw = json.dumps(asdict(self.battlefield), sort_keys=True)
+            raw = json.dumps(
+                {
+                    "profile": "garrison",
+                    "min_agent_separation": MIN_AGENT_SEPARATION,
+                    "deconflict_radius": DECONFLICT_RADIUS,
+                },
+                sort_keys=True,
+            )
+            return "garrison-" + hashlib.sha256(raw.encode()).hexdigest()[:12]
+        raw = json.dumps(
+            {
+                "battlefield": asdict(self.battlefield),
+                "min_agent_separation": MIN_AGENT_SEPARATION,
+                "deconflict_radius": DECONFLICT_RADIUS,
+            },
+            sort_keys=True,
+        )
         return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
     # ----------------------------------------------------------------- extras ---

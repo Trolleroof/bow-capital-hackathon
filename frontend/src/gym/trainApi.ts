@@ -100,6 +100,36 @@ export async function fetchTrainStatus(envId: string): Promise<{
   }
 }
 
+export async function fetchSimStatus(): Promise<{
+  env_id?: string
+  policy?: string
+  camera_mode?: string
+  selected_drone?: number
+  running: boolean
+  returncode?: number
+  ws_url: string
+}> {
+  const res = await fetch(`${TRAIN_API_BASE}/api/sim/status`)
+  const data = (await res.json()) as {
+    env_id?: string
+    policy?: string
+    camera_mode?: string
+    selected_drone?: number
+    running?: boolean
+    returncode?: number
+    ws_url?: string
+  }
+  return {
+    env_id: data.env_id,
+    policy: data.policy,
+    camera_mode: data.camera_mode,
+    selected_drone: data.selected_drone,
+    running: Boolean(data.running),
+    returncode: data.returncode,
+    ws_url: data.ws_url ?? PYBULLET_WS_URL,
+  }
+}
+
 export async function startPyBulletSim(
   envId: string,
   cameraMode: 'observer' | 'chase' | 'fpv' = 'observer',
@@ -125,6 +155,16 @@ export async function startPyBulletSim(
     ok: Boolean(data.ok),
     wsUrl: data.ws_url ?? PYBULLET_WS_URL,
     error: data.error,
+  }
+}
+
+export async function stopPyBulletSim(): Promise<{ ok: boolean }> {
+  try {
+    const res = await fetch(`${TRAIN_API_BASE}/api/sim/stop`, { method: 'POST' })
+    const data = (await res.json()) as { ok?: boolean }
+    return { ok: Boolean(data.ok) }
+  } catch {
+    return { ok: false }
   }
 }
 

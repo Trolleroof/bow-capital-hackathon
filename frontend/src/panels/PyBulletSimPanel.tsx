@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PYBULLET_DEMO_CONFIG } from '../gym/pybulletDemoConfig'
 import { getScenarioById } from '../gym/scenarios'
-import { PYBULLET_WS_URL, startPyBulletSim } from '../gym/trainApi'
+import { PYBULLET_WS_URL, fetchSimStatus, startPyBulletSim } from '../gym/trainApi'
 
 interface AgentPose {
   id: number
@@ -21,6 +21,8 @@ interface SwarmMessage {
   coverage?: number
   captures?: number
   contact?: boolean
+  target_pos?: [number, number] | [number, number, number]
+  target_visible?: boolean
   agents: AgentPose[]
 }
 
@@ -30,7 +32,7 @@ interface PyBulletFrameMessage {
   env_id?: string
   width: number
   height: number
-  encoding: 'jpeg' | 'rgba'
+  encoding: 'jpeg' | 'rgba' | 'png'
   camera_mode?: CameraMode
   selected_drone?: number
   data: string
@@ -59,20 +61,23 @@ export default function PyBulletSimPanel({
   const [policy, setPolicy] = useState('trained')
   const [captures, setCaptures] = useState(0)
   const [contact, setContact] = useState(false)
+  const [targetPos, setTargetPos] = useState<[number, number] | [number, number, number] | null>(null)
   const [cameraMode, setCameraMode] = useState<CameraMode>('observer')
   const [selectedDrone, setSelectedDrone] = useState(0)
   const [switchingCamera, setSwitchingCamera] = useState(false)
   const reconnectTimer = useRef<number | null>(null)
+  const lastWsUrlRef = useRef(wsUrl)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
     let disposed = false
     let socket: WebSocket | null = null
+    let statusTimer: ReturnType<typeof setTimeout> | null = null
 
     const connect = () => {
       if (disposed) return
       setConnection('connecting')
-      socket = new WebSocket(wsUrl)
+      socket = new WebSocket(lastWsUrlRef.current)
 
       socket.onopen = () => {
         if (!disposed) setConnection('online')
@@ -100,7 +105,8 @@ export default function PyBulletSimPanel({
               setFrameSrc(null)
             }
           } else {
-            setFrameSrc(`data:image/jpeg;base64,${message.data}`)
+            const mime = message.encoding === 'png' ? 'image/png' : 'image/jpeg'
+            setFrameSrc(`data:${mime};base64,${message.data}`)
             setHasCanvasFrame(false)
           }
           if (message.camera_mode) setCameraMode(message.camera_mode)
@@ -116,6 +122,9 @@ export default function PyBulletSimPanel({
           setPolicy(message.policy ?? 'trained')
           if (typeof message.captures === 'number') setCaptures(message.captures)
           if (typeof message.contact === 'boolean') setContact(message.contact)
+          if (Array.isArray(message.target_pos) && message.target_pos.length >= 2) {
+            setTargetPos(message.target_pos)
+          }
         }
       }
 
@@ -130,13 +139,36 @@ export default function PyBulletSimPanel({
       }
     }
 
-    connect()
+    const pollStatus = async () => {
+      if (disposed) return
+      try {
+        const status = await fetchSimStatus()
+        if (status.running) {
+          if (status.ws_url) lastWsUrlRef.current = status.ws_url
+          if (!socket || socket.readyState === WebSocket.CLOSED) {
+            connect()
+          }
+          return
+        }
+        setConnection('offline')
+        socket?.close()
+      } catch {
+        setConnection('offline')
+      } finally {
+        if (!disposed) statusTimer = window.setTimeout(pollStatus, 1500)
+      }
+    }
+
+    void pollStatus()
 
     return () => {
       disposed = true
       if (reconnectTimer.current != null) {
         window.clearTimeout(reconnectTimer.current)
         reconnectTimer.current = null
+      }
+      if (statusTimer != null) {
+        window.clearTimeout(statusTimer)
       }
       socket?.close()
     }
@@ -153,6 +185,7 @@ export default function PyBulletSimPanel({
     setSelectedDrone(nextDrone)
     try {
       const result = await startPyBulletSim(envId, nextMode, nextDrone)
+      if (result.wsUrl) lastWsUrlRef.current = result.wsUrl
       if (!result.ok) setConnection('offline')
     } finally {
       setSwitchingCamera(false)
@@ -193,9 +226,17 @@ export default function PyBulletSimPanel({
     (_, id) => ({ id, alive: true }) as AgentPose,
   )
   const visibleAgents = agents.length ? agents : configuredAgents
+  const mapPercent = (value: number, axis: 'x' | 'y') => {
+    const pct = Math.min(100, Math.max(0, (value + 10) * 5))
+    return axis === 'x' ? pct : 100 - pct
+  }
 
   return (
-    <section className="pybullet-sim" aria-label={`${missionName} PyBullet simulation`}>
+    <section
+      className="pybullet-sim"
+      data-connection={connection}
+      aria-label={`${missionName} PyBullet simulation`}
+    >
       <div className="pybullet-sim__viewport">
         <canvas
           ref={canvasRef}
@@ -231,20 +272,6 @@ export default function PyBulletSimPanel({
         </div>
       </div>
 
-      <div className="pybullet-camera-controls" aria-label="Camera controls">
-        {(['observer', 'chase', 'fpv'] as CameraMode[]).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            className={cameraMode === mode ? 'is-active' : ''}
-            disabled={switchingCamera}
-            onClick={() => void switchCamera(mode)}
-          >
-            {mode === 'fpv' ? 'FPV' : mode.toUpperCase()}
-          </button>
-        ))}
-      </div>
-
       <div className="pybullet-feed-rail" aria-label="Drone feeds">
         {visibleAgents.map((agent) => (
           <button
@@ -269,13 +296,22 @@ export default function PyBulletSimPanel({
         </div>
 
         <div className="pybullet-map" aria-label="Coordination map">
+          {targetPos ? (
+            <span
+              className={`pybullet-map__target ${contact ? 'is-visible' : ''}`}
+              style={{
+                left: `${mapPercent(targetPos[0], 'x')}%`,
+                top: `${mapPercent(targetPos[1], 'y')}%`,
+              }}
+            />
+          ) : null}
           {agents.map((agent) => (
             <i
               key={agent.id}
               data-alive={agent.alive}
               style={{
-                left: `${Math.min(100, Math.max(0, (agent.x + 10) * 5))}%`,
-                top: `${Math.min(100, Math.max(0, 100 - (agent.y + 10) * 5))}%`,
+                left: `${mapPercent(agent.x, 'x')}%`,
+                top: `${mapPercent(agent.y, 'y')}%`,
               }}
             />
           ))}

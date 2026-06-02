@@ -1,8 +1,23 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 
 const DEFAULT_WS_HOST = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
-const ORCH_WS = import.meta.env.VITE_OUTCAST_VIRUS_WS_URL ?? `ws://${DEFAULT_WS_HOST}:8000`
-const IMAGE_WS = import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL ?? `ws://${DEFAULT_WS_HOST}:8001`
+function resolveOutcastWsUrl(envKey: 'VITE_OUTCAST_VIRUS_WS_URL' | 'VITE_OUTCAST_VIRUS_IMAGE_WS_URL', proxyPath: string, fallbackPort: number) {
+  const fromEnv = import.meta.env[envKey]
+  if (fromEnv) return fromEnv
+  if (typeof window !== 'undefined') {
+    return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}${proxyPath}`
+  }
+  return `ws://${DEFAULT_WS_HOST}:${fallbackPort}`
+}
+
+const ORCH_WS = resolveOutcastWsUrl('VITE_OUTCAST_VIRUS_WS_URL', '/outcast/ws', 8000)
+const IMAGE_WS = resolveOutcastWsUrl('VITE_OUTCAST_VIRUS_IMAGE_WS_URL', '/outcast/image-ws', 8001)
+const OUTCAST_WS_ENABLED =
+  import.meta.env.VITE_OUTCAST_VIRUS_ENABLE_WS === '1' ||
+  Boolean(import.meta.env.VITE_OUTCAST_VIRUS_WS_URL)
+const OUTCAST_IMAGE_WS_ENABLED =
+  import.meta.env.VITE_OUTCAST_VIRUS_ENABLE_WS === '1' ||
+  Boolean(import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL)
 const CONTROL_TOPICS = [
   'pose',
   'detections',
@@ -228,6 +243,8 @@ export function useOutcastVirusState() {
 
   // orchestrator WebSocket — real data when available
   useEffect(() => {
+    if (!OUTCAST_WS_ENABLED) return
+
     let ws: WebSocket | null = null
     let retryTimeout: ReturnType<typeof setTimeout>
     let stopped = false
@@ -405,6 +422,8 @@ export function useOutcastVirusState() {
   }, [pushLog])
 
   useEffect(() => {
+    if (!OUTCAST_IMAGE_WS_ENABLED) return
+
     let ws: WebSocket | null = null
     let retryTimeout: ReturnType<typeof setTimeout>
     let stopped = false

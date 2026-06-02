@@ -1,0 +1,8 @@
+- generic [ref=e4]:
+  - generic [ref=e7]:
+    - heading "OUTCAST VIRUS" [level=1] [ref=e8]
+    - generic [ref=e9]: GROUND CONTROL STATION — EDGE AUTONOMY STACK
+  - button "Enter ▸" [ref=e10] [cursor=pointer]:
+    - generic [ref=e11]: Enter
+    - generic [ref=e12]: ▸
+  - generic [ref=e13]: CLICK TO ENTER · DRAG TO ORBIT

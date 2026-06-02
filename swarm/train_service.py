@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -199,6 +200,40 @@ def _popen(*args: Any, **kwargs: Any) -> subprocess.Popen:
     return subprocess.Popen(*args, **kwargs)
 
 
+_BC_PROGRESS_RE = re.compile(r"\[bc\].*step\s+(\d+)/(\d+)\s+mse=([0-9.eE+-]+)")
+
+
+def _broadcast_warm_start_progress(env_id: str, line: str, last: dict[str, Any]) -> dict[str, Any] | None:
+    match = _BC_PROGRESS_RE.search(line)
+    if not match:
+        return None
+
+    step = int(match.group(1))
+    total = int(match.group(2))
+    mse = float(match.group(3))
+    event = {
+        "topic": "train",
+        "env_id": env_id,
+        "profile": last.get("profile", "combat"),
+        "phase": "warm_start",
+        "step": step,
+        "reward_mean": last.get("reward_mean", 0.0),
+        "coverage": last.get("coverage", 0.0),
+        "task_score": step / max(1, total),
+        "primary_metric": "bc_mse",
+        "primary_value": mse,
+        "task_metrics": {"bc_step": step, "bc_total": total, "bc_mse": mse},
+        "losses": {"pg_loss": 0.0, "v_loss": mse, "entropy": 0.0},
+        "params_hash": last.get("params_hash", ""),
+    }
+    with _LOCK:
+        job = _JOBS.get(env_id, {})
+        job["last"] = event
+        _JOBS[env_id] = job
+    _broadcast_sync_line(json.dumps(event))
+    return event
+
+
 def _tail_training(env_id: str, proc: subprocess.Popen) -> None:
     """Read train.py stdout (NDJSON) and fan out to WebSocket clients."""
     assert proc.stdout is not None
@@ -210,6 +245,9 @@ def _tail_training(env_id: str, proc: subprocess.Popen) -> None:
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            progress = _broadcast_warm_start_progress(env_id, line, last)
+            if progress is not None:
+                last = progress
             print(f"[train] {line}", flush=True)
             continue
         if event.get("topic") == "train":
@@ -304,9 +342,11 @@ def _drive_sim_policy(
         policy_fn = _random_policy(env)
         label = "random"
 
-    # Wall-clock pacing of the live playback (physics step is env DT internally).
-    # Larger = slower, more watchable rollout on stage.
-    dt = float(os.environ.get("SIM_PLAYBACK_DT", "0.16"))
+    # Wall-clock pacing of the live playback. The env's internal step is 0.1s, so
+    # 0.1 ≈ real-time motion. The PyBullet renderer drains to the freshest pose,
+    # so its frame rate is independent of this — smaller just means faster on-
+    # screen motion, not more fps. Override with SIM_PLAYBACK_DT.
+    dt = float(os.environ.get("SIM_PLAYBACK_DT", "0.1"))
     ckpt_mtime: float = os.path.getmtime(ckpt) if os.path.exists(ckpt) else 0.0
     reload_check_interval = 50  # frames
     frame_count = 0
@@ -360,17 +400,28 @@ def _start_training(env_id: str, profile: str, timesteps: int) -> dict:
         if existing.get("proc") is not None:
             existing["running"] = False
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "swarm.train",
-        "--env-id",
-        env_id,
-        "--profile",
-        profile,
-        "--timesteps",
-        str(timesteps),
-    ]
+    if env_id == "hunt-and-seek":
+        cmd = [
+            sys.executable,
+            "-m",
+            "swarm.train_hunt_curriculum",
+            "--profile",
+            profile,
+            "--timesteps",
+            str(timesteps),
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            "-m",
+            "swarm.train",
+            "--env-id",
+            env_id,
+            "--profile",
+            profile,
+            "--timesteps",
+            str(timesteps),
+        ]
     proc = _popen(
         cmd,
         cwd=REPO,

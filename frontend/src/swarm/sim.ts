@@ -55,6 +55,9 @@ export const OBSTACLE_FEATS = 4
 export const OBSTACLE_DIM = M_OBSTACLES * OBSTACLE_FEATS // 12
 export const TASK_DIM = 16
 export const AGENT_RADIUS = 0.4
+export const MIN_AGENT_SEPARATION = 1.25
+export const DECONFLICT_RADIUS = 2.6
+export const SEPARATION_STEER = 1.1
 export const OBS_DIM =
   OWN_DIM + NEIGHBOR_DIM + PATCH_DIM + OBSTACLE_DIM + TASK_DIM + ROLE_DIM // 64
 export const ACT_DIM = 2
@@ -267,6 +270,112 @@ export class SwarmEnv {
     return [px, py]
   }
 
+  private separationVector(agentIdx: number): [number, number] {
+    if (!this.alive[agentIdx]) return [0, 0]
+    let sx = 0
+    let sy = 0
+    const px = this.pos[agentIdx * 2]
+    const py = this.pos[agentIdx * 2 + 1]
+    for (let otherIdx = 0; otherIdx < this.n; otherIdx++) {
+      if (otherIdx === agentIdx || !this.alive[otherIdx]) continue
+      let dx = px - this.pos[otherIdx * 2]
+      let dy = py - this.pos[otherIdx * 2 + 1]
+      let dist = Math.hypot(dx, dy)
+      if (dist >= DECONFLICT_RADIUS) continue
+      if (dist < 1e-5) {
+        const angle = (agentIdx * 2.399963229728653 + otherIdx) % (Math.PI * 2)
+        dx = Math.cos(angle)
+        dy = Math.sin(angle)
+        dist = 1e-5
+      } else {
+        dx /= dist
+        dy /= dist
+      }
+      const strength = ((DECONFLICT_RADIUS - dist) / DECONFLICT_RADIUS) ** 2
+      sx += dx * strength
+      sy += dy * strength
+    }
+    return [sx, sy]
+  }
+
+  private applySwarmDeconfliction(actions: Float32Array): [Float32Array, number] {
+    const safe = new Float32Array(actions)
+    let adjusted = 0
+    for (let i = 0; i < this.n; i++) {
+      if (!this.alive[i]) continue
+      const [sx, sy] = this.separationVector(i)
+      if (Math.hypot(sx, sy) <= 1e-6) continue
+      safe[i * 2] = Math.max(-1, Math.min(1, safe[i * 2] + sx * SEPARATION_STEER))
+      safe[i * 2 + 1] = Math.max(-1, Math.min(1, safe[i * 2 + 1] + sy * SEPARATION_STEER))
+      adjusted++
+    }
+    return [safe, adjusted]
+  }
+
+  private resolveAgentSeparation(): number {
+    const liveIds: number[] = []
+    for (let i = 0; i < this.n; i++) if (this.alive[i]) liveIds.push(i)
+    if (liveIds.length < 2) return 0
+    let adjusted = 0
+    for (let pass = 0; pass < 5; pass++) {
+      let moved = false
+      for (let a = 0; a < liveIds.length; a++) {
+        const i = liveIds[a]
+        for (let b = a + 1; b < liveIds.length; b++) {
+          const j = liveIds[b]
+          let dx = this.pos[i * 2] - this.pos[j * 2]
+          let dy = this.pos[i * 2 + 1] - this.pos[j * 2 + 1]
+          let dist = Math.hypot(dx, dy)
+          if (dist >= MIN_AGENT_SEPARATION) continue
+          if (dist < 1e-5) {
+            const angle = (i * 2.399963229728653 + j) % (Math.PI * 2)
+            dx = Math.cos(angle)
+            dy = Math.sin(angle)
+            dist = 1e-5
+          } else {
+            dx /= dist
+            dy /= dist
+          }
+          const push = 0.5 * (MIN_AGENT_SEPARATION - dist + 1e-2)
+          this.pos[i * 2] = Math.max(-this.worldHalf, Math.min(this.worldHalf, this.pos[i * 2] + dx * push))
+          this.pos[i * 2 + 1] = Math.max(-this.worldHalf, Math.min(this.worldHalf, this.pos[i * 2 + 1] + dy * push))
+          this.pos[j * 2] = Math.max(-this.worldHalf, Math.min(this.worldHalf, this.pos[j * 2] - dx * push))
+          this.pos[j * 2 + 1] = Math.max(-this.worldHalf, Math.min(this.worldHalf, this.pos[j * 2 + 1] - dy * push))
+          adjusted++
+          moved = true
+        }
+      }
+      if (!moved) break
+    }
+    return adjusted
+  }
+
+  private resolveObstacleOverlaps(): number {
+    if (this.obstacles.length === 0) return 0
+    let adjusted = 0
+    for (let i = 0; i < this.n; i++) {
+      if (!this.alive[i]) continue
+      let px = this.pos[i * 2]
+      let py = this.pos[i * 2 + 1]
+      let agentAdjusted = false
+      for (let pass = 0; pass < 2; pass++) {
+        let hitAny = false
+        for (const obs of this.obstacles) {
+          const [nx, ny, hit] = pushOutOfObstacle(px, py, obs)
+          px = nx
+          py = ny
+          hitAny ||= hit
+          agentAdjusted ||= hit
+        }
+        if (!hitAny) break
+      }
+      this.pos[i * 2] = Math.max(-this.worldHalf, Math.min(this.worldHalf, px))
+      this.pos[i * 2 + 1] = Math.max(-this.worldHalf, Math.min(this.worldHalf, py))
+      if (agentAdjusted) adjusted++
+    }
+    return adjusted
+  }
+
   constructor(
     maxSteps = 400,
     seed = 0,
@@ -472,10 +581,12 @@ export class SwarmEnv {
       }
     }
 
+    const [safeActions] = this.applySwarmDeconfliction(actions)
+
     for (let i = 0; i < this.n; i++) {
       // clip action to [-1,1] and record as applied velocity command
-      let ax = actions[i * 2]
-      let ay = actions[i * 2 + 1]
+      let ax = safeActions[i * 2]
+      let ay = safeActions[i * 2 + 1]
       if (ax < -1) ax = -1
       else if (ax > 1) ax = 1
       if (ay < -1) ay = -1
@@ -506,6 +617,11 @@ export class SwarmEnv {
         this.pos[i * 2] = px
         this.pos[i * 2 + 1] = py
       }
+    }
+    for (let pass = 0; pass < 3; pass++) {
+      const separated = this.resolveAgentSeparation()
+      const obstacleAdjusted = this.resolveObstacleOverlaps()
+      if (!separated && !obstacleAdjusted) break
     }
     this.updateTaskEntities()
     this.computeTaskTransitions()

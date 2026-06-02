@@ -22,7 +22,7 @@ import {
   checkPolicyExists,
   type PolicyStatus,
 } from '../swarm/policy'
-import { TrainingStatsDrawer, useTraining } from './TrainingDashboard'
+import { BehavioralCloningLoader, TrainingStatsDrawer, useTraining } from './TrainingDashboard'
 import { TrainingMetricsChart } from './TrainingMetricsChart'
 
 // ──────────────────────────────────────────────── scene types ──────────────
@@ -490,6 +490,8 @@ export default function GymScenarioStage({
               <strong>{scenario.reward}</strong>
             </article>
           </div>
+
+          <BehavioralCloningLoader metrics={metrics} status={status} />
         </div>
 
         <aside className="gym-train-console__side">

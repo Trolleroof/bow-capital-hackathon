@@ -1224,29 +1224,44 @@
 .boot-top .bt-st.ok { color: var(--green); }
 .boot-top .bt-id { color: var(--ink-dim); }
 
-.boot-title { position: absolute; left: 58px; top: 88px; max-width: 46%; }
-.boot-title .bt-kicker {
-  font-size: 11px;
-  letter-spacing: .32em;
-  color: var(--amber);
-  margin-bottom: 18px;
-  white-space: nowrap;
-  display: inline-block;
-  padding: 6px 12px;
-  border: 1px solid var(--line-amber);
-  background: repeating-linear-gradient(45deg, rgba(63,163,230,.06) 0 7px, transparent 7px 14px);
+.boot-title { position: absolute; left: 58px; top: 88px; max-width: 70%; }
+.boot-title .bt-team-name {
+  font-family: var(--disp);
+  font-size: 42px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  color: var(--ink-dim);
+  margin-bottom: 10px;
+  line-height: 1;
 }
 .boot-title h1 {
   font-family: var(--disp);
   font-weight: 900;
-  font-size: 104px;
+  font-size: 140px;
   line-height: .86;
   letter-spacing: -.01em;
   color: #fff;
   margin: 0;
 }
 .boot-title h1 span { color: var(--amber); }
-.boot-title .bt-sub { margin-top: 20px; font-size: 12px; letter-spacing: .26em; color: var(--ink-dim); }
+.boot-title .bt-sub { margin-top: 24px; font-size: 16px; letter-spacing: .26em; color: var(--ink-dim); }
+.boot-title .bt-team {
+  margin-top: 20px;
+  font-family: var(--mono);
+  font-size: 16px;
+  letter-spacing: .2em;
+  color: var(--ink-mute);
+  border-top: 1px solid var(--line-2);
+  padding-top: 16px;
+}
+.boot-title .bt-contact {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 14px;
+  letter-spacing: .15em;
+  color: var(--amber);
+  opacity: 0.6;
+}
 
 .boot-log {
   position: absolute;

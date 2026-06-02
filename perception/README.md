@@ -8,12 +8,18 @@
 
 | Mode | Entry point | Frame source |
 |------|-------------|--------------|
-| Standalone | `main.py` | `cv2.VideoCapture` (webcam / file / RTSP) |
+| Standalone (YOLO + inline vSLAM) | `main.py` | `cv2.VideoCapture` (webcam / file / RTSP) |
 | ROS2 | `camera_node.py` + `rosmain.py` | `/camera/image_raw` ROS2 topic |
+| SLAM-only fallback | `slam_sim.py` | `cv2.VideoCapture` (any clip, no YOLO) |
 
-Both modes run the same YOLO → tracker → ReID → bus pipeline.  `rosmain.py`
-is a thin adapter that swaps the frame source; every processing object
-(`Detector`, `TargetTracker`, `ReIDGallery`, `BusPublisher`, …) is identical.
+`main.py` / `rosmain.py` run the same YOLO → tracker → ReID → bus pipeline.
+`rosmain.py` is a thin adapter that swaps the frame source; every processing
+object (`Detector`, `TargetTracker`, `ReIDGallery`, `BusPublisher`, …) is
+identical.
+
+`main.py` also drives the monocular vSLAM in `vo.py` inline on the same frames,
+so one local video produces both the targeting feed and the SLAM panels in sync
+— see **Local full-stack test** below.
 
 ---
 
@@ -25,6 +31,85 @@ cp .env.example .env        # edit VIDEO_SOURCE, WS_HOST, etc.
 pip install -r requirements.txt
 python main.py
 ```
+
+---
+
+## Local full-stack test — one video drives every panel
+
+On the Jetson a single ROS camera node feeds **both** YOLO and ORB-SLAM3, so the
+dashboard's targeting feed *and* its two SLAM panels (the 3D
+`NAVIGATION · STEREO VSLAM` scene and the `SLAM KEYFRAME` feed) come alive off
+one image stream. Locally there was no SLAM producer, so those two panels stayed
+dark.
+
+`main.py` now reproduces that single-source-of-truth: each frame it reads is fed
+to **both** YOLO **and** an inline monocular visual-odometry stage (`vo.py` —
+ORB features → essential-matrix `recoverPose` → triangulated sparse cloud). One
+capture, one timestamp, so the targeting feed and the SLAM feed are literally the
+same frame and stay in lockstep — no second decoder, no drift.
+
+Run **two** processes, both pointed at the same `VIDEO_SOURCE`:
+
+```bash
+# 1. orchestrator — control bus (8000) + image bus (8001)
+python -m combatos.orchestrator
+
+# 2. YOLO + inline vSLAM on one video → detections, fpv_raw, AND the slam_* topics
+cd perception && VIDEO_SOURCE=footage/plane.mp4 python main.py
+```
+
+`main.py` publishes the SLAM half via `vo.py`:
+
+| Bus | Topics |
+|-----|--------|
+| control (8000) | `pose`, `slam_odometry`, `slam_path`, `slam_point_cloud`, `slam_status`, `slam_diagnostics` |
+| image (8001) | `slam_frame` (ORB features overlaid); `camera_frame` only when `SLAM_SIM_PUBLISH_CAMERA=1` |
+
+The annotated SLAM frame goes out as `slam_frame` (the `SLAM KEYFRAME` panel);
+the raw targeting frame keeps going out as `fpv_raw`. `camera_frame` stays **off**
+by default so it does not fight `fpv_raw` for the main targeting panel — enable it
+only when exercising the standalone `SlamTestPanel`.
+
+### `slam_sim.py` — SLAM-only fallback
+
+`slam_sim.py` runs the identical `vo.py` VO **without** YOLO, against any clip.
+Because it opens its own capture it is *not* frame-synced with a separately
+running `main.py`; use it to test SLAM in isolation (e.g. a EuRoC sequence), not
+alongside `main.py`.
+
+```bash
+cd perception && python slam_sim.py
+```
+
+### Notes
+
+Coordinates are converted from the OpenCV optical frame to the ROS REP-103 frame
+the 3D scene expects, so the trajectory sits upright on the grid. Monocular VO is
+scale-ambiguous and will drift — that is expected for a local test rig; tune
+`SLAM_SIM_TRANSLATION_SCALE` for a comfortable trajectory size.
+
+Lock-on is footage-dependent: clips with parallax lock in a few frames
+(`plane.mp4` ≈ 0.1 s), while a shaky, smoke-filled intro can read
+`INITIALIZING` for a few seconds until there is something to track
+(`firefight.mp4` ≈ 3.6 s) — that is honest VO behavior, not a stall. Stability
+knobs (`SLAM_SIM_POSE_SMOOTH`, `SLAM_SIM_LOST_GRACE`, `SLAM_SIM_POINTS_PER_FRAME`)
+keep the panels from strobing when tracking briefly drops.
+
+### Tuning (env / `.env`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SLAM_SIM_VIDEO_FPS` | `10` | Rate frames are pushed to the image bus |
+| `SLAM_SIM_PROC_FPS` | `15` | Cap on VO frames/sec (`0` = source speed) |
+| `SLAM_SIM_LOOP` | `1` | Restart the clip at EOF so panels keep streaming |
+| `SLAM_SIM_PUBLISH_CAMERA` | `0` | Also publish `camera_frame` (SlamTestPanel) |
+| `SLAM_SIM_SHOW` | `0` | Open a local OpenCV preview window |
+| `SLAM_SIM_ORB_FEATURES` | `1500` | ORB features per frame |
+| `SLAM_SIM_MAX_PATH` | `240` | Max trajectory poses sent |
+| `SLAM_SIM_MAX_POINTS` | `2500` | Max point-cloud points sent |
+| `SLAM_SIM_JPEG_QUALITY` | `70` | `slam_frame` / `camera_frame` JPEG quality |
+| `SLAM_SIM_FOCAL_RATIO` | `0.9` | Assumed focal length as a fraction of width |
+| `SLAM_SIM_TRANSLATION_SCALE` | `1.0` | Scales the unit VO translation |
 
 ---
 
@@ -204,6 +289,8 @@ See `config.py` for the full list including tracker, ReID, and face detection tu
 | `main.py` | Standalone entry point: VideoCapture → full pipeline |
 | `rosmain.py` | ROS2 entry point: `/camera/image_raw` → same full pipeline |
 | `camera_node.py` | ROS2 camera publisher: VideoCapture → `/camera/image_raw` |
+| `vo.py` | Monocular visual odometry + SLAM bus publishing (driven by `main.py`) |
+| `slam_sim.py` | SLAM-only fallback: runs `vo.py` standalone against any clip |
 | `setup_ros2.sh` | One-shot ROS2 Jazzy install for Ubuntu 22.04+ WSL2 |
 | `config.py` | All tunable parameters + env overrides |
 | `detector.py` | YOLO inference + Haar cascade face detection |

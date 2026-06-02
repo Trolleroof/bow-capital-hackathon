@@ -53,6 +53,9 @@ print("[import] tracker ok", flush=True)
 from visualizer import draw
 print("[import] visualizer ok", flush=True)
 
+import vo
+print("[import] vo ok", flush=True)
+
 
 def _dbg(msg: str) -> None:
     print(f"[perception][{time.time():.3f}] {msg}", flush=True)
@@ -165,6 +168,13 @@ def main() -> None:
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW, proc_w, proc_h)
 
+    # Monocular vSLAM runs inline on the same frames YOLO sees, so the targeting
+    # feed and the SLAM panels are driven by one capture in lockstep. Needs the
+    # bus, so skip it in local-only mode.
+    slam_streamer = vo.SlamStreamer(proc_w, proc_h) if publisher else None
+    if slam_streamer:
+        _dbg("monocular vSLAM enabled — publishing slam_* topics in sync with detections")
+
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     _dbg("entering main loop")
@@ -224,6 +234,13 @@ def main() -> None:
                               candidate_id=candidate.id if candidate else None)
 
         raw_frame = frame.copy()
+
+        # Same frame, same instant -> SLAM stays synced with the targeting feed.
+        if slam_streamer:
+            slam_streamer.process_and_publish(
+                raw_frame, time.time(), publisher.publish_topic, publisher.publish_image_topic
+            )
+
         frame = draw(frame, objects, candidate)
 
         if recording:

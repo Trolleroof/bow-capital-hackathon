@@ -230,3 +230,72 @@ IFF_ENABLED = os.getenv("IFF_ENABLED", "0").lower() in ("1", "true", "yes")
 # Grayscale threshold (0-255) separating friend from foe.
 # Average crop brightness below this value → "friend"; at or above → "foe".
 IFF_DARK_THRESHOLD = int(os.getenv("IFF_DARK_THRESHOLD", "127"))
+
+# ---------------------------------------------------------------------------
+# Local monocular vSLAM  (perception/vo.py)
+#
+# On the Jetson, one ROS camera node feeds BOTH the YOLO perception node and
+# ORB-SLAM3, so the dashboard's SLAM panels (3D map + keyframe) come alive off
+# the same image stream.  Locally there is no SLAM source, so those panels go
+# dark.  vo.py reproduces that second consumer in pure OpenCV: lightweight
+# monocular visual odometry (ORB features + essential-matrix recoverPose +
+# triangulation) that publishes real pose / path / point-cloud / annotated-frame
+# topics derived from the video itself.
+#
+# main.py drives it inline on the SAME frame it feeds to YOLO, so the targeting
+# feed and the SLAM feed stay perfectly in sync (one capture, one timestamp).
+# slam_sim.py runs the same VO standalone against an arbitrary clip (NOT synced
+# with main.py -- use main.py for the synced pipeline).
+# ---------------------------------------------------------------------------
+
+# Rate (Hz) at which annotated/raw frames are pushed to the image bus. SLAM
+# pose/path/cloud topics are published every processed frame regardless.
+SLAM_SIM_VIDEO_FPS = float(os.getenv("SLAM_SIM_VIDEO_FPS", "10"))
+
+# Cap on processed (VO) frames per second. Keeps CPU sane on long clips; the
+# loop sleeps to hold this rate. 0 = run as fast as the source allows.
+SLAM_SIM_PROC_FPS = float(os.getenv("SLAM_SIM_PROC_FPS", "15"))
+
+# Loop the video when it reaches the end so the panels keep streaming for a demo.
+SLAM_SIM_LOOP = os.getenv("SLAM_SIM_LOOP", "1") == "1"
+
+# Also publish the raw frame as `camera_frame`. The standalone SlamTestPanel
+# needs this, but in the main dashboard `camera_frame` shares the targeting feed
+# with perception's `fpv_raw`, so leave it off when running main.py at the same
+# time to avoid the two raw streams fighting over that one panel.
+SLAM_SIM_PUBLISH_CAMERA = os.getenv("SLAM_SIM_PUBLISH_CAMERA", "0") == "1"
+
+# Show a local OpenCV preview window of the annotated VO frame (debug only).
+SLAM_SIM_SHOW = os.getenv("SLAM_SIM_SHOW", "0") == "1"
+
+# Number of ORB features to detect per frame. More = sturdier pose, slower.
+SLAM_SIM_ORB_FEATURES = int(os.getenv("SLAM_SIM_ORB_FEATURES", "1500"))
+
+# Rolling caps for what gets sent to the browser each tick.
+SLAM_SIM_MAX_PATH = int(os.getenv("SLAM_SIM_MAX_PATH", "240"))
+SLAM_SIM_MAX_POINTS = int(os.getenv("SLAM_SIM_MAX_POINTS", "2500"))
+
+# JPEG quality (0-100) for the slam_frame / camera_frame image stream.
+SLAM_SIM_JPEG_QUALITY = int(os.getenv("SLAM_SIM_JPEG_QUALITY", "70"))
+
+# Assumed pinhole focal length as a fraction of frame width (no calibration
+# locally). 0.9*W is a reasonable default for typical FPV / phone optics.
+SLAM_SIM_FOCAL_RATIO = float(os.getenv("SLAM_SIM_FOCAL_RATIO", "0.9"))
+
+# Monocular VO has no metric scale; this multiplies the unit translation so the
+# trajectory reads at a pleasant size in the 3D scene. Tune to taste.
+SLAM_SIM_TRANSLATION_SCALE = float(os.getenv("SLAM_SIM_TRANSLATION_SCALE", "1.0"))
+
+# --- Stability / anti-flicker -----------------------------------------------
+# EMA factor (0-1) applied to the published pose. Lower = smoother but laggier;
+# this is what stops the 3D pose marker and chase-cam from snapping around when
+# a single VO step is noisy.
+SLAM_SIM_POSE_SMOOTH = float(os.getenv("SLAM_SIM_POSE_SMOOTH", "0.35"))
+
+# Consecutive VO failures tolerated before tracking flips to LOST. During the
+# grace window the last good pose is held and status stays TRACKING, so brief
+# match dropouts on hard footage do not strobe the panels red.
+SLAM_SIM_LOST_GRACE = int(os.getenv("SLAM_SIM_LOST_GRACE", "10"))
+
+# New map points added per frame. Lower = a calmer, less shimmering cloud.
+SLAM_SIM_POINTS_PER_FRAME = int(os.getenv("SLAM_SIM_POINTS_PER_FRAME", "20"))

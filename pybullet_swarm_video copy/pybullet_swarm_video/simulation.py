@@ -65,10 +65,6 @@ class DroneSurveillanceSimulation:
 
         self.drone_ids: list[int] = []
         self.troop_ids: list[int] = []
-        self._drone_marker_ids: list[int] = []
-        self._troop_marker_ids: list[int] = []
-        self._drone_debug_line_ids: list[int] = []
-        self._troop_debug_line_ids: list[int] = []
         self._ruin_ids: list[int] = []
         self.drone_positions = np.zeros((config.num_drones, 3), dtype=np.float32)
         self.drone_velocities = np.zeros((config.num_drones, 3), dtype=np.float32)
@@ -102,8 +98,6 @@ class DroneSurveillanceSimulation:
         self._troop_mesh_asset_ref: MeshAsset | None = None
         self._troop_visual_z_offset = 0.0
         self._troop_visual_yaw_offset = 0.0
-        self._salt_dome_active = False
-        self._ground_offset_z = 0.0
 
         self.policy = ScriptedSurveillancePolicy(
             num_drones=config.num_drones,
@@ -135,15 +129,6 @@ class DroneSurveillanceSimulation:
                 0,
                 physicsClientId=self.client_id,
             )
-            if self.config.use_tiny_renderer_in_gui and hasattr(p, "COV_ENABLE_TINY_RENDERER"):
-                try:
-                    p.configureDebugVisualizer(
-                        p.COV_ENABLE_TINY_RENDERER,
-                        1,
-                        physicsClientId=self.client_id,
-                    )
-                except Exception:
-                    self._log_asset("failed to enable Tiny renderer in GUI; falling back to default GUI renderer")
 
         self._spawn_ground_markers()
         self._spawn_troops()
@@ -337,58 +322,6 @@ class DroneSurveillanceSimulation:
             self._log_asset(f"failed to read material data from {mtl_path.name}; using fallback colors")
         return colors
 
-    @staticmethod
-    def _strip_face_uvs(face_line: str) -> str:
-        parts = face_line.rstrip("\n").split()
-        out = ["f"]
-        for vert in parts[1:]:
-            segs = vert.split("/")
-            if len(segs) == 3 and segs[1]:
-                out.append(f"{segs[0]}//{segs[2]}")
-            elif len(segs) == 2 and segs[1]:
-                out.append(segs[0])
-            else:
-                out.append(vert)
-        return " ".join(out) + "\n"
-
-    def _strip_uv_obj(self, obj_path: Path) -> Path:
-        """Return a UV-stripped copy of obj_path (f v//n) so PyBullet GUI renders it."""
-        stripped_path = obj_path.with_suffix("").with_name(obj_path.stem + "_nouv.obj")
-        stamp_path = stripped_path.with_suffix(".stamp")
-        obj_stamp = str(obj_path.stat().st_mtime_ns)
-        try:
-            if stripped_path.exists() and stamp_path.read_text().strip() == obj_stamp:
-                return stripped_path
-        except OSError:
-            pass
-        try:
-            needs_strip = False
-            with obj_path.open("r", encoding="utf-8", errors="ignore") as fh:
-                for line in fh:
-                    if line.startswith("f "):
-                        parts = line.split()
-                        if len(parts) > 1 and parts[1].count("/") == 2:
-                            idx = parts[1].split("/")
-                            if idx[1]:
-                                needs_strip = True
-                        break
-            if not needs_strip:
-                return obj_path
-            with obj_path.open("r", encoding="utf-8", errors="ignore") as fin, \
-                 stripped_path.open("w", encoding="utf-8") as fout:
-                for line in fin:
-                    if line.startswith("vt "):
-                        continue
-                    if line.startswith("f "):
-                        fout.write(self._strip_face_uvs(line))
-                    else:
-                        fout.write(line)
-            stamp_path.write_text(obj_stamp)
-        except OSError:
-            self._log_asset(f"failed to strip UV from {obj_path.name}; using original (may be invisible in GUI)")
-            return obj_path
-        return stripped_path
-
     def _split_obj_by_material(self, obj_path: Path) -> list[tuple[str, Path]]:
         cached = self._split_obj_cache.get(obj_path)
         if cached is not None:
@@ -396,7 +329,7 @@ class DroneSurveillanceSimulation:
 
         target_dir = obj_path.parent / f"{obj_path.stem}_parts"
         stamp_path = target_dir / ".stamp"
-        obj_stamp = "v2:" + str(obj_path.stat().st_mtime_ns)
+        obj_stamp = str(obj_path.stat().st_mtime_ns)
         manifest_path = target_dir / "manifest.txt"
         if stamp_path.exists() and manifest_path.exists():
             try:
@@ -451,10 +384,10 @@ class DroneSurveillanceSimulation:
             out_path = target_dir / f"{obj_path.stem}_{index:02d}.obj"
             with out_path.open("w", encoding="utf-8") as handle:
                 handle.writelines(vertices)
+                handle.writelines(texcoords)
                 handle.writelines(normals)
                 handle.write("s off\n")
-                for face_line in faces:
-                    handle.write(self._strip_face_uvs(face_line))
+                handle.writelines(faces)
             pairs.append((material, out_path))
             manifest_lines.append(f"{material}|{out_path.name}")
 
@@ -476,10 +409,6 @@ class DroneSurveillanceSimulation:
         yaw_offset: float = 0.0,
         texture_name: str | None = None,
         rgba: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0),
-        up_axis: Literal["x", "y", "z"] = "y",
-        roll_offset: float = math.pi / 2.0,
-        pitch_offset: float = 0.0,
-        scale_xyz_multiplier: tuple[float, float, float] = (1.0, 1.0, 1.0),
     ) -> MeshAsset | None:
         archive = self._resource_path(archive_name)
         extracted = self._extract_archive_tree(archive, archive.stem)
@@ -489,14 +418,13 @@ class DroneSurveillanceSimulation:
         if obj_path is None:
             self._log_asset(f"{archive_name} did not contain {obj_name}; using fallback visuals")
             return None
-        obj_path = self._strip_uv_obj(obj_path)
 
         bounds = self._obj_bounds(obj_path)
         if bounds is None:
             return None
         mins, maxs = bounds
         size = maxs - mins
-        up_idx = {"x": 0, "y": 1, "z": 2}[up_axis]
+        up_idx = 1  # exported assets in this directory are Y-up
         up_size = float(size[up_idx])
         max_dim = float(np.max(size))
         if target_height_m is not None and up_size > 1e-9:
@@ -507,14 +435,12 @@ class DroneSurveillanceSimulation:
             scale = 1.0
 
         texture_path = self._find_file(extracted, name=texture_name) if texture_name else None
-        scale_xyz = tuple(float(scale * axis_scale) for axis_scale in scale_xyz_multiplier)
         return MeshAsset(
             path=obj_path,
-            scale_xyz=scale_xyz,
-            roll_offset=roll_offset,
-            pitch_offset=pitch_offset,
+            scale_xyz=(scale, scale, scale),
+            roll_offset=math.pi / 2.0,
             yaw_offset=yaw_offset,
-            vertical_offset=float(-mins[up_idx] * scale_xyz[up_idx]),
+            vertical_offset=float(-mins[up_idx] * scale),
             texture_path=texture_path,
             rgba=rgba,
         )
@@ -589,9 +515,6 @@ class DroneSurveillanceSimulation:
             )
         except Exception:
             self._log_asset(f"failed to create mesh visual from {asset.path.name}; using fallback visuals")
-            return None
-        if visual < 0:
-            self._log_asset(f"PyBullet rejected mesh {asset.path.name} (returned {visual}); using fallback visuals")
             return None
         return visual
 
@@ -668,311 +591,6 @@ class DroneSurveillanceSimulation:
             if texture_path is not None:
                 self._log_asset(f"failed to apply texture for {texture_path.name}; using mesh without it")
 
-    def _mesh_assets_with_material_colors(
-        self,
-        archive_name: str,
-        obj_name: str,
-        target_height_m: float | None = None,
-        target_max_dim_m: float | None = None,
-        yaw_offset: float = 0.0,
-        texture_name: str | None = None,
-        rgba: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0),
-        up_axis: Literal["x", "y", "z"] = "y",
-        roll_offset: float = math.pi / 2.0,
-        pitch_offset: float = 0.0,
-        scale_xyz_multiplier: tuple[float, float, float] = (1.0, 1.0, 1.0),
-        color_gain: float = 1.0,
-    ) -> list[MeshAsset]:
-        base_asset = self._mesh_asset_from_archive(
-            archive_name=archive_name,
-            obj_name=obj_name,
-            target_height_m=target_height_m,
-            target_max_dim_m=target_max_dim_m,
-            yaw_offset=yaw_offset,
-            texture_name=texture_name,
-            rgba=rgba,
-            up_axis=up_axis,
-            roll_offset=roll_offset,
-            pitch_offset=pitch_offset,
-            scale_xyz_multiplier=scale_xyz_multiplier,
-        )
-        if base_asset is None:
-            return []
-        extracted_root = base_asset.path.parent
-        mtl_path = self._find_file(extracted_root, suffix=".mtl")
-        diffuse_colors = self._parse_mtl_diffuse_colors(mtl_path)
-        parts = self._split_obj_by_material(base_asset.path)
-        if not parts:
-            return [base_asset]
-        assets: list[MeshAsset] = []
-        for material_name, part_path in parts:
-            assets.append(
-                MeshAsset(
-                    path=part_path,
-                    scale_xyz=base_asset.scale_xyz,
-                    roll_offset=base_asset.roll_offset,
-                    pitch_offset=base_asset.pitch_offset,
-                    yaw_offset=base_asset.yaw_offset,
-                    vertical_offset=base_asset.vertical_offset,
-                    texture_path=base_asset.texture_path,
-                    rgba=tuple(
-                        min(1.0, float(channel) * color_gain)
-                        for channel in diffuse_colors.get(material_name, base_asset.rgba)[:3]
-                    ) + (diffuse_colors.get(material_name, base_asset.rgba)[3],),
-                )
-            )
-        return assets
-
-    def _spawn_static_mesh(
-        self,
-        assets: Sequence[MeshAsset],
-        x: float,
-        y: float,
-        yaw: float = 0.0,
-        z_offset: float = 0.0,
-        fallback_half_extents: Sequence[float] | None = None,
-        fallback_rgba: Sequence[float] = (0.55, 0.52, 0.46, 1.0),
-    ) -> int | None:
-        visual_ids = [self._create_mesh_visual(asset) for asset in assets]
-        if any(visual_id is not None for visual_id in visual_ids):
-            asset_ref = assets[0]
-            return self._create_composite_body(
-                collision_shape_id=-1,
-                assets=assets,
-                visual_ids=visual_ids,
-                base_position=[x, y, z_offset + asset_ref.vertical_offset],
-                base_orientation_euler=[
-                    asset_ref.roll_offset,
-                    asset_ref.pitch_offset,
-                    yaw + asset_ref.yaw_offset,
-                ],
-            )
-        if fallback_half_extents is None:
-            return None
-        visual = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=list(fallback_half_extents),
-            rgbaColor=list(fallback_rgba),
-            physicsClientId=self.client_id,
-        )
-        return p.createMultiBody(
-            baseMass=0.0,
-            baseCollisionShapeIndex=-1,
-            baseVisualShapeIndex=visual,
-            basePosition=[x, y, z_offset + float(fallback_half_extents[2])],
-            baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
-            physicsClientId=self.client_id,
-        )
-
-    def _spawn_marker(
-        self,
-        position: Sequence[float],
-        shape: int,
-        dimensions: Sequence[float],
-        rgba: Sequence[float],
-    ) -> int:
-        if shape == p.GEOM_CYLINDER:
-            collision = p.createCollisionShape(
-                shape,
-                radius=float(dimensions[0]),
-                height=float(dimensions[1]),
-                physicsClientId=self.client_id,
-            )
-            visual = p.createVisualShape(
-                shape,
-                radius=float(dimensions[0]),
-                length=float(dimensions[1]),
-                rgbaColor=list(rgba),
-                physicsClientId=self.client_id,
-            )
-        elif shape == p.GEOM_SPHERE:
-            collision = p.createCollisionShape(
-                shape,
-                radius=float(dimensions[0]),
-                physicsClientId=self.client_id,
-            )
-            visual = p.createVisualShape(
-                shape,
-                radius=float(dimensions[0]),
-                rgbaColor=list(rgba),
-                physicsClientId=self.client_id,
-            )
-        else:
-            collision = p.createCollisionShape(
-                shape,
-                halfExtents=list(dimensions),
-                physicsClientId=self.client_id,
-            )
-            visual = p.createVisualShape(
-                shape,
-                halfExtents=list(dimensions),
-                rgbaColor=list(rgba),
-                physicsClientId=self.client_id,
-            )
-        return p.createMultiBody(
-            baseMass=0.0,
-            baseCollisionShapeIndex=collision,
-            baseVisualShapeIndex=visual,
-            basePosition=list(position),
-            physicsClientId=self.client_id,
-        )
-
-    def _sync_debug_lines(self) -> None:
-        if (not self.gui) or (not self.config.show_debug_overlays) or self.client_id is None:
-            return
-
-        while len(self._troop_debug_line_ids) < len(self.troop_positions):
-            self._troop_debug_line_ids.append(-1)
-        while len(self._drone_debug_line_ids) < len(self.drone_positions):
-            self._drone_debug_line_ids.append(-1)
-
-        for idx, pos in enumerate(self.troop_positions):
-            start = [float(pos[0]), float(pos[1]), self._ground_offset_z + 0.15]
-            end = [float(pos[0]), float(pos[1]), self._ground_offset_z + 3.8]
-            self._troop_debug_line_ids[idx] = p.addUserDebugLine(
-                start,
-                end,
-                lineColorRGB=[0.12, 0.95, 0.22],
-                lineWidth=4.0,
-                lifeTime=0.0,
-                replaceItemUniqueId=self._troop_debug_line_ids[idx],
-                physicsClientId=self.client_id,
-            )
-
-        for idx, pos in enumerate(self.drone_positions):
-            start = [float(pos[0]), float(pos[1]), 0.25]
-            end = [float(pos[0]), float(pos[1]), float(pos[2]) + 1.8]
-            self._drone_debug_line_ids[idx] = p.addUserDebugLine(
-                start,
-                end,
-                lineColorRGB=[1.0, 0.45, 0.05],
-                lineWidth=5.0,
-                lifeTime=0.0,
-                replaceItemUniqueId=self._drone_debug_line_ids[idx],
-                physicsClientId=self.client_id,
-            )
-
-    def _create_soldier_surrogate_body(
-        self,
-        collision_shape_id: int,
-        base_position: Sequence[float],
-        yaw: float,
-    ) -> int:
-        torso_visual = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[0.16, 0.10, 0.42],
-            rgbaColor=[0.34, 0.43, 0.20, 1.0],
-            physicsClientId=self.client_id,
-        )
-        head_visual = p.createVisualShape(
-            p.GEOM_SPHERE,
-            radius=0.12,
-            rgbaColor=[0.78, 0.67, 0.58, 1.0],
-            physicsClientId=self.client_id,
-        )
-        limb_visual = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[0.04, 0.04, 0.28],
-            rgbaColor=[0.18, 0.18, 0.16, 1.0],
-            physicsClientId=self.client_id,
-        )
-        pack_visual = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[0.08, 0.05, 0.16],
-            rgbaColor=[0.20, 0.27, 0.14, 1.0],
-            physicsClientId=self.client_id,
-        )
-        return p.createMultiBody(
-            baseMass=0.0,
-            baseCollisionShapeIndex=collision_shape_id,
-            baseVisualShapeIndex=torso_visual,
-            basePosition=list(base_position),
-            baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
-            linkMasses=[0.0] * 6,
-            linkCollisionShapeIndices=[-1] * 6,
-            linkVisualShapeIndices=[head_visual, limb_visual, limb_visual, limb_visual, limb_visual, pack_visual],
-            linkPositions=[
-                [0.0, 0.0, 0.58],
-                [0.0, -0.08, -0.70],
-                [0.0, 0.08, -0.70],
-                [0.0, -0.18, 0.02],
-                [0.0, 0.18, 0.02],
-                [-0.11, 0.0, -0.04],
-            ],
-            linkOrientations=[[0.0, 0.0, 0.0, 1.0]] * 6,
-            linkInertialFramePositions=[[0.0, 0.0, 0.0]] * 6,
-            linkInertialFrameOrientations=[[0.0, 0.0, 0.0, 1.0]] * 6,
-            linkParentIndices=[0] * 6,
-            linkJointTypes=[p.JOINT_FIXED] * 6,
-            linkJointAxis=[[0.0, 0.0, 0.0]] * 6,
-            physicsClientId=self.client_id,
-        )
-
-    def _create_drone_surrogate_body(
-        self,
-        collision_shape_id: int,
-        base_position: Sequence[float],
-        yaw: float,
-    ) -> int:
-        body_visual = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[0.24, 0.18, 0.07],
-            rgbaColor=[0.78, 0.80, 0.82, 1.0],
-            physicsClientId=self.client_id,
-        )
-        arm_x_visual = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[0.46, 0.03, 0.02],
-            rgbaColor=[0.16, 0.16, 0.16, 1.0],
-            physicsClientId=self.client_id,
-        )
-        arm_y_visual = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[0.03, 0.46, 0.02],
-            rgbaColor=[0.16, 0.16, 0.16, 1.0],
-            physicsClientId=self.client_id,
-        )
-        rotor_visual = p.createVisualShape(
-            p.GEOM_CYLINDER,
-            radius=0.11,
-            length=0.025,
-            rgbaColor=[0.10, 0.10, 0.10, 1.0],
-            physicsClientId=self.client_id,
-        )
-        sensor_visual = p.createVisualShape(
-            p.GEOM_SPHERE,
-            radius=0.08,
-            rgbaColor=[0.98, 0.62, 0.18, 1.0],
-            physicsClientId=self.client_id,
-        )
-        quat_rotor = p.getQuaternionFromEuler([math.pi / 2.0, 0.0, 0.0])
-        return p.createMultiBody(
-            baseMass=0.0,
-            baseCollisionShapeIndex=collision_shape_id,
-            baseVisualShapeIndex=body_visual,
-            basePosition=list(base_position),
-            baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, yaw]),
-            linkMasses=[0.0] * 7,
-            linkCollisionShapeIndices=[-1] * 7,
-            linkVisualShapeIndices=[arm_x_visual, arm_y_visual, rotor_visual, rotor_visual, rotor_visual, rotor_visual, sensor_visual],
-            linkPositions=[
-                [0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0],
-                [0.52, 0.52, 0.03],
-                [-0.52, 0.52, 0.03],
-                [-0.52, -0.52, 0.03],
-                [0.52, -0.52, 0.03],
-                [0.26, 0.0, -0.10],
-            ],
-            linkOrientations=[quat_rotor, quat_rotor, quat_rotor, quat_rotor, quat_rotor, quat_rotor, [0.0, 0.0, 0.0, 1.0]],
-            linkInertialFramePositions=[[0.0, 0.0, 0.0]] * 7,
-            linkInertialFrameOrientations=[[0.0, 0.0, 0.0, 1.0]] * 7,
-            linkParentIndices=[0] * 7,
-            linkJointTypes=[p.JOINT_FIXED] * 7,
-            linkJointAxis=[[0.0, 0.0, 0.0]] * 7,
-            physicsClientId=self.client_id,
-        )
-
     def _ground_texture_path(self) -> Path | None:
         archive = self._resource_path("damaged_concrete_floor_4k.blend.zip")
         if not archive.exists():
@@ -1006,14 +624,34 @@ class DroneSurveillanceSimulation:
         return self._extract_zip_member(archive, (".png",))
 
     def _soldier_mesh_assets(self) -> list[MeshAsset]:
-        return self._mesh_assets_with_material_colors(
+        base_asset = self._mesh_asset_from_archive(
             archive_name="free_military_soldier_rigged.zip",
             obj_name="free_military_soldier_rigged.obj",
             target_height_m=1.72,
             yaw_offset=math.pi / 2.0,
-            rgba=(0.38, 0.46, 0.28, 1.0),
-            color_gain=80.0,
         )
+        if base_asset is None:
+            return []
+        extracted_root = base_asset.path.parent
+        mtl_path = self._find_file(extracted_root, suffix=".mtl")
+        diffuse_colors = self._parse_mtl_diffuse_colors(mtl_path)
+        parts = self._split_obj_by_material(base_asset.path)
+        if not parts:
+            return [base_asset]
+        assets: list[MeshAsset] = []
+        for material_name, part_path in parts:
+            assets.append(
+                MeshAsset(
+                    path=part_path,
+                    scale_xyz=base_asset.scale_xyz,
+                    roll_offset=base_asset.roll_offset,
+                    pitch_offset=base_asset.pitch_offset,
+                    yaw_offset=base_asset.yaw_offset,
+                    vertical_offset=base_asset.vertical_offset,
+                    rgba=diffuse_colors.get(material_name, (0.75, 0.75, 0.75, 1.0)),
+                )
+            )
+        return assets
 
     def _sandbag_mesh_asset(self) -> MeshAsset | None:
         return self._mesh_asset_from_archive(
@@ -1025,153 +663,14 @@ class DroneSurveillanceSimulation:
 
     def _drone_mesh_asset(self) -> MeshAsset | None:
         return self._mesh_asset_from_archive(
-            archive_name="fpv_drone.zip",
-            obj_name="fpv_drone.obj",
-            target_max_dim_m=1.6,
-            rgba=(0.90, 0.90, 0.92, 1.0),
+            archive_name="drone_design.zip",
+            obj_name="drone_design.obj",
+            target_max_dim_m=0.78,
+            texture_name="Hely.png",
         )
-
-    def _salt_dome_mesh_assets(self) -> list[MeshAsset]:
-        return self._mesh_assets_with_material_colors(
-            archive_name="salt_dome_11_iran.zip",
-            obj_name="salt_dome_11_iran.obj",
-            target_max_dim_m=min(self.config.world_half_extent_m * 0.25, 68.0),
-            texture_name="TerrainNodeMaterial.png",
-            scale_xyz_multiplier=(1.0, 0.12, 1.0),
-        )
-
-    def _truck_mesh_assets(self) -> list[MeshAsset]:
-        return self._mesh_assets_with_material_colors(
-            archive_name="low_poly_military_truck.zip",
-            obj_name="low_poly_military_truck.obj",
-            target_height_m=0.50,
-        )
-
-    def _tanker_mesh_assets(self) -> list[MeshAsset]:
-        return self._mesh_assets_with_material_colors(
-            archive_name="low_poly_truck_tank.zip",
-            obj_name="low_poly_truck_tank.obj",
-            target_height_m=0.54,
-        )
-
-    def _tent_mesh_assets(self) -> list[MeshAsset]:
-        return self._mesh_assets_with_material_colors(
-            archive_name="militarytent.zip",
-            obj_name="militarytent.obj",
-            target_height_m=0.56,
-        )
-
-    def _container_mesh_assets(self) -> list[MeshAsset]:
-        return self._mesh_assets_with_material_colors(
-            archive_name="low_poly_container.zip",
-            obj_name="low_poly_container.obj",
-            target_height_m=0.48,
-        )
-
-    def _tank_mesh_assets(self) -> list[MeshAsset]:
-        return self._mesh_assets_with_material_colors(
-            archive_name="low_poly_tank.zip",
-            obj_name="low_poly_tank.obj",
-            target_height_m=0.46,
-        )
-
-    def _spawn_salt_dome_scene(self, size: float) -> bool:
-        self._ground_offset_z = 0.8
-        salt_dome_assets = self._salt_dome_mesh_assets()
-        salt_dome_body = self._spawn_static_mesh(
-            salt_dome_assets,
-            x=0.0,
-            y=0.0,
-            z_offset=self._ground_offset_z,
-            fallback_half_extents=[size * 0.8, size * 0.7, 0.25],
-            fallback_rgba=[0.70, 0.66, 0.60, 1.0],
-        )
-        if salt_dome_body is None:
-            return False
-
-        self._ruin_ids = []
-        if self._plane_id is not None:
-            texture_id = self._load_texture_if_present(self._ground_texture_path())
-            if texture_id is not None:
-                try:
-                    p.changeVisualShape(
-                        self._plane_id, -1,
-                        textureUniqueId=texture_id,
-                        rgbaColor=[1.0, 1.0, 1.0, 1.0],
-                        physicsClientId=self.client_id,
-                    )
-                except Exception:
-                    p.changeVisualShape(
-                        self._plane_id, -1,
-                        rgbaColor=[0.58, 0.53, 0.47, 1.0],
-                        physicsClientId=self.client_id,
-                    )
-            else:
-                p.changeVisualShape(
-                    self._plane_id, -1,
-                    rgbaColor=[0.58, 0.53, 0.47, 1.0],
-                    physicsClientId=self.client_id,
-                )
-
-        wall_visual = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[size, 0.15, 0.7],
-            rgbaColor=[0.24, 0.24, 0.26, 1.0],
-            physicsClientId=self.client_id,
-        )
-        for sign in (-1.0, 1.0):
-            p.createMultiBody(
-                baseMass=0.0,
-                baseVisualShapeIndex=wall_visual,
-                basePosition=[0.0, sign * size, 0.7],
-                physicsClientId=self.client_id,
-            )
-            p.createMultiBody(
-                baseMass=0.0,
-                baseVisualShapeIndex=wall_visual,
-                basePosition=[sign * size, 0.0, 0.7],
-                baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, math.pi / 2.0]),
-                physicsClientId=self.client_id,
-            )
-
-        truck_assets = self._truck_mesh_assets()
-        tanker_assets = self._tanker_mesh_assets()
-        tent_assets = self._tent_mesh_assets()
-        container_assets = self._container_mesh_assets()
-        tank_assets = self._tank_mesh_assets()
-        prop_specs = [
-            (truck_assets, -3.5, -2.6, 0.30, [0.24, 0.12, 0.14], [0.30, 0.34, 0.24, 1.0]),
-            (truck_assets, 2.9, -2.2, -0.34, [0.24, 0.12, 0.14], [0.30, 0.34, 0.24, 1.0]),
-            (tanker_assets, 4.0, -0.2, -0.20, [0.26, 0.13, 0.15], [0.33, 0.34, 0.24, 1.0]),
-            (tent_assets, -2.8, 2.8, 0.42, [0.30, 0.22, 0.15], [0.23, 0.29, 0.18, 1.0]),
-            (tent_assets, 2.0, 3.5, -0.28, [0.30, 0.22, 0.15], [0.23, 0.29, 0.18, 1.0]),
-            (container_assets, -4.5, 0.7, 0.12, [0.24, 0.12, 0.12], [0.34, 0.39, 0.23, 1.0]),
-            (container_assets, -3.9, 1.9, -0.22, [0.24, 0.12, 0.12], [0.34, 0.39, 0.23, 1.0]),
-            (container_assets, 4.6, 1.5, -0.36, [0.24, 0.12, 0.12], [0.34, 0.39, 0.23, 1.0]),
-            (tank_assets, 3.0, 4.1, 0.58, [0.28, 0.15, 0.12], [0.30, 0.33, 0.21, 1.0]),
-        ]
-        prop_z = self._ground_offset_z + 0.28
-        for assets, x, y, yaw, fallback_half_extents, fallback_rgba in prop_specs:
-            self._spawn_static_mesh(
-                assets=assets,
-                x=x,
-                y=y,
-                yaw=yaw,
-                z_offset=prop_z,
-                fallback_half_extents=fallback_half_extents,
-                fallback_rgba=fallback_rgba,
-            )
-
-        self._spawn_sandbag_emplacements()
-        self._salt_dome_active = True
-        return True
 
     def _spawn_ground_markers(self) -> None:
         size = self.config.world_half_extent_m
-        self._salt_dome_active = False
-        self._ground_offset_z = 0.0
-        if self._spawn_salt_dome_scene(size):
-            return
         if self._plane_id is not None:
             p.changeVisualShape(
                 self._plane_id,
@@ -1553,10 +1052,7 @@ class DroneSurveillanceSimulation:
                 )
                 world = rot @ local
                 visual = sandbag_visual if sandbag_visual is not None else fallback_visual
-                z = (
-                    self._ground_offset_z
-                    + (0.18 if sandbag_visual is None or sandbag_asset is None else sandbag_asset.vertical_offset)
-                )
+                z = 0.18 if sandbag_visual is None or sandbag_asset is None else sandbag_asset.vertical_offset
                 orientation = p.getQuaternionFromEuler(
                     [
                         0.0 if sandbag_asset is None else sandbag_asset.roll_offset,
@@ -1602,31 +1098,18 @@ class DroneSurveillanceSimulation:
             if self._troop_mesh_asset_ref is None
             else self._troop_mesh_asset_ref.yaw_offset
         )
-        if self._salt_dome_active:
-            self._troop_anchor_bases = np.array(
-                [
-                    [-3.8, -3.0],
-                    [-2.4, 3.3],
-                    [3.4, -2.7],
-                    [4.5, 2.8],
-                ],
-                dtype=np.float32,
-            )
-            self._troop_anchor_dirs = np.array([0.18, -0.28, 0.22, -0.14], dtype=np.float32)
-        else:
-            self._troop_anchor_bases = np.array(
-                [
-                    [-12.0, -4.5],
-                    [-3.4, 10.0],
-                    [9.2, -0.8],
-                    [13.2, 6.2],
-                ],
-                dtype=np.float32,
-            )
-            self._troop_anchor_dirs = np.array([0.12, -0.34, 0.26, -0.18], dtype=np.float32)
+        self._troop_anchor_bases = np.array(
+            [
+                [-12.0, -4.5],
+                [-3.4, 10.0],
+                [9.2, -0.8],
+                [13.2, 6.2],
+            ],
+            dtype=np.float32,
+        )
+        self._troop_anchor_dirs = np.array([0.12, -0.34, 0.26, -0.18], dtype=np.float32)
 
         self.troop_ids = []
-        self._troop_marker_ids = []
         for idx in range(self.config.num_troops):
             anchor = idx % len(self._troop_anchor_bases)
             radial = self.rng.uniform(0.8, 3.6)
@@ -1640,7 +1123,7 @@ class DroneSurveillanceSimulation:
             self._troop_personal_phase[idx] = self.rng.uniform(0.0, 2.0 * math.pi)
             x = float(self._troop_anchor_bases[anchor, 0] + offset[0])
             y = float(self._troop_anchor_bases[anchor, 1] + offset[1])
-            z = 1.0 + self._ground_offset_z
+            z = 1.0
             use_mesh = mesh_assets_usable and idx % 2 == 0
             self._troop_mesh_mask[idx] = use_mesh
             spawn_z = z + (self._troop_visual_z_offset if use_mesh else 0.0)
@@ -1688,18 +1171,8 @@ class DroneSurveillanceSimulation:
                 except Exception:
                     self._log_asset("failed to apply low-poly soldier texture; using untextured troop visuals")
             self.troop_ids.append(body)
-            if self.config.show_debug_overlays:
-                self._troop_marker_ids.append(
-                    self._spawn_marker(
-                        position=[x, y, z + 1.4],
-                        shape=p.GEOM_BOX,
-                        dimensions=[0.14, 0.14, 1.2],
-                        rgba=[0.18, 0.82, 0.24, 0.92],
-                    )
-                )
             self.troop_positions[idx] = (x, y, z)
             self.troop_yaws[idx] = yaw
-        self._sync_debug_lines()
 
     def _spawn_drones(self) -> None:
         collision = p.createCollisionShape(
@@ -1714,15 +1187,12 @@ class DroneSurveillanceSimulation:
             specularColor=[0.5, 0.5, 0.5],
             physicsClientId=self.client_id,
         )
-        if self._resource_path("Drone qui plane 1.glb").exists():
-            self._log_asset("Drone qui plane 1.glb is present but PyBullet does not support GLB directly; convert it to OBJ/MTL to use it")
         drone_asset = self._drone_mesh_asset()
         drone_visual = self._create_mesh_visual(drone_asset)
         self._drone_mesh_asset_ref = drone_asset if drone_visual is not None else None
         center = self._troop_centroid()
 
         self.drone_ids = []
-        self._drone_marker_ids = []
         for idx in range(self.config.num_drones):
             theta = 2.0 * math.pi * idx / self.config.num_drones
             x = center[0] + self.config.drone_ring_radius_m * math.cos(theta)
@@ -1751,18 +1221,8 @@ class DroneSurveillanceSimulation:
             if drone_visual is not None and drone_asset is not None:
                 self._apply_body_texture(body, drone_asset.texture_path)
             self.drone_ids.append(body)
-            if self.config.show_debug_overlays:
-                self._drone_marker_ids.append(
-                    self._spawn_marker(
-                        position=[x, y, z + 0.9],
-                        shape=p.GEOM_SPHERE,
-                        dimensions=[0.85],
-                        rgba=[0.98, 0.42, 0.08, 0.98],
-                    )
-                )
             self.drone_positions[idx] = (x, y, z)
             self.drone_yaws[idx] = yaw
-        self._sync_debug_lines()
 
     def _troop_centroid(self) -> np.ndarray:
         return self.troop_positions.mean(axis=0)
@@ -1802,9 +1262,22 @@ class DroneSurveillanceSimulation:
         self._restore_fpv_drone_visibility()
 
         focus = self._troop_centroid()
-        camera_pos = focus + np.array([0.0, -22.0, 18.0], dtype=np.float32)
-        target = focus + np.array([0.0, 0.0, 1.5], dtype=np.float32)
-        self._set_debug_camera(camera_pos, target)
+        mean_drone = self.drone_positions.mean(axis=0)
+        look_target = [
+            round(float((focus[0] + mean_drone[0]) * 0.5), 3),
+            round(float((focus[1] + mean_drone[1]) * 0.5), 3),
+            round(float(focus[2] + 2.0), 3),
+        ]
+        yaw = 38.0 + 18.0 * math.sin(self.sim_time * 0.08)
+        pitch = -36.0
+        distance = max(18.0, self.config.world_half_extent_m * 0.95)
+        p.resetDebugVisualizerCamera(
+            cameraDistance=distance,
+            cameraYaw=yaw,
+            cameraPitch=pitch,
+            cameraTargetPosition=look_target,
+            physicsClientId=self.client_id,
+        )
 
     def _update_chase_camera(self) -> None:
         self._restore_fpv_drone_visibility()
@@ -1917,7 +1390,7 @@ class DroneSurveillanceSimulation:
             )
             x = float(anchor_positions[anchor, 0] + spread[0] + drift[0])
             y = float(anchor_positions[anchor, 1] + spread[1] + drift[1])
-            z = 1.0 + self._ground_offset_z
+            z = 1.0
             dx = x - float(self.troop_positions[idx, 0])
             dy = y - float(self.troop_positions[idx, 1])
             if math.hypot(dx, dy) > 0.002:
@@ -1932,20 +1405,12 @@ class DroneSurveillanceSimulation:
                 p.getQuaternionFromEuler(
                     [
                         0.0 if not use_mesh or self._troop_mesh_asset_ref is None else self._troop_mesh_asset_ref.roll_offset,
-                        0.0 if not use_mesh or self._troop_mesh_asset_ref is None else self._troop_mesh_asset_ref.pitch_offset,
+                        0.0,
                         self.troop_yaws[idx],
                     ]
                 ),
                 physicsClientId=self.client_id,
             )
-            if idx < len(self._troop_marker_ids):
-                p.resetBasePositionAndOrientation(
-                    self._troop_marker_ids[idx],
-                    [x, y, z + 1.4],
-                    [0.0, 0.0, 0.0, 1.0],
-                    physicsClientId=self.client_id,
-                )
-        self._sync_debug_lines()
 
     def _advance_drones(self) -> None:
         velocities, desired_yaws = self.policy.commands(
@@ -1985,18 +1450,6 @@ class DroneSurveillanceSimulation:
                 ),
                 physicsClientId=self.client_id,
             )
-            if idx < len(self._drone_marker_ids):
-                p.resetBasePositionAndOrientation(
-                    self._drone_marker_ids[idx],
-                    [
-                        float(self.drone_positions[idx][0]),
-                        float(self.drone_positions[idx][1]),
-                        float(self.drone_positions[idx][2]) + 0.9,
-                    ],
-                    [0.0, 0.0, 0.0, 1.0],
-                    physicsClientId=self.client_id,
-                )
-        self._sync_debug_lines()
 
     def _manual_command(self, drone_idx: int) -> tuple[np.ndarray, float]:
         yaw = float(self.drone_yaws[drone_idx])

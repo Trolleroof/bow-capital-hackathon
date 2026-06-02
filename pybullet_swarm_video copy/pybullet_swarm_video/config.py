@@ -40,13 +40,11 @@ class SimulationConfig:
     num_troops: int = 6
     duration_sec: float = 12.0
     time_step: float = 1.0 / 30.0
-    world_half_extent_m: float = 280.0
-    drone_altitude_m: float = 8.0
+    world_half_extent_m: float = 30.0
+    drone_altitude_m: float = 12.0
     drone_speed_mps: float = 5.0
-    drone_ring_radius_m: float = 7.0
+    drone_ring_radius_m: float = 9.0
     drone_separation_gain: float = 2.4
-    show_debug_overlays: bool = False
-    use_tiny_renderer_in_gui: bool = True
     troop_spacing_m: float = 1.6
     troop_stride_mps: float = 1.0
     resources_dir: Path = field(

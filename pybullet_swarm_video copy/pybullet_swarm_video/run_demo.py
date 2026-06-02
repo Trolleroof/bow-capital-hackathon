@@ -30,12 +30,6 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="drone index whose camera to record (0-based); in --gui mode, 1-9 keys change this live",
     )
-    parser.add_argument(
-        "--debug-overlays",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="show helper markers and debug guide-lines for actors in GUI mode",
-    )
     parser.add_argument("--gui", action="store_true")
     return parser.parse_args()
 
@@ -47,7 +41,6 @@ def main() -> None:
         num_troops=args.troops,
         duration_sec=max(args.seconds, GUI_MIN_SECONDS) if args.gui else args.seconds,
         time_step=args.time_step,
-        show_debug_overlays=args.debug_overlays,
         camera=DroneCameraConfig(width=args.width, height=args.height),
     )
     rec_cfg = RecordingConfig(

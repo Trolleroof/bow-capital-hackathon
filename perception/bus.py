@@ -128,6 +128,14 @@ class BusPublisher:
                candidate_id: int | None = None) -> None:
         self._send(_serialize(objects, frame_w, frame_h, candidate_id))
 
+    def publish_topic(self, topic: str, payload: dict) -> None:
+        """Publish an arbitrary control-bus topic (e.g. SLAM pose/path/cloud)."""
+        self._send(json.dumps({"topic": topic, **payload}))
+
+    def publish_image_topic(self, topic: str, payload: dict) -> None:
+        """Publish an arbitrary image-bus topic (e.g. slam_frame/camera_frame)."""
+        self._send_image(json.dumps({"topic": topic, **payload}))
+
     def publish_frame(self, frame: np.ndarray, topic: str, quality: int = 60) -> None:
         """Encode frame as JPEG and broadcast on the given topic."""
         if self._image_ws is None:

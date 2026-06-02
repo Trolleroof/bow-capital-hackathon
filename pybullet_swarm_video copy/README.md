@@ -1,12 +1,12 @@
 # PyBullet Swarm Video Prototype
 
-This directory is a standalone PyBullet prototype for drone-swarm surveillance and FPV routing through Outcast Virus.
+This directory is a standalone PyBullet prototype for drone-swarm surveillance and FPV routing through CombatOS.
 
 ## Rules
 
 These are the working rules for this prototype:
 
-1. Raw drone FPV may be sent to the Outcast Virus orchestrator.
+1. Raw drone FPV may be sent to the CombatOS orchestrator.
 2. Perception may return annotated video for operator display, but autonomy should consume structured detections or tracks, not decoded video frames.
 3. The correct round-trip is:
    raw FPV up, detections and optional annotated FPV down.
@@ -30,7 +30,7 @@ These are the working rules for this prototype:
 - each drone renders its own first-person camera feed
 - the feeds are tiled into one output video
 - each drone also gets its own MP4 output by default
-- a second demo mode sends each FPV frame through the Outcast Virus orchestrator, lets
+- a second demo mode sends each FPV frame through the CombatOS orchestrator, lets
   a perception worker annotate targets, and records the returned HUD frames
 
 The current implementation is intentionally simple:
@@ -41,8 +41,6 @@ The current implementation is intentionally simple:
 - GUI mode actively tracks the swarm/troop scene so you can watch behavior live
 - in GUI mode you can switch from the observer camera into a selected drone's chase or FPV view
 - in GUI mode you can also take manual control of one drone while the rest continue flying policy-driven behavior
-- debug helper spheres/posts/guide-lines are now off by default so the actual drone and troop meshes stay visible; enable them with `--debug-overlays` when you want the guides back
-- GUI mode now prefers PyBullet's Tiny renderer path because the newer OBJ assets are more reliable there than in the default shaded GUI renderer
 - GUI runs are automatically stretched to a much longer duration so the window does not close almost immediately while you are flying or inspecting
 - the code is structured so a future policy adapter can replace the scripted controller
 - the current perception round-trip uses simulation ground truth for target projection
@@ -52,34 +50,26 @@ The current implementation is intentionally simple:
 
 The prototype now looks for these files in `pybullet_swarm_video/resources/`:
 
-- `Best_Soldier.zip`
 - `damaged_concrete_floor_4k.blend.zip`
 - `free_military_soldier_rigged.zip`
 - `low-poly-soldiers-rigged-free.zip`
-- `low_poly_container.zip`
-- `low_poly_military_truck.zip`
-- `low_poly_tank.zip`
-- `low_poly_truck_tank.zip`
-- `militarytent.zip`
-- `salt_dome_11_iran.zip`
 - `single_sandbag.zip`
 - `drone_design.zip`
 
 Current behavior:
 
-- the best-soldier archive is preferred as the primary troop mesh;
-  the older military-soldier archive is only used as a fallback if the new one is absent or fails to load
 - the concrete-floor archive is used immediately:
-  the diffuse texture is extracted into `pybullet_swarm_video/resources/.cache/` and applied to the battlefield ground when the salt-dome terrain is not available
+  the diffuse texture is extracted into `pybullet_swarm_video/resources/.cache/` and applied to the battlefield ground
 - the military-soldier archive is extracted into `pybullet_swarm_video/resources/.cache/free_military_soldier_rigged/`
-  and used only as the fallback 3D troop mesh
+  and used as the primary 3D troop mesh
 - the low-poly soldier archive is used immediately:
-  the packaged `texture.png` is extracted into `pybullet_swarm_video/resources/.cache/` and applied only when both higher-fidelity soldier meshes fail
+  the packaged `texture.png` is extracted into `pybullet_swarm_video/resources/.cache/` and applied to the secondary troop visuals
 - the sandbag archive is extracted into `pybullet_swarm_video/resources/.cache/single_sandbag/`
   and used for the emplacements
 - the drone archive is extracted into `pybullet_swarm_video/resources/.cache/drone_design/`
   and used as the drone mesh, with the drone texture applied from the extracted files
-- when the salt-dome archive is present, the sim swaps in the textured salt-dome terrain and stages the new trucks, tents, containers, and armor props around it at scene scale
+- troops now mix:
+  the extracted 3D soldier mesh and the low-poly textured fallback visual, so both human asset sources are visible in the scene
 - if one of the extracted meshes fails to load, the sim falls back to the primitive shape for that actor type instead of failing
 
 This keeps the sim runnable while using the new OBJ/MTL asset bundles directly.
@@ -144,7 +134,7 @@ uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_demo \
 If they also want the orchestrated round-trip on another machine:
 
 ```bash
-uv run --project outcast_virus python -m outcast_virus
+uv run --project combatos python -m combatos
 uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_orchestrated_demo --gui
 ```
 
@@ -222,10 +212,10 @@ uv run --project pybullet_swarm_video python -m pybullet_swarm_video.run_demo \
 
 ## Orchestrated FPV round-trip
 
-Start the Outcast Virus orchestrator first:
+Start the CombatOS orchestrator first:
 
 ```bash
-uv run --project outcast_virus python -m outcast_virus
+uv run --project combatos python -m combatos
 ```
 
 Then run the PyBullet round-trip demo:

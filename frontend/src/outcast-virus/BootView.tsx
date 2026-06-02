@@ -191,15 +191,17 @@ export function BootView({ onLaunch }: { onLaunch: () => void }) {
       <div className="bfr bl" /><div className="bfr br" />
 
       <div className="boot-title">
-        <h1>OUTCAST<span> VIRUS</span></h1>
-        <div className="bt-sub">GROUND CONTROL STATION — EDGE AUTONOMY STACK</div>
+        <div className="bt-team-name">OUTCAST VIRUS</div>
+        <h1>COMBAT<span> OS</span></h1>
+        <div className="bt-sub">GROUND CONTROL STATION</div>
+        <div className="bt-team">ALEX GAO · NIKHIL PRABHU · VIKRAM KOMMERA · MATTHIEU FULLER</div>
+        <div className="bt-contact">mafuller@ucsd.edu</div>
       </div>
 
       <button className="boot-enter" onClick={launch} disabled={launching}>
         <span className="be-lbl">{launching ? 'Starting…' : 'Enter'}</span>
         <span className="be-arrow">{launching ? '◢◤' : '▸'}</span>
       </button>
-      <div className="boot-hint">CLICK TO ENTER · DRAG TO ORBIT</div>
     </div>
   )
 }

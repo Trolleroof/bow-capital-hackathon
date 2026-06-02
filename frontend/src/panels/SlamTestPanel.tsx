@@ -53,11 +53,26 @@ interface StatusMessage {
 
 type BusMessage = PoseMessage | SlamStatusMessage | SlamDiagnosticsMessage | SlamFrameMessage | StatusMessage
 
-const BUS_URL = import.meta.env.VITE_OUTCAST_VIRUS_WS_URL ?? '/outcast/ws'
-const IMAGE_URL = import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL ?? '/outcast/image-ws'
+function resolvePanelWsUrl(envKey: 'VITE_OUTCAST_VIRUS_WS_URL' | 'VITE_OUTCAST_VIRUS_IMAGE_WS_URL', proxyPath: string, port: number) {
+  const fromEnv = import.meta.env[envKey]
+  if (fromEnv) return fromEnv
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname
+    if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1') {
+      return `ws://localhost:${port}`
+    }
+    return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}${proxyPath}`
+  }
+  return `ws://localhost:${port}`
+}
+
+const BUS_URL = resolvePanelWsUrl('VITE_OUTCAST_VIRUS_WS_URL', '/outcast/ws', 8000)
+const IMAGE_URL = resolvePanelWsUrl('VITE_OUTCAST_VIRUS_IMAGE_WS_URL', '/outcast/image-ws', 8001)
+const HAS_BROWSER_WS_PROXY = typeof window !== 'undefined'
 const OUTCAST_WS_ENABLED =
-  import.meta.env.VITE_OUTCAST_VIRUS_ENABLE_WS === '1' ||
-  Boolean(import.meta.env.VITE_OUTCAST_VIRUS_WS_URL || import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL)
+  import.meta.env.VITE_OUTCAST_VIRUS_ENABLE_WS !== '0' &&
+  (HAS_BROWSER_WS_PROXY ||
+    Boolean(import.meta.env.VITE_OUTCAST_VIRUS_WS_URL || import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL))
 
 function base64ToBlob(data: string, mime = 'image/jpeg') {
   const binary = atob(data)

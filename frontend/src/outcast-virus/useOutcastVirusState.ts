@@ -1,10 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 
 const DEFAULT_WS_HOST = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
+function isLoopbackHost(hostname: string) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1'
+}
+
 function resolveOutcastWsUrl(envKey: 'VITE_OUTCAST_VIRUS_WS_URL' | 'VITE_OUTCAST_VIRUS_IMAGE_WS_URL', proxyPath: string, fallbackPort: number) {
   const fromEnv = import.meta.env[envKey]
   if (fromEnv) return fromEnv
   if (typeof window !== 'undefined') {
+    if (isLoopbackHost(window.location.hostname)) {
+      return `ws://localhost:${fallbackPort}`
+    }
     return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}${proxyPath}`
   }
   return `ws://${DEFAULT_WS_HOST}:${fallbackPort}`
@@ -12,12 +19,17 @@ function resolveOutcastWsUrl(envKey: 'VITE_OUTCAST_VIRUS_WS_URL' | 'VITE_OUTCAST
 
 const ORCH_WS = resolveOutcastWsUrl('VITE_OUTCAST_VIRUS_WS_URL', '/outcast/ws', 8000)
 const IMAGE_WS = resolveOutcastWsUrl('VITE_OUTCAST_VIRUS_IMAGE_WS_URL', '/outcast/image-ws', 8001)
+const HAS_BROWSER_WS_PROXY = typeof window !== 'undefined'
 const OUTCAST_WS_ENABLED =
-  import.meta.env.VITE_OUTCAST_VIRUS_ENABLE_WS === '1' ||
+  import.meta.env.VITE_OUTCAST_VIRUS_ENABLE_WS !== '0' &&
+  (HAS_BROWSER_WS_PROXY ||
   Boolean(import.meta.env.VITE_OUTCAST_VIRUS_WS_URL)
+  )
 const OUTCAST_IMAGE_WS_ENABLED =
-  import.meta.env.VITE_OUTCAST_VIRUS_ENABLE_WS === '1' ||
+  import.meta.env.VITE_OUTCAST_VIRUS_ENABLE_WS !== '0' &&
+  (HAS_BROWSER_WS_PROXY ||
   Boolean(import.meta.env.VITE_OUTCAST_VIRUS_IMAGE_WS_URL)
+  )
 const CONTROL_TOPICS = [
   'pose',
   'detections',
